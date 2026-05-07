@@ -1,0 +1,38 @@
+export default {
+  common: {
+    save: 'Save',
+    cancel: 'Cancel',
+    delete: 'Delete',
+    edit: 'Edit',
+    create: 'Create',
+    export: 'Export',
+    import: 'Import',
+    name: 'Name',
+    description: 'Description',
+    actions: 'Actions',
+  },
+  settings: {
+    title: 'Settings',
+    appearance: 'Appearance',
+    theme: 'Theme',
+    themeDescription: 'Application color scheme',
+    language: 'Language',
+    languageLabel: 'Interface Language',
+    storage: 'Storage',
+    defaultStoragePath: 'Default Project Directory',
+    defaultStoragePathDescription: 'The initial directory suggested when creating new projects.',
+    browse: 'Browse',
+    about: 'About',
+    version: 'Version',
+    framework: 'Framework',
+    license: 'License',
+  },
+  sidebar: {
+    projects: 'Projects',
+    workspace: 'Workspace',
+    knowledge: 'Knowledge Base',
+    providers: 'AI Providers',
+    writingStyles: 'Writing Styles',
+    settings: 'Settings',
+  }
+}

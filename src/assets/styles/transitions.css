@@ -1,0 +1,105 @@
+/* Page transitions */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 150ms ease-out;
+}
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+}
+
+/* Fade */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 150ms ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Scale dialog */
+.dialog-enter-active {
+  transition: opacity 200ms ease-out, transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dialog-leave-active {
+  transition: opacity 150ms ease-in, transform 150ms ease-in;
+}
+.dialog-enter-from {
+  opacity: 0;
+  transform: scale(0.95);
+}
+.dialog-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+/* Slide right (drawer) */
+.slide-right-enter-active {
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.slide-right-leave-active {
+  transition: transform 200ms ease-in;
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(100%);
+}
+
+/* Slide left (sidebar expand) */
+.slide-left-enter-active {
+  transition: transform 200ms ease-out;
+}
+.slide-left-leave-active {
+  transition: transform 150ms ease-in;
+}
+.slide-left-enter-from,
+.slide-left-leave-to {
+  transform: translateX(-100%);
+}
+
+/* Slide up (toast) */
+.slide-up-enter-active {
+  transition: opacity 200ms ease-out, transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.slide-up-leave-active {
+  transition: opacity 150ms ease-in, transform 150ms ease-in;
+}
+.slide-up-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+/* List item stagger */
+.list-enter-active {
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+.list-leave-active {
+  transition: opacity 100ms ease-in;
+}
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.list-leave-to {
+  opacity: 0;
+}
+.list-move {
+  transition: transform 200ms ease;
+}
+
+/* Backdrop */
+.backdrop-enter-active {
+  transition: opacity 200ms ease-out;
+}
+.backdrop-leave-active {
+  transition: opacity 150ms ease-in;
+}
+.backdrop-enter-from,
+.backdrop-leave-to {
+  opacity: 0;
+}

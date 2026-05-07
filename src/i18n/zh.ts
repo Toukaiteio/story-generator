@@ -1,0 +1,38 @@
+export default {
+  common: {
+    save: '保存',
+    cancel: '取消',
+    delete: '删除',
+    edit: '编辑',
+    create: '创建',
+    export: '导出',
+    import: '导入',
+    name: '名称',
+    description: '描述',
+    actions: '操作',
+  },
+  settings: {
+    title: '设置',
+    appearance: '外观',
+    theme: '主题',
+    themeDescription: '应用颜色方案',
+    language: '语言',
+    languageLabel: '界面语言',
+    storage: '存储',
+    defaultStoragePath: '默认项目保存目录',
+    defaultStoragePathDescription: '创建新项目时建议的初始目录。',
+    browse: '浏览',
+    about: '关于',
+    version: '版本',
+    framework: '架构',
+    license: '许可',
+  },
+  sidebar: {
+    projects: '项目',
+    workspace: '工作台',
+    knowledge: '知识库',
+    providers: 'AI 服务商',
+    writingStyles: '写作风格',
+    settings: '设置',
+  }
+}
