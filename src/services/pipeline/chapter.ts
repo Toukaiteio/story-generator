@@ -3,7 +3,6 @@ import type { Chapter } from '@/types/chapter'
 import { extractJsonPayload } from '@/services/agent/validation'
 import { buildCharacterContextForTask, buildPreviousSummary } from './context'
 import { appendRelationshipEventsForChapter } from '@/services/relationship'
-import { buildRelationshipContext } from '@/services/relationship/context'
 import { buildKnowledgeContextForProject, estimateChapterCount, prepareRuntime } from './runtime'
 import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './types'
 import { generateId } from '@/lib/id'
@@ -105,6 +104,7 @@ export function buildChaptersFromPlanEntries(
       },
       content: preserveChapterState ? (prev?.content || '') : '',
       proofreadContent: preserveChapterState ? (prev?.proofreadContent || '') : '',
+      proofreadingIssues: preserveChapterState ? (prev?.proofreadingIssues || []) : [],
       polishedContent: preserveChapterState ? (prev?.polishedContent || '') : '',
       status: preserveChapterState ? (prev?.status || 'outline') : 'outline',
       summary: preserveChapterState ? (prev?.summary || '') : '',
@@ -235,7 +235,7 @@ export async function generateChapterDraft(
     chapterOutline: JSON.stringify(chapter.outline),
     previousSummary: buildPreviousSummary(project, chapterIndex),
   })
-  const relationshipContext = buildRelationshipContext(project, chapter.index - 1)
+  const relationshipContext = `Relationship query tools are available. Query prior relationship state at chapterIndex ${Math.max(-1, chapter.index - 1)} only for characters whose dynamics matter in this chapter.`
 
   const writerContext: Record<string, any> = {
     chapterOutline: chapter.outline,
@@ -247,6 +247,7 @@ export async function generateChapterDraft(
     previousSummary: buildPreviousSummary(project, chapterIndex),
     language: project.language,
     style: project.style,
+    project,
     writingFormat: project.writingFormat,
     knowledgeContext,
   }
@@ -358,7 +359,8 @@ export async function proofreadChapter(
 export async function polishChapter(
   project: StoryProject,
   chapterIndex: number,
-  onToken?: (token: string) => void
+  onToken?: (token: string) => void,
+  proofreadingIssues?: any[]
 ) {
   const { polisherAgent } = prepareRuntime()
   const chapter = project.chapters[chapterIndex]
@@ -378,11 +380,13 @@ export async function polishChapter(
     content: contentToPolish,
     chapterTitle: chapter.title,
     chapterNumber,
+    characters: buildCharacterContextForTask(project.characters, 'polishing'),
     language: project.language,
     style: project.style,
     project,
     writingFormat: project.writingFormat,
     knowledgeContext,
+    proofreadingIssues: proofreadingIssues || [],
   }
   const result = await polisherAgent.execute(polishContext, onToken)
   const polishedContent = sanitizeGeneratedChapterContent(
@@ -505,7 +509,7 @@ export async function run(
           chapterOutline: JSON.stringify(chapter.outline),
           previousSummary: buildPreviousSummary(updatedProject, i),
         })
-        const relationshipContext = buildRelationshipContext(updatedProject, chapter.index - 1)
+        const relationshipContext = `Relationship query tools are available. Query prior relationship state at chapterIndex ${Math.max(-1, chapter.index - 1)} only for characters whose dynamics matter in this chapter.`
         const writerContext: Record<string, any> = {
           chapterOutline: chapter.outline,
           chapterTitle: chapter.title,
@@ -516,6 +520,7 @@ export async function run(
           previousSummary: buildPreviousSummary(updatedProject, i),
           language: project.language,
           style: project.style,
+          project: updatedProject,
           writingFormat: project.writingFormat,
           knowledgeContext,
         }
@@ -696,6 +701,7 @@ export async function run(
           content: contentToPolish,
           chapterTitle: chapter.title,
           chapterNumber,
+          characters: buildCharacterContextForTask(updatedProject.characters, 'polishing'),
           language: project.language,
           style: project.style,
           project: updatedProject,

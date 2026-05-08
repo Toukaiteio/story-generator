@@ -168,9 +168,9 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   if (isNew) {
     const safeName = project.name.replace(/[\\/:*?"<>|]/g, '_')
     projectFolder = join(baseDir, `${safeName}_${project.id}`)
-    if (!existsSync(projectFolder)) mkdirSync(projectFolder, { recursive: true })
     project.directoryPath = projectFolder
   }
+  if (!existsSync(projectFolder)) mkdirSync(projectFolder, { recursive: true })
 
   // Split data: Metadata, Chapters, Characters
   const { chapters, characters, ...metadata } = project
@@ -199,7 +199,7 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   // For now, let's keep a link file in the internal dir
   writeFileSync(linkPath, projectFolder, 'utf-8')
 
-  return { ...metadata, directoryPath: projectFolder }
+  return { ...metadata, chapters: chapters || [], characters: characters || [], directoryPath: projectFolder }
 })
 
 ipcMain.handle('project:delete', (_event, id: string) => {

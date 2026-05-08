@@ -2,6 +2,7 @@ import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import type { ExtractedRelationshipEvent, RelationshipEventType, RelationshipStatus } from '@/types/relationship'
+import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 
 function normalizeStatus(value: any): RelationshipStatus | undefined {
   if (value === 'active' || value === 'changed' || value === 'ended' || value === 'unknown') {
@@ -48,6 +49,7 @@ export class RelationshipTrackerExpert extends BaseAgent {
 
   protected getTools(): ToolDefinition[] {
     return [
+      ...getRelationshipQueryTools(),
       {
         name: 'record_relationship_event',
         description: 'Record a relationship change that happened in the chapter.',
@@ -139,6 +141,11 @@ export class RelationshipTrackerExpert extends BaseAgent {
   }
 
   protected async handleToolCall(toolCall: ToolCall, context: Record<string, any>): Promise<ToolResult> {
+    const relationshipResult = context.project
+      ? await handleRelationshipQueryTool(toolCall, context.project)
+      : null
+    if (relationshipResult) return relationshipResult
+
     if (toolCall.name === 'record_relationship_event') {
       if (!Array.isArray(context._relationshipEvents)) {
         context._relationshipEvents = []
@@ -199,12 +206,13 @@ If nothing meaningful changed, call finalize_relationship_events without recordi
       chapterNumber,
       chapterTitle,
       characters,
-      previousRelationships,
       chapterContent,
+      project,
       language,
     } = context
 
     const displayChapterNumber = Number.isInteger(chapterNumber) ? chapterNumber : chapterIndex + 1
+    const previousChapterIndex = Number.isInteger(chapterNumber) ? chapterNumber - 2 : chapterIndex - 1
 
     return `Track relationship changes for this chapter.
 
@@ -214,7 +222,10 @@ Primary language: ${language || 'English'}
 Characters:
 ${characters}
 
-${previousRelationships ? `Previous relationship state:\n${previousRelationships}` : 'No previous relationship state is available.'}
+Relationship context is intentionally not inlined to reduce prompt size.
+Use relationship query tools only for the specific characters or events needed.
+For prior state, query chapterIndex ${Math.max(-1, previousChapterIndex)} with character IDs from the compact directory.
+${project ? '' : 'No project object is available, so relationship query tools may be unavailable.'}
 
 Chapter text:
 ${chapterContent}

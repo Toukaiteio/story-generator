@@ -17,7 +17,13 @@ function normalizeName(value: unknown) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-function findCharacter(characters: Character[], name: unknown): Character | null {
+function findCharacter(characters: Character[], name: unknown, id?: unknown): Character | null {
+  const normalizedId = String(id ?? '').trim()
+  if (normalizedId) {
+    const byId = characters.find(character => character.id === normalizedId)
+    if (byId) return byId
+  }
+
   const normalized = normalizeName(name)
   if (!normalized) return null
 
@@ -47,7 +53,9 @@ function readLimit(value: unknown, fallback = 10) {
 
 function compactRelationship(project: StoryProject, state: ReturnType<typeof getRelationshipsAt>[number]) {
   return {
+    fromId: state.fromId,
     fromName: characterName(project, state.fromId),
+    toId: state.toId,
     toName: characterName(project, state.toId),
     label: state.label,
     description: state.description,
@@ -67,7 +75,9 @@ function compactEvent(project: StoryProject, event: NonNullable<ReturnType<typeo
     chapterTitle: project.chapters.find(chapter => chapter.id === event.chapterId)?.title
       ?? project.chapters.find(chapter => chapter.index === event.chapterIndex)?.title
       ?? '',
+    fromId: event.fromId,
     fromName: characterName(project, event.fromId),
+    toId: event.toId,
     toName: characterName(project, event.toId),
     type: event.type,
     label: event.label,
@@ -79,6 +89,20 @@ function compactEvent(project: StoryProject, event: NonNullable<ReturnType<typeo
       affinity: event.affinityDelta ?? 0,
       tension: event.tensionDelta ?? 0,
     },
+  }
+}
+
+function compactCharacter(character: Character) {
+  return {
+    id: character.id,
+    name: character.name,
+    role: character.role,
+    personality: character.personality,
+    appearance: character.appearance,
+    motivation: character.motivation,
+    goals: character.goals,
+    conflicts: character.conflicts,
+    currentState: character.currentState,
   }
 }
 
@@ -98,6 +122,10 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
             type: 'string',
             description: 'Optional character name to filter the relationship network.',
           },
+          characterId: {
+            type: 'string',
+            description: 'Optional character ID to filter the relationship network.',
+          },
           limit: {
             type: 'number',
             description: 'Maximum number of relationships to return.',
@@ -115,6 +143,10 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
           characterName: {
             type: 'string',
             description: 'Optional character name to filter the relationship network.',
+          },
+          characterId: {
+            type: 'string',
+            description: 'Optional character ID to filter the relationship network.',
           },
           limit: {
             type: 'number',
@@ -138,12 +170,20 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
             type: 'string',
             description: 'Source character name.',
           },
+          fromId: {
+            type: 'string',
+            description: 'Source character ID.',
+          },
           toName: {
             type: 'string',
             description: 'Target character name.',
           },
+          toId: {
+            type: 'string',
+            description: 'Target character ID.',
+          },
         },
-        required: ['fromName', 'toName'],
+        required: [],
       },
     },
     {
@@ -153,8 +193,11 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
         type: 'object',
         properties: {
           fromName: { type: 'string', description: 'Optional source character name.' },
+          fromId: { type: 'string', description: 'Optional source character ID.' },
           toName: { type: 'string', description: 'Optional target character name.' },
+          toId: { type: 'string', description: 'Optional target character ID.' },
           characterName: { type: 'string', description: 'Optional character name appearing on either side.' },
+          characterId: { type: 'string', description: 'Optional character ID appearing on either side.' },
           chapterIndex: { type: 'number', description: 'Optional zero-based chapter index.' },
           eventType: { type: 'string', description: 'Optional relationship event type.' },
           limit: { type: 'number', description: 'Maximum number of events to return.' },
@@ -176,6 +219,24 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
         required: ['eventId'],
       },
     },
+    {
+      name: 'get_character_profile',
+      description: 'Get one character profile by ID or name. Use this only when the compact character list is insufficient.',
+      parameters: {
+        type: 'object',
+        properties: {
+          characterId: {
+            type: 'string',
+            description: 'Character ID from the compact character list.',
+          },
+          characterName: {
+            type: 'string',
+            description: 'Character name.',
+          },
+        },
+        required: [],
+      },
+    },
   ]
 }
 
@@ -188,7 +249,7 @@ export async function handleRelationshipQueryTool(
   if (toolCall.name === 'get_relationships_at_chapter') {
     const chapterIndex = readChapterIndex(project, args.chapterIndex)
     const limit = readLimit(args.limit)
-    const character = findCharacter(project.characters, args.characterName)
+    const character = findCharacter(project.characters, args.characterName, args.characterId)
     const relationships = character
       ? getCharacterRelationshipsAt(project, character.id, chapterIndex)
       : getRelationshipsAt(project, chapterIndex)
@@ -206,7 +267,7 @@ export async function handleRelationshipQueryTool(
   if (toolCall.name === 'get_latest_relationships') {
     const limit = readLimit(args.limit)
     const latestIndex = getLatestRelationshipChapterIndex(project)
-    const character = findCharacter(project.characters, args.characterName)
+    const character = findCharacter(project.characters, args.characterName, args.characterId)
     const relationships = character
       ? getCharacterRelationshipsAt(project, character.id, latestIndex)
       : getLatestRelationships(project)
@@ -222,8 +283,8 @@ export async function handleRelationshipQueryTool(
   }
 
   if (toolCall.name === 'get_relationship_between') {
-    const from = findCharacter(project.characters, args.fromName)
-    const to = findCharacter(project.characters, args.toName)
+    const from = findCharacter(project.characters, args.fromName, args.fromId)
+    const to = findCharacter(project.characters, args.toName, args.toId)
     if (!from || !to) {
       return {
         tool_call_id: toolCall.id,
@@ -246,9 +307,9 @@ export async function handleRelationshipQueryTool(
   }
 
   if (toolCall.name === 'get_relationship_events') {
-    const from = findCharacter(project.characters, args.fromName)
-    const to = findCharacter(project.characters, args.toName)
-    const character = findCharacter(project.characters, args.characterName)
+    const from = findCharacter(project.characters, args.fromName, args.fromId)
+    const to = findCharacter(project.characters, args.toName, args.toId)
+    const character = findCharacter(project.characters, args.characterName, args.characterId)
     const events = getRelationshipEvents(project, {
       fromId: from?.id,
       toId: to?.id,
@@ -280,6 +341,16 @@ export async function handleRelationshipQueryTool(
       content: JSON.stringify({
         event: compactEvent(project, event),
         location: locateRelationshipEvent(project, event.id),
+      }),
+    }
+  }
+
+  if (toolCall.name === 'get_character_profile') {
+    const character = findCharacter(project.characters, args.characterName, args.characterId)
+    return {
+      tool_call_id: toolCall.id,
+      content: JSON.stringify({
+        character: character ? compactCharacter(character) : null,
       }),
     }
   }

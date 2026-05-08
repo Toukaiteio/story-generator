@@ -3,6 +3,7 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, countParagraphs, countWords } from './validation'
 import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 
 export class WriterExpert extends BaseAgent {
   type: AgentType = 'writer'
@@ -10,6 +11,7 @@ export class WriterExpert extends BaseAgent {
 
   protected getTools(): ToolDefinition[] {
     return [
+      ...getRelationshipQueryTools(),
       {
         name: 'write_chapter',
         description: 'Write the chapter prose in sections, appending each section until the chapter is complete. Follow the requested output format exactly.',
@@ -36,6 +38,11 @@ export class WriterExpert extends BaseAgent {
   }
 
   protected async handleToolCall(toolCall: ToolCall, context: Record<string, any>): Promise<ToolResult> {
+    const relationshipResult = context.project
+      ? await handleRelationshipQueryTool(toolCall, context.project)
+      : null
+    if (relationshipResult) return relationshipResult
+
     if (toolCall.name === 'write_chapter') {
       // Store the chapter content in context
       const rawContent = typeof toolCall.arguments.content === 'string'
@@ -154,7 +161,7 @@ ${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOu
 Characters:
 ${characters}
 
-${relationships ? `Relationship State:\n${relationships}\n` : ''}
+${relationships ? `Relationship Guidance:\n${relationships}\n` : 'Relationship details are not inlined. Use relationship query tools only for specific character dynamics needed for this chapter.\n'}
 ${previousSummary ? `Previous Story Summary:\n${previousSummary}` : 'This is the first chapter.'}
 ${knowledgeContext ? `\nReference Material:\n${knowledgeContext}` : ''}
 

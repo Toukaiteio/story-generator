@@ -20,6 +20,8 @@ const PROVIDER_STORAGE_KEY = 'story-generator.providers.v2'
 const AGENT_MODEL_STORAGE_KEY = 'story-generator.agent-model-bindings.v2'
 const EMBEDDING_MODEL_STORAGE_KEY = 'story-generator.embedding-model-binding.v1'
 const MODEL_CONTEXT_STORAGE_KEY = 'story-generator.model-context-overrides.v1'
+const TOOL_WORKFLOW_SETTINGS_STORAGE_KEY = 'story-generator.tool-workflow-settings.v1'
+const DEFAULT_MAX_TOOL_CALL_ROUNDS = 16
 
 const roleDefaults: Record<AgentType, 'expert' | 'standard'> = {
   outline: 'expert',
@@ -198,6 +200,19 @@ function loadModelContextOverrides(): Record<string, number> {
   }
 
   return overrides
+}
+
+function normalizeMaxToolCallRounds(value: unknown) {
+  const rounds = Number(value)
+  if (!Number.isFinite(rounds)) return DEFAULT_MAX_TOOL_CALL_ROUNDS
+  return Math.max(1, Math.min(Math.trunc(rounds), 64))
+}
+
+function loadToolWorkflowSettings() {
+  const raw = readStorage<{ maxToolCallRounds?: number | string }>(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, {})
+  return {
+    maxToolCallRounds: normalizeMaxToolCallRounds(raw.maxToolCallRounds),
+  }
 }
 
 function mergeModelSets(remoteModels: ModelConfig[], customModels: ModelConfig[]) {
@@ -396,6 +411,7 @@ export const useProviderStore = defineStore('provider', () => {
   const agentModelBindings = ref<Record<AgentType, ProviderModelRef | null>>(loadAgentBindings())
   const embeddingModelBinding = ref<ProviderModelRef | null>(loadEmbeddingModelBinding())
   const modelContextOverrides = ref<Record<string, number>>(loadModelContextOverrides())
+  const toolWorkflowSettings = ref(loadToolWorkflowSettings())
   const syncingProviderIds = ref<string[]>([])
   const providerWarnings = ref<string[]>(loaded.warnings)
 
@@ -425,6 +441,7 @@ export const useProviderStore = defineStore('provider', () => {
   watch(agentModelBindings, value => writeStorage(AGENT_MODEL_STORAGE_KEY, value), { deep: true })
   watch(embeddingModelBinding, value => writeStorage(EMBEDDING_MODEL_STORAGE_KEY, value), { deep: true })
   watch(modelContextOverrides, value => writeStorage(MODEL_CONTEXT_STORAGE_KEY, value), { deep: true })
+  watch(toolWorkflowSettings, value => writeStorage(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, value), { deep: true })
 
   function applyModelContextOverridesToProvider(provider: ProviderConfig) {
     pruneModelContextOverridesForProvider(
@@ -791,6 +808,13 @@ export const useProviderStore = defineStore('provider', () => {
     return true
   }
 
+  function setMaxToolCallRounds(rounds: number) {
+    toolWorkflowSettings.value = {
+      ...toolWorkflowSettings.value,
+      maxToolCallRounds: normalizeMaxToolCallRounds(rounds),
+    }
+  }
+
   function inferContextTokensForModel(providerType: ProviderType, modelId: string): number | null {
     // Re-use the fallback tables from catalog
     const openaiTable: Record<string, number> = {
@@ -834,6 +858,7 @@ export const useProviderStore = defineStore('provider', () => {
     providers,
     agentModelBindings,
     embeddingModelBinding,
+    toolWorkflowSettings,
     syncingProviderIds,
     providerWarnings,
     modelOptions,
@@ -865,5 +890,6 @@ export const useProviderStore = defineStore('provider', () => {
     isRefreshingProvider,
     setModelContextTokens,
     clearModelContextTokens,
+    setMaxToolCallRounds,
   }
 })

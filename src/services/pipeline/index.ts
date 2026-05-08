@@ -53,8 +53,8 @@ export class StoryPipeline {
     return proofreadChapterWorkflow(project, chapterIndex, onToken)
   }
 
-  async polishChapter(project: StoryProject, chapterIndex: number, onToken?: (token: string) => void) {
-    return polishChapterWorkflow(project, chapterIndex, onToken)
+  async polishChapter(project: StoryProject, chapterIndex: number, onToken?: (token: string) => void, proofreadingIssues?: any[]) {
+    return polishChapterWorkflow(project, chapterIndex, onToken, proofreadingIssues)
   }
 
   async run(

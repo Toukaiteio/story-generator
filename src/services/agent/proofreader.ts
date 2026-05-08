@@ -13,21 +13,47 @@ export class ProofreaderExpert extends BaseAgent {
     return [
       ...getRelationshipQueryTools(),
       {
-        name: 'proofread_chapter',
-        description: 'Proofread and correct a chapter with detailed corrections',
+        name: 'report_proofreading_issues',
+        description: 'Report concrete grammar, typo, style, and consistency issues found in a chapter section.',
         parameters: {
           type: 'object',
           properties: {
-            correctedContent: {
-              type: 'string',
-              description: 'The corrected chapter text',
-            },
-            corrections: {
-              type: 'string',
-              description: 'A summary of all corrections made',
+            issues: {
+              type: 'array',
+              description: 'List of specific issues found. Return an empty array if no issues are found.',
+              items: {
+                type: 'object',
+                properties: {
+                  severity: {
+                    type: 'string',
+                    enum: ['low', 'medium', 'high'],
+                  },
+                  category: {
+                    type: 'string',
+                    enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'],
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'Short title of the issue',
+                  },
+                  excerpt: {
+                    type: 'string',
+                    description: 'The exact excerpt from the text that contains the issue.',
+                  },
+                  explanation: {
+                    type: 'string',
+                    description: 'Why this is an issue.',
+                  },
+                  suggestedFix: {
+                    type: 'string',
+                    description: 'Specific instruction on how to fix this issue.',
+                  },
+                },
+                required: ['severity', 'category', 'title', 'excerpt', 'explanation', 'suggestedFix'],
+              },
             },
           },
-          required: ['correctedContent', 'corrections'],
+          required: ['issues'],
         },
       },
     ]
@@ -39,18 +65,12 @@ export class ProofreaderExpert extends BaseAgent {
       : null
     if (relationshipResult) return relationshipResult
 
-    if (toolCall.name === 'proofread_chapter') {
-      // Store the proofread content in context
-      context._proofreadContent = sanitizeGeneratedChapterContent(String(toolCall.arguments.correctedContent ?? ''), {
-        writingFormat: context.writingFormat,
-        writingStyle: context.style,
-        chapterTitle: context.chapterTitle,
-        chapterNumber: context.chapterNumber,
-      })
-      context._corrections = toolCall.arguments.corrections
+    if (toolCall.name === 'report_proofreading_issues') {
+      const newIssues = Array.isArray(toolCall.arguments.issues) ? toolCall.arguments.issues : []
+      context._issues = [...(context._issues || []), ...newIssues]
       return {
         tool_call_id: toolCall.id,
-        content: JSON.stringify({ success: true, message: 'Chapter proofread successfully', wordCount: countWords(toolCall.arguments.correctedContent) }),
+        content: JSON.stringify({ success: true, count: newIssues.length }),
       }
     }
 
@@ -61,95 +81,131 @@ export class ProofreaderExpert extends BaseAgent {
   }
 
   protected getSystemPrompt(): string {
-    return `You are an expert proofreader and editor for fiction. Your job is to:
-- Fix grammatical errors, typos, and punctuation issues
-- Check for consistency in character names, descriptions, and behaviors
-- Verify timeline and logical consistency
-- Use relationship query tools when character attitudes, trust, conflict, or prior interactions matter
-- Ensure the chapter connects properly with previous chapters
-- Check that the chapter follows the outline
-- Flag any setting or world-building inconsistencies
+    return `You are an expert proofreader for fiction. Your job is to audit chapter content for errors.
 
-Use the proofread_chapter tool to provide the corrected text and a summary of changes made.`
+Audit criteria:
+- Grammatical errors, typos, and punctuation issues.
+- Consistency in character names, descriptions, and behaviors.
+- Timeline and logical consistency.
+- Narrative pacing and prose style.
+
+Rules:
+1. ALWAYS use report_proofreading_issues tool to report findings - NEVER respond with freeform text.
+2. Provide exact excerpts from the text for each issue.
+3. Be specific and actionable in your suggested fixes.
+4. Process each segment independently. Focus only on issues within the given text segment.
+5. If processing a chapter segment (not the full chapter), focus on local consistency and grammar - don't worry about connections to other parts.
+6. Character context is intentionally compact. Use get_character_profile and relationship query tools only for specific characters or relationship facts you need.
+7. If no issues found, call the tool with an empty array.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat } = context
+    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat, range } = context
 
-    return `Proofread and correct the following chapter:
+    const isChunked = !!range
+    const rangeInfo = range ? `\nProcessing segment: words ${range.start}-${range.end}/${content.split(/\s+/).length} of the chapter.\n` : ''
+
+    // For chunked processing, use a simpler prompt to avoid overwhelming output
+    if (isChunked) {
+      return `Proofread this chapter segment for grammar, typos, consistency, and pacing issues:
+
+Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}${rangeInfo}
+Language: ${language || 'English'}
+Format: ${writingFormat || 'plaintext'}
+
+Compact Character Directory:
+${characters || 'No characters'}
+
+Text:
+${content}
+
+Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
+
+Use report_proofreading_issues to report only concrete issues found in this segment. If no issues, return empty array.`
+    }
+
+    // For single-chunk processing, include full context
+    return `Audit the following chapter for grammar, typos, and consistency issues:
 
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
 Primary Language: ${language || 'English'}
 
 ${buildWritingFormatInstruction(writingFormat, style)}
 
-Content to proofread:
+Text to Audit:
 ${content}
 
-Chapter Outline (for consistency check):
+Chapter Outline:
 ${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOutline, null, 2)}
 
-Character Reference:
+Compact Character Directory:
 ${characters}
 
 ${previousSummary ? `Previous Story Summary:\n${previousSummary}` : ''}
 ${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
-Relationship query tools are available. Use them when checking whether character behavior, dialogue, trust, conflict, or references to prior events are consistent. Query only the specific characters or events you need.
+Use get_character_profile for character details only when needed. Use relationship query tools for specific relationship checks, preferably with character IDs from the compact directory.
 
 Please:
-1. Use the proofread_chapter tool to provide the corrected chapter text
-2. Include a summary of all corrections made in the corrections field`
+1. Identify concrete issues using the report_proofreading_issues tool.
+2. For each issue, provide the exact excerpt, a clear explanation, and a suggested fix.`
   }
 
-  parseResponse(response: string): any {
-    const parts = response.split(/Corrections?:/i)
+  parseResponse(response: string, context?: Record<string, any>): any {
     return {
-      content: parts[0]?.trim() || response,
-      corrections: parts[1]?.trim() || '',
+      issues: context?._issues || [],
+      raw: response,
     }
   }
 
   protected validateOutput(response: string, parsed: any, context: Record<string, any>): string[] {
     const issues: string[] = []
-    const text = response.trim()
-    const sourceContent = typeof context.content === 'string' ? context.content.trim() : ''
-    const content = typeof parsed?.content === 'string' ? parsed.content.trim() : ''
-    const corrections = typeof parsed?.corrections === 'string' ? parsed.corrections.trim() : ''
+    const isChunked = !!context.range
 
-    if (!text) issues.push('Proofread response is empty')
-    if (containsMetaCommentary(text)) issues.push('Proofread response contains meta commentary or code fences')
-
-    // When using tools, validation is handled by the tool execution
-    // Only validate if we have raw output (fallback mode)
-    if (parsed && parsed.content && !parsed.content.includes('{')) {
+    // If tool was called, validation passes regardless of results
+    if (response.includes('report_proofreading_issues')) {
       return issues
     }
 
-    if (!content) issues.push('Proofread response must include corrected chapter text')
-    if (!corrections) issues.push('Proofread response must include a non-empty Corrections section')
-    if (sourceContent && content.length < Math.max(200, Math.floor(sourceContent.length * 0.5))) {
-      issues.push('Proofread chapter is unexpectedly short compared with the source content')
-    }
-    if (countWords(content || text) < 200) {
-      issues.push('Proofread chapter is too short to be reliable')
+    // If tool wasn't called, fail with clear message
+    if (response.length > 100) {
+      if (isChunked) {
+        issues.push('Chunked proofreading must use report_proofreading_issues tool. Focus only on this segment and report concrete issues found.')
+      } else {
+        issues.push('Proofreading response must use report_proofreading_issues tool. Provide structured findings, not free-form text.')
+      }
     }
 
     return issues
   }
 
   protected buildRepairPrompt(context: Record<string, any>, previousResponse: string, issues: string[]): string {
-    return `The previous proofread output was incomplete or invalid.
+    const { content, chapterTitle, chapterNumber, language, writingFormat, range } = context
+    const isChunked = !!range
 
-Issues:
-${issues.map(issue => `- ${issue}`).join('\n')}
+    if (isChunked) {
+      const rangeInfo = range ? `words ${range.start}-${range.end}` : ''
+      return `You failed to use the report_proofreading_issues tool. CRITICAL: You must use only the tool, no freeform text.
 
-Original task:
-${this.buildPrompt(context)}
+Proofread this segment (${rangeInfo}) for grammar, typos, and consistency issues:
 
-Previous output:
-${previousResponse}
+Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
+Language: ${language || 'English'}
+Format: ${writingFormat || 'plaintext'}
 
-Use the proofread_chapter tool to provide the corrected chapter text and a clearly labeled summary of corrections. Do not omit the corrections summary.`
+Text segment:
+${content}
+
+Action: Call report_proofreading_issues with concrete issues found. If no issues, return empty array.`
+    }
+
+    return `You failed to use the report_proofreading_issues tool. CRITICAL: You must use only the tool, no freeform text.
+
+Audit chapter ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle} for grammar, typos, consistency, and pacing issues.
+
+Text (${countWords(content)} words):
+${content}
+
+Action: Call report_proofreading_issues with each issue you find. If no issues, return empty array.`
   }
 }

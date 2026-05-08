@@ -14,7 +14,7 @@ import {
   type ProjectExportBuffer,
   PROJECT_EXPORT_SYNC_DELAY_MS,
 } from '@/services/projectExportSync'
-import type { StoryProject, StoryLength } from '@/types/project'
+import type { StoryProject, StoryLength, WritingFormat } from '@/types/project'
 
 const PROJECT_STORAGE_KEY = 'story-generator.projects.v1'
 const ACTIVE_PROJECT_STORAGE_KEY = 'story-generator.active-project.v1'
@@ -32,6 +32,12 @@ function migrateProjectStyle(project: any): StoryProject {
   }
   if (!Array.isArray(project.relationshipEvents)) {
     project.relationshipEvents = []
+  }
+  if (Array.isArray(project.chapters)) {
+    project.chapters = project.chapters.map((chapter: any) => ({
+      ...chapter,
+      proofreadingIssues: Array.isArray(chapter?.proofreadingIssues) ? chapter.proofreadingIssues : [],
+    }))
   }
   return project as StoryProject
 }

@@ -18,6 +18,16 @@ export interface ChapterOutline {
   endingHook: string
 }
 
+export interface ChapterProofreadingIssue {
+  id: string
+  severity: 'low' | 'medium' | 'high'
+  category: 'chapter_plan' | 'character' | 'relationship' | 'continuity' | 'factual' | 'logic' | 'style' | 'grammar' | 'typo' | 'pacing' | 'consistency'
+  title: string
+  excerpt: string
+  explanation: string
+  suggestedFix: string
+}
+
 export interface Chapter extends Timestamps {
   id: ID
   index: number
@@ -25,6 +35,7 @@ export interface Chapter extends Timestamps {
   outline: ChapterOutline
   content: string
   proofreadContent: string
+  proofreadingIssues: ChapterProofreadingIssue[]
   polishedContent: string
   status: ChapterStatus
   summary: string

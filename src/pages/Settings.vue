@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useUiStore } from '@/stores/ui'
+import { useProviderStore } from '@/stores/provider'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import { Monitor, Globe, Info, Database, FolderOpen } from 'lucide-vue-next'
+import BaseInput from '@/components/ui/BaseInput.vue'
+import { Monitor, Globe, Info, Database, FolderOpen, Wrench } from 'lucide-vue-next'
 
 const ui = useUiStore()
+const providerStore = useProviderStore()
 onMounted(() => ui.navigateTo('settings'))
 
 const langOptions = [
@@ -16,6 +19,10 @@ const langOptions = [
 
 function handleLanguageChange(value: any) {
   ui.setLanguage(value as 'en' | 'zh')
+}
+
+function handleMaxToolRoundsChange(value: string) {
+  providerStore.setMaxToolCallRounds(Number(value))
 }
 
 async function handleBrowseStorage() {
@@ -63,6 +70,25 @@ async function handleBrowseStorage() {
               :options="langOptions"
               @update:model-value="handleLanguageChange"
             />
+          </div>
+        </section>
+
+        <section class="border-t border-surface-4 pt-6">
+          <div class="flex items-center gap-2 mb-4">
+            <Wrench :size="16" class="text-accent" />
+            <h2 class="text-sm font-semibold text-text-primary">AI Tool Workflow</h2>
+          </div>
+          <div class="pl-6">
+            <BaseInput
+              :model-value="String(providerStore.toolWorkflowSettings.maxToolCallRounds)"
+              label="Maximum tool call rounds"
+              type="number"
+              placeholder="16"
+              @update:model-value="handleMaxToolRoundsChange"
+            />
+            <p class="mt-2 text-xs leading-relaxed text-text-muted">
+              Default is 16. When a model reaches this limit without submitting a final result, the app will ask whether to continue and will auto-continue after 8 seconds.
+            </p>
           </div>
         </section>
 

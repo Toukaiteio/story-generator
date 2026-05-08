@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { generateId } from '@/lib/id'
 import { useProjectStore } from '@/stores/project'
 import { useGenerationStore } from '@/stores/generation'
@@ -17,6 +17,7 @@ import BaseTag from '@/components/ui/BaseTag.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import VibeAssistant from './VibeAssistant.vue'
+import ProofreadingAssistant from './ProofreadingAssistant.vue'
 import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, RotateCcw } from 'lucide-vue-next'
 
 type StageKey = Exclude<GenerationStage, 'idle' | 'done'>
@@ -61,11 +62,23 @@ const showDoubleDeleteConfirm = ref(false)
 const chapterToDeleteId = ref<string | null>(null)
 const showClearConfirm = ref(false)
 
+const characterContext = computed(() => {
+  if (!project.value?.characters.length) return ''
+  return project.value.characters
+    .map(character => `- ${character.name} [id: ${character.id}] (${character.role})`)
+    .join('\n')
+})
+
+const relationshipContext = computed(() => {
+  if (!project.value || !selectedChapter.value) return ''
+  return `Relationship context is not inlined to reduce prompt size. Use relationship query tools for specific character pairs at chapterIndex ${Math.max(-1, selectedChapter.value.index - 1)} when available.`
+})
+
 const vibeContext = computed(() => {
   const ctx: Record<string, any> = {}
   if (project.value) {
     ctx.outline = outlineDraft.value
-    ctx.characters = charactersDraft.value.map(c => `${c.name} (${c.role}): ${c.personality.join(', ')}`).join('\n')
+    ctx.characters = charactersDraft.value.map(c => `- ${c.name} [id: ${c.id}] (${c.role})`).join('\n')
     ctx.writingFormat = project.value.writingFormat
     ctx.writingStyle = project.value.style
   }
@@ -85,6 +98,10 @@ const vibeContext = computed(() => {
   return ctx
 })
 
+const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
+const proofreadingAssistant = ref<any>(null)
+const chapterProofreadingIssues = ref<Record<string, any[]>>({})
+
 function handleVibeApply(content: string) {
   if (activeStage.value === 'planning') {
     if (planningSubTab.value === 'outline') {
@@ -101,6 +118,108 @@ function handleVibeApply(content: string) {
         })
         : content)
     }
+  }
+}
+
+async function handleProofreadingFix(instruction: string) {
+  if (vibeAssistant.value) {
+    vibeAssistant.value.submitRequest(instruction)
+  }
+}
+
+async function handleProofreadingIssuesFound(issues: any[]) {
+  if (!selectedChapterId.value) return
+
+  chapterProofreadingIssues.value[selectedChapterId.value] = issues
+  const chapter = chaptersDraft.value.find(item => item.id === selectedChapterId.value)
+  if (chapter) {
+    chapter.proofreadingIssues = issues
+    chapter.proofreadContent = chapter.proofreadContent || chapter.content
+    chapter.status = 'proofread'
+  }
+
+  await saveChapters()
+
+  if (issues.length > 0) {
+    toast.info(`Found ${issues.length} issue(s)`)
+  }
+}
+
+async function handleQuickSubmitPolish() {
+  await polishCurrentChapter()
+}
+
+async function proofreadCurrentChapter() {
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
+  const chapter = selectedChapter.value
+  if (!chapter || !proofreadingAssistant.value) return
+
+  genStore.beginManualTask('proofreading', `Proofreading chapter ${chapter.index + 1}...`, chapter.index)
+  try {
+    await proofreadingAssistant.value.proofread()
+    syncFromProject()
+  } finally {
+    genStore.finishManualTask()
+  }
+}
+
+async function proofreadAllChapters() {
+  if (!project.value || genStore.isGenerating) return
+
+  const allChapters = chaptersDraft.value
+  genStore.beginManualTask('proofreading', 'Proofreading all chapters...', allChapters[0]?.index ?? null)
+  try {
+    for (const chapter of allChapters) {
+      selectedChapterId.value = chapter.id
+      genStore.updateManualTask(`Proofreading chapter ${chapter.index + 1} of ${allChapters.length}...`, chapter.index)
+      await nextTick()
+
+      if (proofreadingAssistant.value) {
+        await proofreadingAssistant.value.proofread()
+        // Wait a bit between chapters to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
+
+    // Auto-save after scanning all chapters
+    await saveChapters()
+
+    // Mark proofreading complete and transition to Polish stage
+    genStore.markCompleted('proofreading')
+    activeStage.value = 'polishing'
+    ui.setWorkspaceNode('generation-polishing')
+    selectedChapterId.value = allChapters[0]?.id ?? null
+
+    toast.success('All chapters proofread. Ready to polish.')
+  } finally {
+    genStore.finishManualTask()
+  }
+}
+
+async function polishCurrentChapter() {
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
+  try {
+    const chapter = chaptersDraft.value.find(item => item.id === selectedChapterId.value)
+    const issues = chapter?.proofreadingIssues || chapterProofreadingIssues.value[selectedChapterId.value] || []
+    // Polish with context of proofreading issues found
+    genStore.progressMessage = `Polishing chapter with ${issues.length} issue${issues.length !== 1 ? 's' : ''}...`
+
+    await genStore.polishChapter(project.value.id, selectedChapterId.value, issues)
+    syncFromProject()
+    toast.success('Chapter polished')
+  } catch (error: any) {
+    toast.error(error?.message || 'Polishing failed')
+  }
+}
+
+async function polishAllChapters() {
+  if (!project.value || genStore.isGenerating) return
+  try {
+    await genStore.polishAllChapters(project.value.id)
+    syncFromProject()
+    toast.success('All chapters polished')
+  } catch (error: any) {
+    toast.error(error?.message || 'Polishing failed')
   }
 }
 
@@ -124,6 +243,7 @@ function cloneChapters(value: Chapter[]) {
         infoReveals: [...chapter.outline.infoReveals],
       },
       characterStateUpdates: { ...chapter.characterStateUpdates },
+      proofreadingIssues: [...(chapter.proofreadingIssues || [])],
     }))
 }
 
@@ -162,6 +282,7 @@ function createEmptyChapter(index: number): Chapter {
     },
     content: '',
     proofreadContent: '',
+    proofreadingIssues: [],
     polishedContent: '',
     status: 'outline',
     summary: '',
@@ -337,50 +458,6 @@ async function generateAllChapterDrafts() {
   }
 }
 
-async function proofreadCurrentChapter() {
-  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
-  try {
-    await genStore.proofreadChapter(project.value.id, selectedChapterId.value)
-    syncFromProject()
-    toast.success('Chapter proofread')
-  } catch (error: any) {
-    toast.error(error?.message || 'Proofreading failed')
-  }
-}
-
-async function proofreadAllChapters() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.proofreadAllChapters(project.value.id)
-    syncFromProject()
-    toast.success('All chapters proofread')
-  } catch (error: any) {
-    toast.error(error?.message || 'Proofreading failed')
-  }
-}
-
-async function polishCurrentChapter() {
-  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
-  try {
-    await genStore.polishChapter(project.value.id, selectedChapterId.value)
-    syncFromProject()
-    toast.success('Chapter polished')
-  } catch (error: any) {
-    toast.error(error?.message || 'Polishing failed')
-  }
-}
-
-async function polishAllChapters() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.polishAllChapters(project.value.id)
-    syncFromProject()
-    toast.success('All chapters polished')
-  } catch (error: any) {
-    toast.error(error?.message || 'Polishing failed')
-  }
-}
-
 function addCharacter() {
   charactersDraft.value.push(createEmptyCharacter())
   selectedCharacterId.value = charactersDraft.value.at(-1)?.id ?? null
@@ -413,7 +490,11 @@ function performClearChapter() {
   const chapter = chaptersDraft.value.find(ch => ch.id === chapterToDeleteId.value)
   if (chapter) {
     if (activeStage.value === 'writing') chapter.content = ''
-    else if (activeStage.value === 'proofreading') chapter.proofreadContent = ''
+    else if (activeStage.value === 'proofreading') {
+      chapter.proofreadContent = ''
+      chapter.proofreadingIssues = []
+      delete chapterProofreadingIssues.value[chapter.id]
+    }
     else if (activeStage.value === 'polishing') chapter.polishedContent = ''
     saveChapters()
     toast.success('Chapter content cleared')
@@ -544,7 +625,7 @@ function updateCurrentChapterText(text: string) {
             <div class="w-64 border-r border-surface-4 bg-surface-2 flex flex-col shrink-0">
               <div class="h-[45px] px-3 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between shrink-0">
                 <span class="text-[10px] font-bold text-text-muted uppercase tracking-widest">Characters</span>
-                <BaseButton variant="ghost" size="xs" class="!p-1" @click="addCharacter"><Plus :size="14" /></BaseButton>
+                <BaseButton variant="ghost" size="sm" class="!p-1" @click="addCharacter"><Plus :size="14" /></BaseButton>
               </div>
               <div class="flex-1 overflow-y-auto p-2 space-y-1">
                 <button v-for="character in charactersDraft" :key="character.id" class="w-full text-left rounded-lg px-3 py-2 transition-all border" :class="selectedCharacterId === character.id ? 'border-accent/30 bg-accent-subtle/50 text-accent shadow-sm' : 'border-transparent text-text-secondary hover:bg-surface-3'" @click="selectedCharacterId = character.id; planningSubTab = 'characters'">
@@ -674,21 +755,21 @@ function updateCurrentChapterText(text: string) {
           <div class="h-[45px] shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
             <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ activeStage }}</h3>
             <div class="flex items-center gap-2">
-              <BaseButton 
-                variant="secondary" 
-                size="sm" 
-                class="!h-8" 
-                :loading="genStore.isGenerating" 
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                class="!h-8"
+                :loading="genStore.isGenerating"
                 @click="activeStage === 'writing' ? generateCurrentChapterDraft() : activeStage === 'proofreading' ? proofreadCurrentChapter() : polishCurrentChapter()"
               >
                 <Sparkles :size="14" class="mr-1.5" />
                 <span>{{ activeStage === 'writing' ? 'Generate' : activeStage === 'proofreading' ? 'Proofread' : 'Polish' }} Current</span>
               </BaseButton>
-              <BaseButton 
-                variant="secondary" 
-                size="sm" 
-                class="!h-8" 
-                :loading="genStore.isGenerating" 
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                class="!h-8"
+                :loading="genStore.isGenerating"
                 @click="activeStage === 'writing' ? generateAllChapterDrafts() : activeStage === 'proofreading' ? proofreadAllChapters() : polishAllChapters()"
               >
                 <Sparkles :size="14" class="mr-1.5" />
@@ -733,9 +814,30 @@ function updateCurrentChapterText(text: string) {
         </section>
       </div>
 
-      <!-- Integrated Vibe Assistant Sidebar -->
+      <!-- Integrated Assistant Sidebar -->
       <div class="w-80 lg:w-96 border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block">
+        <ProofreadingAssistant
+          v-if="activeStage === 'proofreading' && selectedChapter"
+          ref="proofreadingAssistant"
+          action-mode="workflow"
+          :project-id="project?.id"
+          :chapter-id="selectedChapter.id"
+          :chapter-title="selectedChapter.title"
+          :chapter-number="selectedChapter.index + 1"
+          :content="selectedChapter.proofreadContent || selectedChapter.content"
+          :chapter-outline="selectedChapter.outline"
+          :characters="characterContext"
+          :relationships="relationshipContext"
+          :story-outline="project?.outline ?? ''"
+          :language="project?.language ?? 'English'"
+          :writing-format="project?.writingFormat ?? 'plaintext'"
+          @fix="handleProofreadingFix"
+          @issuesFound="handleProofreadingIssuesFound"
+          @quickSubmitPolish="handleQuickSubmitPolish"
+        />
         <VibeAssistant
+          v-else
+          ref="vibeAssistant"
           :stage="activeStage"
           :context="vibeContext"
           :mode="activeStage === 'writing' || activeStage === 'proofreading' || activeStage === 'polishing' ? 'editor-agent' : 'assistant'"

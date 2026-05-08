@@ -3,12 +3,12 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
 import { detectMarkdown, markdownToHtml } from '@/services/markdown'
-import { buildRelationshipContext } from '@/services/relationship/context'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import VibeAssistant from '@/components/workspace/VibeAssistant.vue'
 import EditingAssistant from '@/components/workspace/EditingAssistant.vue'
+import ProofreadingAssistant from '@/components/workspace/ProofreadingAssistant.vue'
 import { Save, Eye, EyeOff, FileText, Type, CheckCircle2, Sparkles, Clock, RotateCcw, Code2, BookOpen } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -28,7 +28,7 @@ const title = ref('')
 const content = ref('')
 const showVersions = ref(false)
 const viewMode = ref<'edit' | 'preview'>('edit')
-const assistantTab = ref<'vibe' | 'editing'>('vibe')
+const assistantTab = ref<'vibe' | 'editing' | 'proofreading'>('vibe')
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 
 watch(chapter, (ch) => {
@@ -111,18 +111,14 @@ const vibeContext = computed(() => ({
 
 const characterContext = computed(() => {
   if (!project.value?.characters.length) return ''
-  return project.value.characters.map(character => {
-    const traits = character.personality.length ? ` Traits: ${character.personality.join(', ')}` : ''
-    const relations = character.relations.length
-      ? ` Relations: ${character.relations.map(rel => `${rel.relation} -> ${rel.targetId}${rel.description ? ` (${rel.description})` : ''}`).join('; ')}`
-      : ''
-    return `- ${character.name} (${character.role}).${traits}${relations}`
-  }).join('\n')
+  return project.value.characters
+    .map(character => `- ${character.name} [id: ${character.id}] (${character.role})`)
+    .join('\n')
 })
 
 const relationshipContext = computed(() => {
   if (!project.value || !chapter.value) return ''
-  return buildRelationshipContext(project.value, chapter.value.index - 1)
+  return `Relationship context is not inlined to reduce prompt size. Use relationship query tools for specific character pairs at chapterIndex ${Math.max(-1, chapter.value.index - 1)} when available.`
 })
 
 function applyVibeContent(nextContent: string) {
@@ -143,6 +139,24 @@ async function sendToVibe(instruction: string) {
   assistantTab.value = 'vibe'
   await nextTick()
   vibeAssistant.value?.submitRequest(instruction)
+}
+
+async function saveProofreadingIssues(issues: any[]) {
+  if (!project.value || !chapter.value) return
+  const chapters = project.value.chapters.map(ch =>
+    ch.id === props.chapterId
+      ? {
+          ...ch,
+          proofreadingIssues: issues,
+          proofreadContent: ch.proofreadContent || content.value,
+          status: 'proofread' as const,
+        }
+      : ch
+  )
+  const saved = await projectStore.updateProject(project.value.id, { chapters })
+  if (!saved) {
+    toast.error('Failed to save proofreading issues')
+  }
 }
 </script>
 
@@ -328,6 +342,15 @@ async function sendToVibe(instruction: string) {
           >
             Editing AI
           </button>
+          <button
+            :class="[
+              'flex-1 rounded text-[11px] font-medium transition-colors',
+              assistantTab === 'proofreading' ? 'bg-surface-4 text-text-primary' : 'text-text-secondary hover:text-text-primary',
+            ]"
+            @click="assistantTab = 'proofreading'"
+          >
+            Proofreading
+          </button>
         </div>
 
         <VibeAssistant
@@ -339,7 +362,8 @@ async function sendToVibe(instruction: string) {
           @apply="applyVibeContent"
         />
         <EditingAssistant
-          v-else
+          v-else-if="assistantTab === 'editing'"
+          :project-id="project?.id"
           :chapter-title="title"
           :chapter-number="chapter.index + 1"
           :content="content"
@@ -349,6 +373,22 @@ async function sendToVibe(instruction: string) {
           :story-outline="project?.outline ?? ''"
           :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
           @fix="sendToVibe"
+        />
+        <ProofreadingAssistant
+          v-else
+          :project-id="project?.id"
+          :chapter-id="chapter.id"
+          :chapter-title="title"
+          :chapter-number="chapter.index + 1"
+          :content="content"
+          :chapter-outline="chapter.outline"
+          :characters="characterContext"
+          :relationships="relationshipContext"
+          :story-outline="project?.outline ?? ''"
+          :language="project?.language ?? 'English'"
+          :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
+          @fix="sendToVibe"
+          @issuesFound="saveProofreadingIssues"
         />
       </aside>
     </div>

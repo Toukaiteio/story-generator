@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { StoryPipeline } from '@/services/pipeline'
+import { prepareRuntime, buildKnowledgeContextForProject } from '@/services/pipeline/runtime'
+import { buildPreviousSummary, buildCharacterContextForTask } from '@/services/pipeline/context'
 import { useProjectStore } from '@/stores/project'
 import { useProviderStore } from '@/stores/provider'
 import { providerManager } from '@/services/provider'
+import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import type { GenerationStage, StoryProject } from '@/types/project'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
@@ -12,7 +15,7 @@ import type { ToolDefinition, ToolCall } from '@/services/provider'
 export interface ChapterAuditIssue {
   id: string
   severity: 'low' | 'medium' | 'high'
-  category: 'chapter_plan' | 'character' | 'relationship' | 'continuity' | 'factual' | 'logic' | 'style'
+  category: 'chapter_plan' | 'character' | 'relationship' | 'continuity' | 'factual' | 'logic' | 'style' | 'grammar' | 'typo' | 'pacing' | 'consistency'
   title: string
   excerpt: string
   explanation: string
@@ -24,6 +27,15 @@ interface GenerationError {
   stage: string
   message: string
   timestamp: string
+}
+
+interface ToolContinuationRequest {
+  id: string
+  workflow: string
+  rounds: number
+  finalToolNames: string[]
+  continue: () => void
+  stop: () => void
 }
 
 type NextAction =
@@ -52,6 +64,7 @@ export const useGenerationStore = defineStore('generation', () => {
   const currentProjectId = ref<string | null>(null)
   const isFollowingMode = ref(false)
   const currentChapterIndex = ref<number | null>(null)
+  const toolContinuationRequest = ref<ToolContinuationRequest | null>(null)
 
   let errorCounter = 0
   let pipeline: StoryPipeline | null = null
@@ -109,7 +122,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
   function findNextChapterPosition(
     chapters: StoryProject['chapters'],
-    predicate: (chapter: StoryProject['chapters'][number]) => boolean
+    predicate: (chapter: StoryProject['chapters'][number]) => boolean | string
   ) {
     let nextIndex = -1
     for (let index = 0; index < chapters.length; index++) {
@@ -353,6 +366,105 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  async function auditChapter(projectId: string, chapterIndex: number, mode: 'proofread' | 'edit' = 'proofread'): Promise<ChapterAuditIssue[]> {
+    const project = validateProject(projectId)
+    const chapter = project.chapters[chapterIndex]
+    if (!chapter) throw new Error(`Chapter ${chapterIndex + 1} not found`)
+
+    const { proofreaderAgent } = prepareRuntime()
+    const content = chapter.proofreadContent || chapter.content
+    
+    // Chunking logic: Split content into segments if too long
+    // Roughly 800 words per chunk is a safe limit for detailed auditing
+    const words = content.split(/\s+/)
+    const CHUNK_SIZE = 800
+    const chunks: string[] = []
+    
+    if (words.length <= CHUNK_SIZE * 1.2) {
+      chunks.push(content)
+    } else {
+      for (let i = 0; i < words.length; i += CHUNK_SIZE) {
+        chunks.push(words.slice(i, i + CHUNK_SIZE).join(' '))
+      }
+    }
+
+    const allIssues: ChapterAuditIssue[] = []
+    const knowledgeContext = await buildKnowledgeContextForProject(project, {
+      theme: project.theme,
+      genre: project.genre,
+      targetReader: project.targetReader,
+      language: project.language,
+      chapterTitle: chapter.title,
+      chapterOutline: JSON.stringify(chapter.outline),
+      content,
+      previousSummary: buildPreviousSummary(project, chapterIndex),
+    })
+
+    for (let i = 0; i < chunks.length; i++) {
+      if (cancelled.value) break
+      if (chunks.length > 1) {
+        progressMessage.value = `Auditing chapter ${chapter.index + 1} (Part ${i + 1}/${chunks.length})...`
+      }
+
+      const context: Record<string, any> = {
+        content: chunks[i],
+        chapterTitle: chapter.title,
+        chapterNumber: chapter.index + 1,
+        chapterOutline: chapter.outline,
+        characters: buildCharacterContextForTask(project.characters, mode === 'proofread' ? 'proofreading' : 'polishing'),
+        previousSummary: buildPreviousSummary(project, chapterIndex),
+        language: project.language,
+        style: project.style,
+        project,
+        writingFormat: project.writingFormat,
+        knowledgeContext,
+        range: chunks.length > 1 ? { start: i * CHUNK_SIZE, end: (i + 1) * CHUNK_SIZE } : null
+      }
+
+      const result = await proofreaderAgent.execute(context)
+      if (result.data?.issues) {
+        allIssues.push(...result.data.issues)
+      }
+    }
+
+    return allIssues
+  }
+
+  async function fixChapterIssues(projectId: string, chapterIndex: number, issues: ChapterAuditIssue[]): Promise<string> {
+    if (!issues.length) {
+      const project = validateProject(projectId)
+      return project.chapters[chapterIndex]?.proofreadContent || project.chapters[chapterIndex]?.content || ''
+    }
+
+    const project = validateProject(projectId)
+    const chapter = project.chapters[chapterIndex]
+    const content = chapter.proofreadContent || chapter.content
+
+    const issueText = issues.map((issue, index) => [
+      `${index + 1}. ${issue.title}`,
+      `Severity: ${issue.severity}`,
+      `Category: ${issue.category}`,
+      issue.excerpt ? `Excerpt: ${issue.excerpt}` : '',
+      `Problem: ${issue.explanation}`,
+      `Fix: ${issue.suggestedFix}`,
+    ].filter(Boolean).join('\n')).join('\n\n')
+
+    const prompt = [
+      'Fix the following proofreading findings in the current chapter content.',
+      project.writingFormat === 'markdown'
+        ? 'Preserve the chapter plan, characters, relationship continuity, and Markdown formatting.'
+        : 'Preserve the chapter plan, characters, and relationship continuity. Output Plain Text by default.',
+      'Return the full revised chapter content through the replace_chapter_content tool.',
+      '',
+      `Current Content:\n${content}`,
+      '',
+      issueText,
+    ].join('\n')
+
+    const response = await editChapterWithTool(prompt)
+    return response.content
+  }
+
   async function proofreadChapterAt(projectId: string, targetChapterIndex: number) {
     const project = validateProject(projectId)
     const targetChapter = project.chapters[targetChapterIndex]
@@ -360,19 +472,42 @@ export const useGenerationStore = defineStore('generation', () => {
 
     currentStage.value = 'proofreading'
     currentChapterIndex.value = targetChapterIndex
-    progressMessage.value = `Proofreading chapter ${targetChapter.index + 1}...`
-    const generated = await (pipeline ?? new StoryPipeline()).proofreadChapter(project, targetChapterIndex, appendStreamToken)
-    const latestProject = validateProject(projectId)
-    const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
-    const nextAction = getNextAction({ ...project, chapters })
-    await applyProjectUpdate(projectId, {
-      chapters,
-      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-    })
+    progressMessage.value = `Auditing chapter ${targetChapter.index + 1}...`
+    
+    // 1. Audit
+    const issues = await auditChapter(projectId, targetChapterIndex, 'proofread')
+    
+    if (issues.length > 0) {
+      progressMessage.value = `Fixing ${issues.length} issues in chapter ${targetChapter.index + 1}...`
+      // 2. Fix
+      const correctedContent = await fixChapterIssues(projectId, targetChapterIndex, issues)
+      
+      const latestProject = validateProject(projectId)
+      const chapters = latestProject.chapters.map((chapter) => 
+        chapter.id === targetChapter.id 
+          ? { ...chapter, proofreadContent: correctedContent, status: 'proofread' as const } 
+          : chapter
+      )
+      const nextAction = getNextAction({ ...project, chapters })
+      await applyProjectUpdate(projectId, {
+        chapters,
+        generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
+      })
+    } else {
+      // Mark as proofread even if no issues found
+      const latestProject = validateProject(projectId)
+      const chapters = latestProject.chapters.map((chapter) => 
+        chapter.id === targetChapter.id 
+          ? { ...chapter, proofreadContent: chapter.content, status: 'proofread' as const } 
+          : chapter
+      )
+      await applyProjectUpdate(projectId, { chapters })
+    }
+
     markCompleted('proofreading')
-    currentStage.value = nextAction.stage
+    currentStage.value = 'proofreading' // Stay in proofreading stage if doing one by one
     currentChapterIndex.value = null
-    return generated
+    return validateProject(projectId).chapters[targetChapterIndex]
   }
 
   async function proofreadAllChapters(projectId: string) {
@@ -394,7 +529,7 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function polishChapter(projectId: string, chapterId?: string) {
+  async function polishChapter(projectId: string, chapterId?: string, proofreadingIssues?: any[]) {
     resetRunState(projectId)
     const project = validateProject(projectId)
     const targetChapterIndex = chapterId
@@ -406,7 +541,7 @@ export const useGenerationStore = defineStore('generation', () => {
     }
 
     try {
-      return await polishChapterAt(projectId, targetChapterIndex)
+      return await polishChapterAt(projectId, targetChapterIndex, proofreadingIssues)
     } catch (error: any) {
       addError('polishing', error?.message || 'Polishing failed')
       throw error
@@ -415,7 +550,7 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function polishChapterAt(projectId: string, targetChapterIndex: number) {
+  async function polishChapterAt(projectId: string, targetChapterIndex: number, proofreadingIssues?: any[]) {
     const project = validateProject(projectId)
     const targetChapter = project.chapters[targetChapterIndex]
     if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
@@ -423,7 +558,7 @@ export const useGenerationStore = defineStore('generation', () => {
     currentStage.value = 'polishing'
     currentChapterIndex.value = targetChapterIndex
     progressMessage.value = `Polishing chapter ${targetChapter.index + 1}...`
-    const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken)
+    const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken, proofreadingIssues)
     const latestProject = validateProject(projectId)
     const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
     const nextAction = getNextAction({ ...project, chapters })
@@ -547,6 +682,47 @@ export const useGenerationStore = defineStore('generation', () => {
     errors.value = []
   }
 
+  function beginManualTask(stage: GenerationStage, message: string, chapterIndex: number | null = null) {
+    isGenerating.value = true
+    cancelled.value = false
+    currentStage.value = stage
+    progressMessage.value = message
+    currentChapterIndex.value = chapterIndex
+  }
+
+  function updateManualTask(message: string, chapterIndex: number | null = currentChapterIndex.value) {
+    progressMessage.value = message
+    currentChapterIndex.value = chapterIndex
+  }
+
+  function finishManualTask() {
+    isGenerating.value = false
+    progressMessage.value = ''
+    currentChapterIndex.value = null
+  }
+
+  function waitForToolContinuation(request: Omit<ToolContinuationRequest, 'id' | 'continue' | 'stop'>) {
+    return new Promise<boolean>((resolve) => {
+      const id = `tool-continuation-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      toolContinuationRequest.value = {
+        ...request,
+        id,
+        continue: () => {
+          if (toolContinuationRequest.value?.id === id) {
+            toolContinuationRequest.value = null
+          }
+          resolve(true)
+        },
+        stop: () => {
+          if (toolContinuationRequest.value?.id === id) {
+            toolContinuationRequest.value = null
+          }
+          resolve(false)
+        },
+      }
+    })
+  }
+
   function getAssistantModelRef(): ProviderModelRef {
     const providerStore = useProviderStore()
     providerManager.setProviders(providerStore.providers)
@@ -561,6 +737,96 @@ export const useGenerationStore = defineStore('generation', () => {
 
   function getToolCall(toolCalls: ToolCall[], name: string) {
     return toolCalls.find(toolCall => toolCall.name === name) ?? null
+  }
+
+  async function chatWithRelationshipTools(
+    messages: ChatMessage[],
+    modelRef: ProviderModelRef,
+    tools: ToolDefinition[],
+    options: {
+      project?: StoryProject | null
+      finalToolNames: string[]
+      maxTokens?: number
+      temperature?: number
+      maxRounds?: number
+    }
+  ) {
+    const currentMessages: ChatMessage[] = [...messages]
+    const allToolCalls: ToolCall[] = []
+    const providerStore = useProviderStore()
+    const maxRounds = options.maxRounds ?? providerStore.toolWorkflowSettings.maxToolCallRounds
+    const finalToolNames = new Set(options.finalToolNames)
+
+    let round = 0
+    while (true) {
+      if (round === maxRounds - 1) {
+        currentMessages.push({
+          role: 'user',
+          content: `You have reached the final tool round. Do not call lookup tools again. Call one of these final reporting tools now: ${options.finalToolNames.join(', ')}. If no issues are found, report an empty issues array.`,
+        })
+      }
+
+      const response = await providerManager.chatWithTools(
+        currentMessages,
+        modelRef,
+        tools,
+        options.maxTokens ?? 4096,
+        options.temperature ?? 0.2
+      )
+
+      allToolCalls.push(...response.tool_calls)
+      if (!response.tool_calls.length) {
+        return { ...response, tool_calls: allToolCalls }
+      }
+
+      if (response.tool_calls.some(toolCall => finalToolNames.has(toolCall.name))) {
+        return { ...response, tool_calls: allToolCalls }
+      }
+
+      currentMessages.push({
+        role: 'assistant',
+        content: response.content || null,
+        reasoning_content: response.reasoning_content ?? null,
+        tool_calls: response.tool_calls.map(toolCall => ({
+          id: toolCall.id,
+          type: 'function',
+          function: {
+            name: toolCall.name,
+            arguments: JSON.stringify(toolCall.arguments),
+          },
+        })),
+      })
+
+      for (const toolCall of response.tool_calls) {
+        const relationshipResult = options.project
+          ? await handleRelationshipQueryTool(toolCall, options.project)
+          : null
+        currentMessages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: relationshipResult?.content ?? JSON.stringify({ error: `Unsupported tool: ${toolCall.name}` }),
+        })
+      }
+
+      round += 1
+      if (round >= maxRounds) {
+        const shouldContinue = await waitForToolContinuation({
+          workflow: options.finalToolNames.join(' / '),
+          rounds: maxRounds,
+          finalToolNames: options.finalToolNames,
+        })
+
+        if (!shouldContinue) {
+          throw new Error(`Assistant tool workflow stopped after ${maxRounds} rounds before calling ${options.finalToolNames.join(' or ')}.`)
+        }
+
+        round = 0
+        currentMessages.push({
+          role: 'user',
+          content: `Continue the tool workflow. Tool round counter has been reset. Prefer reporting with ${options.finalToolNames.join(' or ')} as soon as you have enough information; only use more lookup tools if necessary.`,
+        })
+      }
+    }
   }
 
   async function chatWithAssistant(prompt: string): Promise<string> {
@@ -638,60 +904,66 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function auditChapterWithTool(prompt: string): Promise<ChapterAuditIssue[]> {
+  async function auditChapterWithTool(prompt: string, projectId?: string): Promise<ChapterAuditIssue[]> {
     const modelRef = getAssistantModelRef()
-    const tools: ToolDefinition[] = [{
-      name: 'report_chapter_issues',
-      description: 'Report concrete issues found in the chapter after checking it against plan, characters, relationships, continuity, and factual logic.',
-      parameters: {
-        type: 'object',
-        properties: {
-          issues: {
-            type: 'array',
-            description: 'Concrete issues found in the current chapter. Return an empty array if no issues are found.',
-            items: {
-              type: 'object',
-              properties: {
-                severity: {
-                  type: 'string',
-                  enum: ['low', 'medium', 'high'],
-                  description: 'How serious the issue is.',
+    const project = projectId ? validateProject(projectId) : null
+    const tools: ToolDefinition[] = [
+      ...getRelationshipQueryTools(),
+      {
+        name: 'report_chapter_issues',
+        description: 'Report concrete issues found in the chapter after checking it against plan, characters, relationships, continuity, and factual logic.',
+        parameters: {
+          type: 'object',
+          properties: {
+            issues: {
+              type: 'array',
+              description: 'Concrete issues found in the current chapter. Return an empty array if no issues are found.',
+              items: {
+                type: 'object',
+                properties: {
+                  severity: {
+                    type: 'string',
+                    enum: ['low', 'medium', 'high'],
+                    description: 'How serious the issue is.',
+                  },
+                  category: {
+                    type: 'string',
+                    enum: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'],
+                    description: 'The issue category.',
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'A short issue title.',
+                  },
+                  excerpt: {
+                    type: 'string',
+                    description: 'The shortest exact excerpt from the chapter that demonstrates the issue. Leave empty only if no exact excerpt exists.',
+                  },
+                  explanation: {
+                    type: 'string',
+                    description: 'Why this is inconsistent, implausible, or unsupported.',
+                  },
+                  suggestedFix: {
+                    type: 'string',
+                    description: 'A concrete fix instruction that Vibe AI can apply.',
+                  },
                 },
-                category: {
-                  type: 'string',
-                  enum: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'],
-                  description: 'The issue category.',
-                },
-                title: {
-                  type: 'string',
-                  description: 'A short issue title.',
-                },
-                excerpt: {
-                  type: 'string',
-                  description: 'The shortest exact excerpt from the chapter that demonstrates the issue. Leave empty only if no exact excerpt exists.',
-                },
-                explanation: {
-                  type: 'string',
-                  description: 'Why this is inconsistent, implausible, or unsupported.',
-                },
-                suggestedFix: {
-                  type: 'string',
-                  description: 'A concrete fix instruction that Vibe AI can apply.',
-                },
+                required: ['severity', 'category', 'title', 'explanation', 'suggestedFix'],
               },
-              required: ['severity', 'category', 'title', 'explanation', 'suggestedFix'],
             },
           },
+          required: ['issues'],
         },
-        required: ['issues'],
       },
-    }]
+    ]
 
     const messages: ChatMessage[] = [
       {
         role: 'system',
         content: [
           'You are Editing AI. Audit the current chapter against the supplied chapter plan, characters, relationship state, and story context.',
+          'The prompt intentionally includes only compact character and relationship context.',
+          'Use get_character_profile and relationship query tools for specific facts before reporting relationship or character consistency issues.',
           'Focus on concrete contradictions, unsupported facts, chronology errors, relationship inconsistencies, missing plan beats, logic problems, and factual implausibility inside the story world.',
           'Use report_chapter_issues. Do not return free-form prose.',
           'Do not invent problems. If the chapter is coherent, report an empty issues array.',
@@ -701,7 +973,12 @@ export const useGenerationStore = defineStore('generation', () => {
     ]
 
     try {
-      const response = await providerManager.chatWithTools(messages, modelRef, tools, 4096, 0.2)
+      const response = await chatWithRelationshipTools(messages, modelRef, tools, {
+        project,
+        finalToolNames: ['report_chapter_issues'],
+        maxTokens: 4096,
+        temperature: 0.2,
+      })
       const toolCall = getToolCall(response.tool_calls, 'report_chapter_issues')
       const rawIssues = Array.isArray(toolCall?.arguments?.issues) ? toolCall.arguments.issues : []
 
@@ -719,6 +996,169 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  async function proofreadChapterWithTool(prompt: string, projectId?: string): Promise<ChapterAuditIssue[]> {
+    const modelRef = getAssistantModelRef()
+    const project = projectId ? validateProject(projectId) : null
+    const tools: ToolDefinition[] = [
+      ...getRelationshipQueryTools(),
+      {
+        name: 'report_proofreading_issues',
+        description: 'Report concrete grammar, typo, style, and consistency issues found in the chapter.',
+        parameters: {
+          type: 'object',
+          properties: {
+            issues: {
+              type: 'array',
+              description: 'List of specific issues found. Return an empty array if no issues are found.',
+              items: {
+                type: 'object',
+                properties: {
+                  severity: {
+                    type: 'string',
+                    enum: ['low', 'medium', 'high'],
+                    description: 'How serious the issue is.',
+                  },
+                  category: {
+                    type: 'string',
+                    enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'],
+                    description: 'The issue category.',
+                  },
+                  title: {
+                    type: 'string',
+                    description: 'A short issue title.',
+                  },
+                  excerpt: {
+                    type: 'string',
+                    description: 'The exact excerpt from the text that contains the issue.',
+                  },
+                  explanation: {
+                    type: 'string',
+                    description: 'Why this is an issue.',
+                  },
+                  suggestedFix: {
+                    type: 'string',
+                    description: 'Specific instruction on how to fix this issue.',
+                  },
+                },
+                required: ['severity', 'category', 'title', 'excerpt', 'explanation', 'suggestedFix'],
+              },
+            },
+          },
+          required: ['issues'],
+        },
+      },
+    ]
+
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: [
+          'You are a Proofreading Expert. Your job is to audit a chapter for grammar, typos, consistency, pacing, and logical flow errors.',
+          'Focus on:',
+          '- Grammatical errors, typos, and punctuation issues.',
+          '- Consistency in character names, descriptions, and behaviors.',
+          '- Timeline and logical consistency within the chapter.',
+          '- Narrative pacing and prose style.',
+          'The prompt intentionally includes only compact character and relationship context.',
+          'Use get_character_profile and relationship query tools for specific facts before reporting character or relationship consistency issues.',
+          'Use report_proofreading_issues to report concrete findings. Do not return free-form prose.',
+          'Do not invent problems. If the chapter is sound, report an empty issues array.',
+        ].join('\n'),
+      },
+      { role: 'user', content: prompt },
+    ]
+
+    try {
+      const response = await chatWithRelationshipTools(messages, modelRef, tools, {
+        project,
+        finalToolNames: ['report_proofreading_issues'],
+        maxTokens: 4096,
+        temperature: 0.2,
+      })
+      const toolCall = getToolCall(response.tool_calls, 'report_proofreading_issues')
+      const rawIssues = Array.isArray(toolCall?.arguments?.issues) ? toolCall.arguments.issues : []
+
+      return rawIssues.map((issue, index) => ({
+        id: `issue-${Date.now()}-${index}`,
+        severity: issue?.severity === 'high' || issue?.severity === 'medium' || issue?.severity === 'low' ? issue.severity : 'medium',
+        category: (['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'].includes(issue?.category) ? issue.category : 'grammar') as any,
+        title: String(issue?.title ?? `Issue ${index + 1}`).trim(),
+        excerpt: String(issue?.excerpt ?? '').trim(),
+        explanation: String(issue?.explanation ?? '').trim(),
+        suggestedFix: String(issue?.suggestedFix ?? '').trim(),
+      })).filter(issue => issue.title && issue.explanation && issue.suggestedFix)
+    } catch (error: any) {
+      throw new Error(`Proofreading error: ${error?.message || 'Unknown error'}`)
+    }
+  }
+
+  function splitPromptIntoProofreadingChunks(prompt: string) {
+    const marker = 'Current Chapter Content:\n'
+    const markerIndex = prompt.indexOf(marker)
+    if (markerIndex === -1) return [{ prompt, range: null as { start: number; end: number; total: number } | null }]
+
+    const prefix = prompt.slice(0, markerIndex + marker.length)
+    const content = prompt.slice(markerIndex + marker.length)
+    const words = content.trim().split(/\s+/).filter(Boolean)
+    const chunkSize = 900
+    if (words.length <= chunkSize * 1.2) {
+      return [{ prompt, range: null as { start: number; end: number; total: number } | null }]
+    }
+
+    const chunks: { prompt: string; range: { start: number; end: number; total: number } }[] = []
+    for (let start = 0; start < words.length; start += chunkSize) {
+      const end = Math.min(start + chunkSize, words.length)
+      chunks.push({
+        prompt: [
+          prefix,
+          `[Segment ${chunks.length + 1} of ${Math.ceil(words.length / chunkSize)}; words ${start + 1}-${end} of ${words.length}. Proofread only this segment and report exact excerpts from this segment.]`,
+          words.slice(start, end).join(' '),
+        ].join('\n'),
+        range: { start, end, total: words.length },
+      })
+    }
+    return chunks
+  }
+
+  async function proofreadChapterWithToolChunked(prompt: string, projectId?: string): Promise<ChapterAuditIssue[]> {
+    const chunks = splitPromptIntoProofreadingChunks(prompt)
+    if (chunks.length === 1) {
+      return proofreadChapterWithTool(prompt, projectId)
+    }
+
+    const issues: ChapterAuditIssue[] = []
+    for (let index = 0; index < chunks.length; index++) {
+      if (cancelled.value) break
+      progressMessage.value = `Proofreading segment ${index + 1}/${chunks.length}...`
+      const chunkIssues = await proofreadChapterWithTool(chunks[index].prompt, projectId)
+      issues.push(...chunkIssues.map(issue => ({
+        ...issue,
+        id: `${issue.id}-part-${index + 1}`,
+      })))
+    }
+    return issues
+  }
+
+  async function saveChapterProofreadingIssues(
+    projectId: string,
+    chapterId: string,
+    issues: ChapterAuditIssue[],
+    contentFallback = ''
+  ) {
+    const project = validateProject(projectId)
+    const chapters = project.chapters.map(chapter =>
+      chapter.id === chapterId
+        ? {
+            ...chapter,
+            proofreadingIssues: issues,
+            proofreadContent: chapter.proofreadContent || contentFallback || chapter.content,
+            status: 'proofread' as const,
+          }
+        : chapter
+    )
+    await applyProjectUpdate(projectId, { chapters })
+  }
+
   return {
     isGenerating,
     currentStage,
@@ -727,6 +1167,7 @@ export const useGenerationStore = defineStore('generation', () => {
     errors,
     isFollowingMode,
     currentChapterIndex,
+    toolContinuationRequest,
     completedStages,
     isStageComplete,
     getNextAction,
@@ -742,8 +1183,18 @@ export const useGenerationStore = defineStore('generation', () => {
     generateNextStage,
     cancelGeneration,
     clearErrors,
+    beginManualTask,
+    updateManualTask,
+    finishManualTask,
     chatWithAssistant,
     editChapterWithTool,
     auditChapterWithTool,
+    proofreadChapterWithTool,
+    proofreadChapterWithToolChunked,
+    saveChapterProofreadingIssues,
+    proofreadAllChapters,
+    polishAllChapters,
+    markCompleted,
+    markCompletedThrough,
   }
 })

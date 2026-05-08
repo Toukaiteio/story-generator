@@ -4,7 +4,6 @@ import type { CharacterRelationshipEvent, ExtractedRelationshipEvent } from '@/t
 import { getAgent } from '@/services/agent'
 import { extractJsonPayload } from '@/services/agent/validation'
 import { buildCharacterContextForTask } from './context'
-import { buildRelationshipContext } from '@/services/relationship/context'
 import { buildKnowledgeContextForProject, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
 import { generateId } from '@/lib/id'
 import type { PlanningDraft } from './types'
@@ -347,7 +346,6 @@ export async function extractRelationshipEventsForChapter(
     chapterNumber,
     chapterTitle: chapter.title,
     characters: buildCharacterContextForTask(project.characters, 'planning'),
-    previousRelationships: buildRelationshipContext(project, chapter.index - 1),
     chapterContent: chapter.content,
     project,
     language: project.language,
