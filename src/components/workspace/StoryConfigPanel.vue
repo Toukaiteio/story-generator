@@ -29,6 +29,7 @@ const form = reactive({
   targetReader: '',
   language: 'English',
   styleId: 'default',
+  writingFormat: 'plaintext' as const,
   length: 'medium',
   customRequirements: '',
 })
@@ -53,6 +54,11 @@ const genreOptions = [
 
 const genreValues = new Set(genreOptions.map(option => option.value))
 
+const writingFormatOptions = [
+  { label: 'Plain Text', value: 'plaintext' },
+  { label: 'Markdown', value: 'markdown' },
+]
+
 watch(
   project,
   (p) => {
@@ -63,6 +69,7 @@ watch(
       form.targetReader = p.targetReader
       form.language = p.language || 'English'
       form.styleId = p.styleId || 'default'
+      form.writingFormat = p.writingFormat || 'plaintext'
       form.length = p.length
       form.customRequirements = p.customRequirements
       requiredElementsText.value = p.constraints.required.join('\n')
@@ -192,6 +199,7 @@ async function save(showToast = true) {
     language: resolvedLanguage,
     style: resolvedStyle,
     styleId: form.styleId,
+    writingFormat: form.writingFormat,
     length: form.length as any,
     constraints: {
       required: splitListInput(requiredElementsText.value),
@@ -311,8 +319,9 @@ async function optimizeWithDetailer() {
           <BaseInput v-model="form.language" label="Primary Language" placeholder="English" />
         </div>
 
-        <div class="grid grid-cols-1 gap-3">
+        <div class="grid grid-cols-2 gap-3">
           <BaseSelect v-model="form.styleId" label="Writing Style" :options="styleOptions" />
+          <BaseSelect v-model="form.writingFormat" label="Writing Format" :options="writingFormatOptions" />
         </div>
 
         <BaseTextarea

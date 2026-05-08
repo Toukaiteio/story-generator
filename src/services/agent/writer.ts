@@ -11,20 +11,24 @@ export class WriterExpert extends BaseAgent {
     return [
       {
         name: 'write_chapter',
-        description: 'Write a complete chapter with compelling prose',
+        description: 'Write the chapter in sections, appending each section until the chapter is complete',
         parameters: {
           type: 'object',
           properties: {
             content: {
               type: 'string',
-              description: 'The complete chapter text written in prose',
+              description: 'The next section of chapter prose to append',
             },
             summary: {
               type: 'string',
-              description: 'A brief summary of the chapter (first 200 characters)',
+              description: 'A brief summary of the current section or the chapter so far',
+            },
+            isComplete: {
+              type: 'boolean',
+              description: 'Whether this section completes the chapter',
             },
           },
-          required: ['content'],
+          required: ['content', 'isComplete'],
         },
       },
     ]
@@ -36,11 +40,37 @@ export class WriterExpert extends BaseAgent {
       const content = typeof toolCall.arguments.content === 'string'
         ? toolCall.arguments.content.trim()
         : ''
-      context._chapterContent = content
-      context._chapterSummary = toolCall.arguments.summary || `${content.substring(0, 200)}...`
+      const summary = typeof toolCall.arguments.summary === 'string'
+        ? toolCall.arguments.summary.trim()
+        : ''
+      const isComplete = Boolean(toolCall.arguments.isComplete)
+
+      if (!content) {
+        return {
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({ error: 'Chapter content is required' }),
+        }
+      }
+
+      const chunks = Array.isArray(context._chapterDraftChunks)
+        ? context._chapterDraftChunks
+        : []
+      chunks.push(content)
+      context._chapterDraftChunks = chunks
+      context._chapterContent = chunks.join('\n\n')
+      context._chapterComplete = isComplete
+      context._chapterSummary = summary || (isComplete
+        ? `${context._chapterContent.substring(0, 200)}...`
+        : `${content.substring(0, 200)}...`)
+
       return {
         tool_call_id: toolCall.id,
-        content: JSON.stringify({ success: true, message: 'Chapter written successfully', wordCount: countWords(content) }),
+        content: JSON.stringify({
+          success: true,
+          message: isComplete ? 'Chapter section written and chapter completed successfully' : 'Chapter section written successfully',
+          wordCount: countWords(content),
+          isComplete,
+        }),
       }
     }
 
@@ -51,13 +81,21 @@ export class WriterExpert extends BaseAgent {
   }
 
   protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
-    return typeof context._chapterContent === 'string' && context._chapterContent.trim().length > 0
+    return context._chapterComplete === true && typeof context._chapterContent === 'string' && context._chapterContent.trim().length > 0
   }
 
   protected getToolResultContent(context: Record<string, any>): string | null {
     return typeof context._chapterContent === 'string'
       ? context._chapterContent
       : null
+  }
+
+  protected getToolProgressKey(context: Record<string, any>): string | null {
+    if (!Array.isArray(context._chapterDraftChunks)) {
+      return null
+    }
+
+    return `chapter-draft:${context._chapterDraftChunks.length}:${context._chapterComplete ? 'done' : 'pending'}`
   }
 
   protected getSystemPrompt(): string {
@@ -70,7 +108,9 @@ export class WriterExpert extends BaseAgent {
 - Controls pacing and tension effectively
 - Stays faithful to character personalities and the established outline
 
-Use the write_chapter tool to provide the complete chapter text.
+Use the write_chapter tool to write the chapter in multiple sections.
+Each tool call should provide the next section of prose, typically 300-600 words.
+Set isComplete to true only on the final section once the full chapter is done.
 Do not include meta-commentary or notes.
 Write prose only.`
   }
@@ -95,7 +135,7 @@ ${relationships ? `**Relationship State:**\n${relationships}\n` : ''}
 ${previousSummary ? `**Previous Story Summary:**\n${previousSummary}` : 'This is the first chapter.'}
 ${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}
 
-Write the full chapter text in ${language || 'English'}. Aim for 2000-3000 words. Include natural dialogue, vivid descriptions, and advance the plot according to the outline.
+Write the chapter in multiple tool-call sections in ${language || 'English'}. Aim for a total of 2000-3000 words across all sections. Each section should stay focused and substantial, but do not try to fit the whole chapter into one tool call. Include natural dialogue, vivid descriptions, and advance the plot according to the outline.
 
 Use the write_chapter tool to provide the chapter content.`
   }
@@ -114,8 +154,8 @@ Use the write_chapter tool to provide the chapter content.`
     if (!text) issues.push('Written chapter is empty')
     if (containsMetaCommentary(text)) issues.push('Written chapter contains meta commentary or code fences')
 
-    // When using tools, validation is handled by the tool execution
-    // Only validate if we have raw output (fallback mode)
+    // When using tools, validation is handled by the tool execution.
+    // Only validate if we have raw output (fallback mode).
     if (_parsed && _parsed.content && !_parsed.content.includes('{')) {
       return issues
     }
@@ -138,6 +178,6 @@ ${this.buildPrompt(context)}
 Previous chapter draft:
 ${previousResponse}
 
-Use the write_chapter tool to rewrite the chapter as a full prose chapter only. Preserve the plot, style, and character intent, but make the chapter substantially more complete and coherent.`
+Use the write_chapter tool to continue or rewrite the chapter in sections. Preserve the plot, style, and character intent, but make the chapter substantially more complete and coherent. Set isComplete to true only when the full chapter is finished.`
   }
 }

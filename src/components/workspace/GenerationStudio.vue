@@ -14,8 +14,9 @@ import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import VibeAssistantPanel from '@/components/workspace/VibeAssistantPanel.vue'
-import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen } from 'lucide-vue-next'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import VibeAssistant from './VibeAssistant.vue'
+import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, RotateCcw } from 'lucide-vue-next'
 
 type StageKey = Exclude<GenerationStage, 'idle' | 'done'>
 
@@ -54,6 +55,11 @@ const outlineDraft = ref('')
 const charactersDraft = ref<Character[]>([])
 const chaptersDraft = ref<Chapter[]>([])
 
+const showDeleteConfirm = ref(false)
+const showDoubleDeleteConfirm = ref(false)
+const chapterToDeleteId = ref<string | null>(null)
+const showClearConfirm = ref(false)
+
 const vibeContext = computed(() => {
   const ctx: Record<string, any> = {}
   if (project.value) {
@@ -76,7 +82,6 @@ const vibeContext = computed(() => {
 })
 
 function handleVibeApply(content: string) {
-  // Apply content based on current stage
   if (activeStage.value === 'planning') {
     if (planningSubTab.value === 'outline') {
       outlineDraft.value = content
@@ -175,6 +180,19 @@ const selectedChapterText = computed(() => {
   return selectedChapter.value.content
 })
 
+const editorPlaceholder = computed(() => {
+  if (activeStage.value === 'writing') {
+    return 'Start drafting your chapter prose here... Use the Vibe AI on the right to help with descriptions or dialogue.'
+  }
+  if (activeStage.value === 'proofreading') {
+    return 'Review and correct the proofread version. Click "Run Proofread" to start the AI analysis.'
+  }
+  if (activeStage.value === 'polishing') {
+    return 'Final polish and rhythm adjustments. Click "Polish Prose" to enhance the narrative flow.'
+  }
+  return 'Start writing...'
+})
+
 const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
   const chapters = chaptersDraft.value
   return {
@@ -266,7 +284,7 @@ async function generateStoryPlanStage() {
 }
 
 async function generateChapterPlanStage() {
-  if (!project.value) return
+  if (!project.value || genStore.isGenerating) return
   try {
     await genStore.generateChapterPlan(project.value.id)
     syncFromProject()
@@ -277,11 +295,9 @@ async function generateChapterPlanStage() {
 }
 
 async function generateCurrentChapterDraft() {
-  if (!project.value || !selectedChapterId.value) return
-  const chapterIndex = chaptersDraft.value.findIndex(chapter => chapter.id === selectedChapterId.value)
-  if (chapterIndex === -1) return
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.generateChapterDraft(project.value.id, chapterIndex)
+    await genStore.generateChapterDraft(project.value.id)
     syncFromProject()
     toast.success('Chapter draft generated')
   } catch (error: any) {
@@ -290,11 +306,9 @@ async function generateCurrentChapterDraft() {
 }
 
 async function proofreadCurrentChapter() {
-  if (!project.value || !selectedChapterId.value) return
-  const chapterIndex = chaptersDraft.value.findIndex(chapter => chapter.id === selectedChapterId.value)
-  if (chapterIndex === -1) return
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.proofreadChapter(project.value.id, chapterIndex)
+    await genStore.proofreadChapter(project.value.id)
     syncFromProject()
     toast.success('Chapter proofread')
   } catch (error: any) {
@@ -303,11 +317,9 @@ async function proofreadCurrentChapter() {
 }
 
 async function polishCurrentChapter() {
-  if (!project.value || !selectedChapterId.value) return
-  const chapterIndex = chaptersDraft.value.findIndex(chapter => chapter.id === selectedChapterId.value)
-  if (chapterIndex === -1) return
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.polishChapter(project.value.id, chapterIndex)
+    await genStore.polishChapter(project.value.id)
     syncFromProject()
     toast.success('Chapter polished')
   } catch (error: any) {
@@ -329,6 +341,49 @@ function removeCharacter(id: string) {
   }
 }
 
+function handleDeleteChapter(id: string) {
+  const chapter = chaptersDraft.value.find(ch => ch.id === id)
+  if (!chapter) return
+  chapterToDeleteId.value = id
+  if (activeStage.value === 'chapter-outline') {
+    const hasContent = chapter.content?.trim() || chapter.proofreadContent?.trim() || chapter.polishedContent?.trim()
+    if (hasContent) showDoubleDeleteConfirm.value = true
+    else showDeleteConfirm.value = true
+  } else {
+    showClearConfirm.value = true
+  }
+}
+
+function performClearChapter() {
+  if (!chapterToDeleteId.value) return
+  const chapter = chaptersDraft.value.find(ch => ch.id === chapterToDeleteId.value)
+  if (chapter) {
+    if (activeStage.value === 'writing') chapter.content = ''
+    else if (activeStage.value === 'proofreading') chapter.proofreadContent = ''
+    else if (activeStage.value === 'polishing') chapter.polishedContent = ''
+    toast.success('Chapter content cleared')
+  }
+  chapterToDeleteId.value = null
+  showClearConfirm.value = false
+}
+
+function performDeleteChapter() {
+  if (!chapterToDeleteId.value) return
+  const id = chapterToDeleteId.value
+  const index = chaptersDraft.value.findIndex(ch => ch.id === id)
+  if (index !== -1) {
+    chaptersDraft.value.splice(index, 1)
+    chaptersDraft.value.forEach((ch, idx) => { ch.index = idx })
+    if (selectedChapterId.value === id) {
+      selectedChapterId.value = chaptersDraft.value[0]?.id ?? null
+    }
+    toast.success('Chapter deleted')
+  }
+  chapterToDeleteId.value = null
+  showDeleteConfirm.value = false
+  showDoubleDeleteConfirm.value = false
+}
+
 function ensureChapterCount(count: number) {
   if (chaptersDraft.value.length < count) {
     const start = chaptersDraft.value.length
@@ -342,7 +397,6 @@ function updateCurrentChapterText(text: string) {
   if (!selectedChapter.value) return
   const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
   if (!chapter) return
-
   if (activeStage.value === 'proofreading') {
     chapter.proofreadContent = text
     chapter.status = 'proofread'
@@ -354,429 +408,286 @@ function updateCurrentChapterText(text: string) {
     chapter.status = 'draft'
   }
 }
-
 </script>
 
 <template>
   <div class="h-full flex flex-col overflow-hidden bg-surface-1">
-    <div class="shrink-0 border-b border-surface-4 px-6 py-4">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h2 class="text-base font-semibold text-text-primary">Generation Studio</h2>
-          <p class="text-xs text-text-secondary mt-0.5">
-            Step through each stage, edit the result, then continue to the next step.
-          </p>
+    <div class="shrink-0 border-b border-surface-4 px-4 py-2 bg-surface-1 shadow-sm">
+      <div class="flex items-center justify-between gap-4">
+        <!-- Left: Stage Tabs -->
+        <div class="flex items-center gap-1 overflow-x-auto no-scrollbar">
+          <button
+            v-for="stage in stageTabs"
+            :key="stage.key"
+            :class="[
+              'flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-all duration-200 whitespace-nowrap border',
+              activeStage === stage.key
+                ? 'border-accent bg-accent-subtle text-accent shadow-sm'
+                : stageStatusMap[stage.key] === 'done'
+                  ? 'border-success/20 bg-success-subtle/30 text-success hover:bg-success-subtle/50'
+                  : 'border-transparent text-text-secondary hover:bg-surface-3 hover:text-text-primary',
+            ]"
+            @click="selectStage(stage.key)"
+          >
+            <component :is="stage.icon" :size="12" />
+            <span>{{ stage.label }}</span>
+            <Check v-if="stageStatusMap[stage.key] === 'done'" :size="10" class="ml-0.5" />
+          </button>
         </div>
 
-        <div class="flex items-center gap-2">
-      </div>
-
-      </div>
-
-      <div class="mt-4 flex items-center gap-2 overflow-x-auto pb-1">
-        <button
-          v-for="stage in stageTabs"
-          :key="stage.key"
-          :class="[
-            'flex items-center gap-2 px-3 py-2 rounded-md border text-xs transition-colors duration-100 whitespace-nowrap',
-            activeStage === stage.key
-              ? 'border-accent bg-accent-subtle text-accent'
-              : stageStatusMap[stage.key] === 'done'
-                ? 'border-success/30 bg-success-subtle text-success'
-                : 'border-surface-4 bg-surface-2 text-text-secondary hover:text-text-primary hover:border-surface-5',
-          ]"
-          @click="selectStage(stage.key)"
-        >
-          <component :is="stage.icon" :size="13" />
-          <span>{{ stage.label }}</span>
-          <BaseTag v-if="stageStatusMap[stage.key] === 'done'" variant="success" size="sm">Done</BaseTag>
-          <BaseTag v-else-if="activeStage === stage.key" variant="accent" size="sm">Editing</BaseTag>
-        </button>
-      </div>
-
-      <div class="mt-3 flex items-center justify-between gap-3 text-xs text-text-secondary">
-        <div class="flex items-center gap-2">
-          <BaseTag variant="default" size="sm">
-            Next: {{ nextAction.stage }}
-            <span v-if="'chapterIndex' in nextAction"> #{{ nextAction.chapterIndex + 1 }}</span>
-          </BaseTag>
-          <span v-if="genStore.progressMessage">{{ genStore.progressMessage }}</span>
+        <!-- Right: Status and Actions -->
+        <div class="flex items-center gap-3 shrink-0">
+          <div v-if="project" class="flex items-center gap-2 px-2 py-1 rounded-full bg-surface-2 border border-surface-4">
+            <div class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></div>
+            <span class="text-[10px] font-bold text-text-secondary uppercase tracking-wider">Next:</span>
+            <span class="text-[10px] font-medium text-text-primary">
+              {{ nextAction.stage }}
+              <span v-if="'chapterIndex' in nextAction" class="text-accent ml-0.5">#{{ nextAction.chapterIndex + 1 }}</span>
+            </span>
+            <div v-if="genStore.progressMessage" class="h-3 w-px bg-surface-4 mx-1"></div>
+            <span v-if="genStore.progressMessage" class="text-[10px] text-text-muted truncate max-w-[120px]">{{ genStore.progressMessage }}</span>
+          </div>
+          <div class="flex items-center gap-1 border-l border-surface-4 pl-3">
+            <BaseButton v-if="project" variant="ghost" size="sm" class="!h-7 !px-2 text-text-secondary hover:text-accent" @click="markProjectDirty">
+              <Save :size="12" />
+              <span class="text-[11px] ml-1">Sync</span>
+            </BaseButton>
+          </div>
         </div>
-        <BaseButton
-          v-if="project"
-          variant="ghost"
-          size="sm"
-          @click="markProjectDirty"
-        >
-          <Save :size="14" />
-          <span>Sync Drafts</span>
-        </BaseButton>
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto">
-      <div v-if="!project" class="h-full flex items-center justify-center">
-        <EmptyState
-          :icon="BookOpen"
-          title="No project loaded"
-          description="Open a project to start the generation flow."
-        />
+    <div class="flex-1 overflow-hidden flex">
+      <div v-if="!project" class="h-full flex-1 flex items-center justify-center">
+        <EmptyState :icon="BookOpen" title="No project loaded" description="Open a project to start the generation flow." />
       </div>
 
-  <div v-else>
-        <section v-if="activeStage === 'planning'" class="max-w-6xl mx-auto px-6 py-6">
-          <div class="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <h3 class="text-sm font-semibold text-text-primary">Story Planning</h3>
-              <p class="text-xs text-text-secondary">Draft the outline, branch into character creation if needed, then refine the outline around the cast.</p>
+      <div v-else class="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <!-- Story Planning Stage -->
+        <section v-if="activeStage === 'planning'" class="h-full flex flex-col overflow-hidden">
+          <div class="shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
+            <div class="flex items-center gap-1">
+              <button :class="['px-3 py-1.5 rounded-md text-xs font-semibold transition-all', planningSubTab === 'outline' ? 'bg-accent text-white shadow-sm' : 'text-text-secondary hover:text-text-primary hover:bg-surface-3']" @click="planningSubTab = 'outline'">
+                <FileText :size="14" class="inline mr-1.5" />Outline
+              </button>
+              <button :class="['px-3 py-1.5 rounded-md text-xs font-semibold transition-all', planningSubTab === 'characters' ? 'bg-accent text-white shadow-sm' : 'text-text-secondary hover:text-text-primary hover:bg-surface-3']" @click="planningSubTab = 'characters'">
+                <Users :size="14" class="inline mr-1.5" />Characters
+              </button>
             </div>
             <div class="flex items-center gap-2">
-              <BaseButton variant="secondary" size="sm" :loading="genStore.isGenerating" @click="generateStoryPlanStage">
-                <Wand2 :size="14" />
-                <span>Generate Story Plan</span>
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateStoryPlanStage">
+                <Wand2 :size="14" class="mr-1.5" /><span>AI Generate</span>
               </BaseButton>
-              <BaseButton variant="primary" size="sm" @click="savePlanning">Save</BaseButton>
+              <BaseButton variant="primary" size="sm" class="!h-8" @click="savePlanning">
+                <Save :size="14" class="mr-1.5" /><span>Save Plan</span>
+              </BaseButton>
             </div>
           </div>
 
-          <div class="flex items-center gap-1 mb-4">
-            <button
-              :class="[
-                'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                planningSubTab === 'outline'
-                  ? 'bg-accent-subtle text-accent'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-surface-3',
-              ]"
-              @click="planningSubTab = 'outline'"
-            >
-              <FileText :size="12" class="inline mr-1" />
-              Outline
-            </button>
-            <button
-              :class="[
-                'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
-                planningSubTab === 'characters'
-                  ? 'bg-accent-subtle text-accent'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-surface-3',
-              ]"
-              @click="planningSubTab = 'characters'"
-            >
-              <Users :size="12" class="inline mr-1" />
-              Characters
-            </button>
-          </div>
+          <div class="flex-1 flex overflow-hidden">
+            <!-- 1. Navigator -->
+            <div class="w-64 border-r border-surface-4 bg-surface-2 flex flex-col shrink-0">
+              <div class="h-[45px] px-3 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between shrink-0">
+                <span class="text-[10px] font-bold text-text-muted uppercase tracking-widest">Characters</span>
+                <BaseButton variant="ghost" size="xs" class="!p-1" @click="addCharacter"><Plus :size="14" /></BaseButton>
+              </div>
+              <div class="flex-1 overflow-y-auto p-2 space-y-1">
+                <button v-for="character in charactersDraft" :key="character.id" class="w-full text-left rounded-lg px-3 py-2 transition-all border" :class="selectedCharacterId === character.id ? 'border-accent/30 bg-accent-subtle/50 text-accent shadow-sm' : 'border-transparent text-text-secondary hover:bg-surface-3'" @click="selectedCharacterId = character.id; planningSubTab = 'characters'">
+                  <div class="text-xs font-bold truncate">{{ character.name }}</div>
+                  <div class="text-[10px] opacity-70 uppercase tracking-tighter">{{ character.role }}</div>
+                </button>
+              </div>
+              <div class="p-3 border-t border-surface-4">
+                <button class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all" :class="planningSubTab === 'outline' ? 'bg-accent text-white shadow-md' : 'bg-surface-3 text-text-secondary hover:bg-surface-4'" @click="planningSubTab = 'outline'">
+                  <FileText :size="14" />Story Outline
+                </button>
+              </div>
+            </div>
 
-          <div v-if="planningSubTab === 'outline'">
-            <BaseTextarea
-              v-model="outlineDraft"
-              label="Story Outline"
-              :rows="16"
-              :auto-resize="true"
-              placeholder="Generate or write the story outline here..."
-            />
-          </div>
-
-          <div v-else class="grid grid-cols-12 gap-4 min-h-[520px]">
-            <div class="col-span-12 md:col-span-3 rounded-lg border border-surface-4 bg-surface-2 p-3 overflow-y-auto">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs font-medium text-text-secondary">Characters</span>
-                <BaseButton variant="ghost" size="sm" @click="addCharacter">
-                  <Plus :size="12" />
+            <!-- 2. Workspace -->
+            <div class="flex-1 flex flex-col min-w-0 bg-surface-0 border-r border-surface-4 overflow-hidden">
+              <div class="h-[45px] px-6 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between shrink-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ planningSubTab === 'outline' ? 'Story Outline' : 'Character Profile' }}</span>
+                  <div v-if="planningSubTab === 'characters' && selectedCharacter" class="h-1 w-1 rounded-full bg-text-muted"></div>
+                  <span v-if="planningSubTab === 'characters' && selectedCharacter" class="text-xs text-accent font-medium">{{ selectedCharacter.name }}</span>
+                </div>
+                <BaseButton v-if="planningSubTab === 'characters' && selectedCharacter" variant="danger" size="sm" @click="removeCharacter(selectedCharacter.id)">
+                  <Trash2 :size="14" />
+                  <span>Delete Character</span>
                 </BaseButton>
               </div>
-              <div v-if="charactersDraft.length" class="space-y-2">
-                <button
-                  v-for="character in charactersDraft"
-                  :key="character.id"
-                  class="w-full text-left rounded-md border px-3 py-2 transition-colors duration-100"
-                  :class="selectedCharacterId === character.id ? 'border-accent bg-accent-subtle' : 'border-surface-4 hover:border-surface-5 bg-surface-1'"
-                  @click="selectedCharacterId = character.id"
-                >
-                  <div class="text-sm font-medium text-text-primary">{{ character.name }}</div>
-                  <div class="text-2xs text-text-secondary">{{ character.role }}</div>
-                </button>
+
+              <div class="flex-1 overflow-y-auto custom-scrollbar">
+                <div v-if="planningSubTab === 'outline'" class="h-full p-8"><textarea v-model="outlineDraft" class="w-full h-full bg-transparent text-text-primary resize-none outline-none font-serif text-lg leading-relaxed" placeholder="Draft your master story outline..."></textarea></div>
+                <div v-else-if="selectedCharacter" class="p-6 space-y-6">
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="md:col-span-2 space-y-4">
+                      <div class="grid grid-cols-2 gap-4"><BaseInput v-model="selectedCharacter.name" label="Full Name" /><BaseSelect v-model="selectedCharacter.role" label="Role" :options="roleOptions" /></div>
+                      <BaseTextarea :model-value="selectedCharacter.personality.join(', ')" label="Personality" :rows="2" @update:model-value="selectedCharacter.personality = parseList($event)" />
+                    </div>
+                    <div class="bg-surface-2 rounded-xl p-4 flex flex-col items-center justify-center border border-surface-4">
+                      <Users :size="32" class="text-accent mb-2" />
+                      <p class="text-[10px] font-bold text-text-muted uppercase">Quick View</p>
+                      <p class="text-sm font-bold mt-1">{{ selectedCharacter.name }}</p>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6"><BaseTextarea v-model="selectedCharacter.appearance" label="Appearance" :rows="4" /><BaseTextarea v-model="selectedCharacter.backstory" label="Backstory" :rows="4" /></div>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div v-for="field in ['motivation', 'goals', 'conflicts', 'currentState']" :key="field" class="p-4 rounded-xl bg-surface-1 border border-surface-4 transition-colors">
+                      <h5 class="text-[10px] font-bold text-accent uppercase mb-2">{{ field }}</h5>
+                      <textarea v-model="(selectedCharacter as any)[field]" class="w-full bg-transparent text-xs text-text-secondary outline-none resize-none" rows="4"></textarea>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <EmptyState
-                v-else
-                :icon="Users"
-                title="No characters yet"
-                description="Generate or add a character."
-              >
-                <template #action>
-                  <BaseButton variant="primary" size="sm" @click="addCharacter">Add Character</BaseButton>
-                </template>
-              </EmptyState>
             </div>
 
-            <div class="col-span-12 md:col-span-9 rounded-lg border border-surface-4 bg-surface-2 p-4">
-              <template v-if="selectedCharacter">
-                <div class="flex items-center justify-between mb-4">
-                  <div>
-                    <h4 class="text-sm font-semibold text-text-primary">Character Editor</h4>
-                    <p class="text-xs text-text-secondary">Adjust the selected character.</p>
+            <!-- 3. Grounding -->
+            <div class="w-72 bg-surface-2 overflow-y-auto hidden xl:flex flex-col">
+              <div class="h-[45px] px-4 border-b border-surface-4 bg-surface-1/50 flex items-center shrink-0">
+                <h5 class="text-[10px] font-bold text-text-muted uppercase flex items-center gap-2"><Sparkles :size="12" class="text-accent" />Project Grounding</h5>
+              </div>
+              <div class="p-5 space-y-6">
+                <section><label class="text-[10px] font-bold text-text-muted uppercase block mb-2">Theme</label><p class="text-xs italic border-l-2 border-surface-4 pl-3">{{ project.theme }}</p></section>
+                <section><label class="text-[10px] font-bold text-text-muted uppercase block mb-2">Genre & Style</label><div class="flex flex-wrap gap-2"><BaseTag variant="default" size="sm">{{ project.genre }}</BaseTag><BaseTag variant="default" size="sm" class="capitalize">{{ project.length }}</BaseTag></div></section>
+                <section v-if="project.constraints.required.length">
+                  <label class="text-[10px] font-bold text-text-muted uppercase block mb-2">Must Include</label>
+                  <ul class="space-y-1.5">
+                    <li v-for="req in project.constraints.required" :key="req" class="text-xs text-success flex items-start gap-2">
+                      <Check :size="12" class="shrink-0 mt-0.5" />
+                      <span>{{ req }}</span>
+                    </li>
+                  </ul>
+                </section>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Chapter Plan Stage -->
+        <section v-else-if="activeStage === 'chapter-outline'" class="h-full flex flex-col overflow-hidden">
+          <div class="h-[45px] shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
+            <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">Chapter Beats</h3>
+            <div class="flex items-center gap-2">
+              <BaseButton variant="ghost" size="sm" class="!h-8" @click="ensureChapterCount(1)"><Plus :size="14" class="mr-1.5" />Add Chapter</BaseButton>
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateChapterPlanStage"><Wand2 :size="14" class="mr-1.5" />AI Generate</BaseButton>
+              <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />Save Chapters</BaseButton>
+            </div>
+          </div>
+          <div class="flex-1 flex overflow-hidden">
+            <div class="w-64 border-r border-surface-4 bg-surface-2 overflow-y-auto p-2 space-y-1 shrink-0">
+              <button v-for="chapter in chaptersDraft" :key="chapter.id" class="w-full text-left rounded-lg px-3 py-3 transition-all border relative" :class="selectedChapterId === chapter.id ? 'border-accent/30 bg-accent-subtle/50 text-accent shadow-sm' : 'border-transparent text-text-secondary hover:bg-surface-3'" @click="selectedChapterId = chapter.id">
+                <div class="text-[10px] font-bold opacity-70 uppercase mb-1">Chapter {{ chapter.index + 1 }}</div>
+                <div class="text-xs font-bold truncate">{{ chapter.title || 'Untitled' }}</div>
+              </button>
+            </div>
+            <div class="flex-1 overflow-y-auto bg-surface-0 custom-scrollbar flex flex-col min-w-0">
+              <template v-if="selectedChapter">
+                <div class="h-[45px] px-6 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between shrink-0">
+                  <div class="flex items-center gap-3">
+                    <div class="w-6 h-6 rounded bg-surface-2 border border-surface-4 flex items-center justify-center font-bold text-[10px]">{{ selectedChapter.index + 1 }}</div>
+                    <h4 class="text-xs font-bold truncate max-w-[200px]">{{ selectedChapter.title || 'Untitled' }}</h4>
                   </div>
-                  <BaseButton variant="danger" size="sm" @click="removeCharacter(selectedCharacter.id)">
+                  <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
                     <Trash2 :size="14" />
-                    Delete
+                    <span>Delete Chapter</span>
                   </BaseButton>
                 </div>
-
-                <div class="grid grid-cols-2 gap-3">
-                  <BaseInput v-model="selectedCharacter.name" label="Name" />
-                  <BaseSelect v-model="selectedCharacter.role" label="Role" :options="roleOptions" />
-                </div>
-                <BaseTextarea
-                  :model-value="selectedCharacter.personality.join(', ')"
-                  label="Personality Traits"
-                  :rows="2"
-                  :auto-resize="true"
-                  placeholder="Comma-separated traits"
-                  @update:model-value="selectedCharacter.personality = parseList($event)"
-                />
-                <BaseTextarea v-model="selectedCharacter.appearance" label="Appearance" :rows="3" :auto-resize="true" class="mt-3" />
-                <BaseTextarea v-model="selectedCharacter.backstory" label="Backstory" :rows="4" :auto-resize="true" class="mt-3" />
-                <div class="grid grid-cols-2 gap-3 mt-3">
-                  <BaseTextarea v-model="selectedCharacter.motivation" label="Motivation" :rows="3" :auto-resize="true" />
-                  <BaseTextarea v-model="selectedCharacter.goals" label="Goals" :rows="3" :auto-resize="true" />
-                </div>
-                <div class="grid grid-cols-2 gap-3 mt-3">
-                  <BaseTextarea v-model="selectedCharacter.conflicts" label="Conflicts" :rows="3" :auto-resize="true" />
-                  <BaseTextarea v-model="selectedCharacter.currentState" label="Current State" :rows="3" :auto-resize="true" />
+                <div class="p-6 overflow-y-auto flex-1">
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="space-y-4">
+                      <BaseInput v-model="selectedChapter.title" label="Title" />
+                      <BaseInput v-model="selectedChapter.outline.objective" label="Objective" />
+                      <BaseInput v-model="selectedChapter.outline.conflict" label="Conflict" />
+                      <BaseTextarea v-model="selectedChapter.outline.endingHook" label="Ending Hook" :rows="3" />
+                    </div>
+                    <div class="space-y-4">
+                      <BaseTextarea :model-value="selectedChapter.outline.keyEvents.join('\n')" label="Plot Beats" :rows="4" @update:model-value="selectedChapter.outline.keyEvents = parseList($event)" />
+                      <BaseTextarea :model-value="selectedChapter.outline.characterActions.join('\n')" label="Character Actions" :rows="4" @update:model-value="selectedCharacter.outline.characterActions = parseList($event)" />
+                      <BaseTextarea :model-value="selectedChapter.outline.infoReveals.join('\n')" label="Reveals" :rows="4" @update:model-value="selectedChapter.outline.infoReveals = parseList($event)" />
+                    </div>
+                  </div>
                 </div>
               </template>
-
-              <EmptyState
-                v-else
-                :icon="Users"
-                title="Select a character"
-                description="Pick a character from the list to edit."
-              />
             </div>
           </div>
         </section>
 
-        <section v-else-if="activeStage === 'chapter-outline'" class="max-w-6xl mx-auto px-6 py-6">
-          <div class="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <h3 class="text-sm font-semibold text-text-primary">Chapter Plan</h3>
-              <p class="text-xs text-text-secondary">Turn the outline into chapter-by-chapter beats.</p>
-            </div>
+        <!-- Writing Stage -->
+        <section v-else class="h-full flex flex-col overflow-hidden">
+          <div class="h-[45px] shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
+            <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ activeStage }}</h3>
             <div class="flex items-center gap-2">
-              <BaseButton variant="ghost" size="sm" @click="ensureChapterCount(1)">
-                <Plus :size="14" />
-                <span>Add</span>
+              <BaseButton 
+                variant="secondary" 
+                size="sm" 
+                class="!h-8" 
+                :loading="genStore.isGenerating" 
+                @click="activeStage === 'writing' ? generateCurrentChapterDraft() : activeStage === 'proofreading' ? proofreadCurrentChapter() : polishCurrentChapter()"
+              >
+                <Sparkles :size="14" class="mr-1.5" />
+                <span>{{ activeStage === 'writing' ? 'Generate' : activeStage === 'proofreading' ? 'Proofread' : 'Polish' }}</span>
               </BaseButton>
-              <BaseButton variant="secondary" size="sm" @click="generateChapterPlanStage">Generate Chapter Plan</BaseButton>
-              <BaseButton variant="primary" size="sm" @click="saveChapters">Save</BaseButton>
+              <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />Save</BaseButton>
             </div>
           </div>
-
-          <div class="grid grid-cols-12 gap-4 min-h-[560px]">
-            <div class="col-span-12 md:col-span-3 rounded-lg border border-surface-4 bg-surface-2 p-3 overflow-y-auto">
-              <div v-if="chaptersDraft.length" class="space-y-2">
-                <button
-                  v-for="chapter in chaptersDraft"
-                  :key="chapter.id"
-                  class="w-full text-left rounded-md border px-3 py-2 transition-colors duration-100"
-                  :class="selectedChapterId === chapter.id ? 'border-accent bg-accent-subtle' : 'border-surface-4 hover:border-surface-5 bg-surface-1'"
-                  @click="selectedChapterId = chapter.id"
-                >
-                  <div class="text-sm font-medium text-text-primary">Ch {{ chapter.index + 1 }}</div>
-                  <div class="text-2xs text-text-secondary truncate">{{ chapter.title }}</div>
-                </button>
-              </div>
-              <EmptyState
-                v-else
-                :icon="BookOpen"
-                title="No chapter plan yet"
-                description="Generate a chapter plan to edit individual chapter beats."
-              />
+          <div class="flex-1 flex overflow-hidden">
+            <div class="w-64 border-r border-surface-4 bg-surface-2 overflow-y-auto p-2 space-y-1 shrink-0">
+              <button v-for="chapter in chaptersDraft" :key="chapter.id" class="w-full text-left rounded-lg px-3 py-3 transition-all border" :class="selectedChapterId === chapter.id ? 'border-accent/30 bg-accent-subtle/50 text-accent shadow-sm' : 'border-transparent text-text-secondary hover:bg-surface-3'" @click="selectedChapterId = chapter.id">
+                <div class="text-[10px] font-bold opacity-70 mb-1">Ch {{ chapter.index + 1 }}</div>
+                <div class="text-xs font-bold truncate">{{ chapter.title }}</div>
+              </button>
             </div>
-
-            <div class="col-span-12 md:col-span-9 rounded-lg border border-surface-4 bg-surface-2 p-4">
+            <div class="flex-1 flex flex-col bg-surface-0 overflow-hidden min-w-0">
               <template v-if="selectedChapter">
-                <div class="flex items-center justify-between mb-4">
-                  <div>
-                    <h4 class="text-sm font-semibold text-text-primary">Chapter {{ selectedChapter.index + 1 }} Plan</h4>
-                    <p class="text-xs text-text-secondary">Edit the chapter outline before drafting prose.</p>
+                <div class="h-[45px] shrink-0 px-6 py-3 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold">{{ selectedChapter.title }}</span>
                   </div>
-                  <BaseTag variant="accent" size="sm">{{ selectedChapter.status }}</BaseTag>
+                  <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
+                    <Trash2 :size="14" />
+                    <span>Clear Stage</span>
+                  </BaseButton>
+                </div>
+                <!-- Main Editor Area -->
+                <div class="flex-1 overflow-y-auto px-8 custom-scrollbar bg-surface-0/50">
+                  <div class="max-w-4xl mx-auto min-h-full flex flex-col border-l border-r border-surface-4 bg-surface-0 px-10 py-10 shadow-sm">
+                    <textarea
+                      :value="selectedChapterText"
+                      class="w-full flex-1 bg-transparent text-text-primary resize-none outline-none font-serif text-lg leading-relaxed placeholder:text-text-muted/30 selection:bg-accent/20"
+                      :placeholder="editorPlaceholder"
+                      @input="updateCurrentChapterText(($event.target as HTMLTextAreaElement).value)"
+                    ></textarea>
+                  </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3">
-                  <BaseInput v-model="selectedChapter.title" label="Chapter Title" />
-                  <BaseInput v-model="selectedChapter.outline.objective" label="Objective" />
-                </div>
-                <BaseInput v-model="selectedChapter.outline.conflict" label="Conflict" class="mt-3" />
-                <BaseTextarea
-                  :model-value="selectedChapter.outline.keyEvents.join('\n')"
-                  label="Key Events"
-                  :rows="4"
-                  :auto-resize="true"
-                  class="mt-3"
-                  @update:model-value="selectedChapter.outline.keyEvents = parseList($event)"
-                />
-                <BaseTextarea
-                  :model-value="selectedChapter.outline.characterActions.join('\n')"
-                  label="Character Actions"
-                  :rows="3"
-                  :auto-resize="true"
-                  class="mt-3"
-                  @update:model-value="selectedChapter.outline.characterActions = parseList($event)"
-                />
-                <BaseTextarea
-                  :model-value="selectedChapter.outline.infoReveals.join('\n')"
-                  label="Info Reveals"
-                  :rows="3"
-                  :auto-resize="true"
-                  class="mt-3"
-                  @update:model-value="selectedChapter.outline.infoReveals = parseList($event)"
-                />
-                <BaseTextarea v-model="selectedChapter.outline.endingHook" label="Ending Hook" :rows="3" :auto-resize="true" class="mt-3" />
-
-                <div class="mt-4 flex justify-end">
-                  <BaseButton variant="primary" size="sm" @click="saveChapters">Save Chapter Plan</BaseButton>
-                </div>
               </template>
-
-              <EmptyState
-                v-else
-                :icon="BookOpen"
-                title="Select a chapter"
-                description="Pick a chapter to edit its plan."
-              />
-            </div>
-          </div>
-        </section>
-
-        <section v-else class="max-w-6xl mx-auto px-6 py-6">
-          <div class="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <h3 class="text-sm font-semibold text-text-primary">
-                {{ activeStage === 'writing' ? 'Writing' : activeStage === 'proofreading' ? 'Proofreading' : 'Polishing' }}
-              </h3>
-              <p class="text-xs text-text-secondary">
-                {{ activeStage === 'writing'
-                  ? 'Draft chapter prose one step at a time.'
-                  : activeStage === 'proofreading'
-                    ? 'Fix structure and correctness.'
-                    : 'Refine voice and rhythm without losing meaning.' }}
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              <BaseButton variant="ghost" size="sm" @click="ensureChapterCount(1)">
-                <Plus :size="14" />
-                <span>Add</span>
-              </BaseButton>
-              <BaseButton
-                v-if="activeStage === 'writing'"
-                variant="secondary"
-                size="sm"
-                @click="generateCurrentChapterDraft"
-              >
-                Generate Draft
-              </BaseButton>
-              <BaseButton
-                v-else-if="activeStage === 'proofreading'"
-                variant="secondary"
-                size="sm"
-                @click="proofreadCurrentChapter"
-              >
-                Proofread
-              </BaseButton>
-              <BaseButton
-                v-else
-                variant="secondary"
-                size="sm"
-                @click="polishCurrentChapter"
-              >
-                Polish
-              </BaseButton>
-              <BaseButton variant="primary" size="sm" @click="saveChapters">Save</BaseButton>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-12 gap-4 min-h-[620px]">
-            <div class="col-span-12 md:col-span-3 rounded-lg border border-surface-4 bg-surface-2 p-3 overflow-y-auto">
-              <div v-if="chaptersDraft.length" class="space-y-2">
-                <button
-                  v-for="chapter in chaptersDraft"
-                  :key="chapter.id"
-                  class="w-full text-left rounded-md border px-3 py-2 transition-colors duration-100"
-                  :class="selectedChapterId === chapter.id ? 'border-accent bg-accent-subtle' : 'border-surface-4 hover:border-surface-5 bg-surface-1'"
-                  @click="selectedChapterId = chapter.id"
-                >
-                  <div class="text-sm font-medium text-text-primary">Ch {{ chapter.index + 1 }}</div>
-                  <div class="text-2xs text-text-secondary">
-                    {{ activeStage === 'writing'
-                      ? (chapter.content ? 'Draft ready' : 'Needs draft')
-                      : activeStage === 'proofreading'
-                        ? (chapter.proofreadContent ? 'Proofread ready' : 'Needs proofread')
-                        : (chapter.polishedContent ? 'Polished' : 'Needs polish') }}
-                  </div>
-                </button>
-              </div>
-              <EmptyState
-                v-else
-                :icon="BookOpen"
-                title="No chapters yet"
-                description="Generate a chapter plan before writing."
-              />
-            </div>
-
-            <div class="col-span-12 md:col-span-9 rounded-lg border border-surface-4 bg-surface-2 p-4">
-              <template v-if="selectedChapter">
-                <div class="flex items-center justify-between mb-4">
-                  <div>
-                    <h4 class="text-sm font-semibold text-text-primary">Chapter {{ selectedChapter.index + 1 }}</h4>
-                    <p class="text-xs text-text-secondary">
-                      {{ activeStage === 'writing'
-                        ? 'Draft the chapter using the current chapter plan.'
-                        : activeStage === 'proofreading'
-                          ? 'Adjust the proofread version.'
-                          : 'Adjust the polished version.' }}
-                    </p>
-                  </div>
-                  <BaseTag
-                    :variant="activeStage === 'writing' ? 'warning' : activeStage === 'proofreading' ? 'accent' : 'success'"
-                    size="sm"
-                  >
-                    {{ activeStage }}
-                  </BaseTag>
-                </div>
-
-                <div v-if="activeStage === 'writing'" class="rounded-lg border border-surface-4 bg-surface-1 p-4 mb-4">
-                  <h5 class="text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">Chapter Plan</h5>
-                  <p class="text-sm text-text-primary mb-2">{{ selectedChapter.outline.objective || 'No objective yet.' }}</p>
-                  <p class="text-xs text-text-secondary">Conflict: {{ selectedChapter.outline.conflict || '—' }}</p>
-                </div>
-
-                <BaseTextarea
-                  :model-value="selectedChapterText"
-                  :label="activeStage === 'writing' ? 'Draft' : activeStage === 'proofreading' ? 'Proofread Text' : 'Polished Text'"
-                  :rows="22"
-                  :auto-resize="true"
-                  @update:model-value="updateCurrentChapterText"
-                />
-              </template>
-
-              <EmptyState
-                v-else
-                :icon="BookOpen"
-                title="Select a chapter"
-                description="Choose a chapter to edit its content."
-              />
             </div>
           </div>
         </section>
       </div>
-    </div>
-  </div>
 
-  <!-- Vibe Assistant Panel -->
-  <VibeAssistantPanel
-    :stage="activeStage"
-    :context="vibeContext"
-    @apply="handleVibeApply"
-  />
+      <!-- Integrated Vibe Assistant Sidebar -->
+      <div class="w-80 lg:w-96 border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block">
+        <VibeAssistant
+          :stage="activeStage"
+          :context="vibeContext"
+          :mode="activeStage === 'writing' || activeStage === 'proofreading' || activeStage === 'polishing' ? 'editor-agent' : 'assistant'"
+          @apply="handleVibeApply"
+        />
+      </div>
+    </div>
+
+    <ConfirmDialog v-model="showClearConfirm" title="Clear Content" message="Clear current stage content?" variant="danger" confirm-text="Clear" @confirm="performClearChapter" />
+    <ConfirmDialog v-model="showDeleteConfirm" title="Delete" message="Delete chapter?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
+    <ConfirmDialog v-model="showDoubleDeleteConfirm" title="Warning" message="Chapter has content. Delete anyway?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
+  </div>
 </template>
+
+<style scoped>
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--surface-4); border-radius: 10px; }
+</style>

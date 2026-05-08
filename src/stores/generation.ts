@@ -6,6 +6,18 @@ import { useProviderStore } from '@/stores/provider'
 import { providerManager } from '@/services/provider'
 import type { GenerationStage, StoryProject } from '@/types/project'
 import type { ChatMessage } from '@/types/provider'
+import type { ProviderModelRef } from '@/types/provider'
+import type { ToolDefinition, ToolCall } from '@/services/provider'
+
+export interface ChapterAuditIssue {
+  id: string
+  severity: 'low' | 'medium' | 'high'
+  category: 'chapter_plan' | 'character' | 'relationship' | 'continuity' | 'factual' | 'logic' | 'style'
+  title: string
+  excerpt: string
+  explanation: string
+  suggestedFix: string
+}
 
 interface GenerationError {
   id: string
@@ -105,6 +117,11 @@ export const useGenerationStore = defineStore('generation', () => {
     if (polishingIndex !== -1) return { stage: 'polishing', chapterIndex: polishingIndex }
 
     return { stage: 'done' }
+  }
+
+  function resolveChapterIndex(project: StoryProject, stage: Exclude<NextAction['stage'], 'planning' | 'chapter-outline' | 'done'>) {
+    const action = getNextAction(project)
+    return action.stage === stage ? action.chapterIndex : -1
   }
 
   async function applyProjectUpdate(projectId: string, updates: Partial<StoryProject>) {
@@ -217,14 +234,19 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function generateChapterDraft(projectId: string, chapterIndex: number) {
+  async function generateChapterDraft(projectId: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
+    const targetChapterIndex = resolveChapterIndex(project, 'writing')
+    if (targetChapterIndex < 0) {
+      throw new Error('No chapter is currently ready for writing')
+    }
+
     try {
       currentStage.value = 'writing'
-      progressMessage.value = `Writing chapter ${chapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).generateChapterDraft(project, chapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === chapterIndex ? generated : chapter)
+      progressMessage.value = `Writing chapter ${targetChapterIndex + 1}...`
+      const generated = await (pipeline ?? new StoryPipeline()).generateChapterDraft(project, targetChapterIndex, appendStreamToken)
+      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
       const nextAction = getNextAction({ ...project, chapters })
       await applyProjectUpdate(projectId, {
         chapters,
@@ -241,14 +263,19 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function proofreadChapter(projectId: string, chapterIndex: number) {
+  async function proofreadChapter(projectId: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
+    const targetChapterIndex = resolveChapterIndex(project, 'proofreading')
+    if (targetChapterIndex < 0) {
+      throw new Error('No chapter is currently ready for proofreading')
+    }
+
     try {
       currentStage.value = 'proofreading'
-      progressMessage.value = `Proofreading chapter ${chapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).proofreadChapter(project, chapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === chapterIndex ? generated : chapter)
+      progressMessage.value = `Proofreading chapter ${targetChapterIndex + 1}...`
+      const generated = await (pipeline ?? new StoryPipeline()).proofreadChapter(project, targetChapterIndex, appendStreamToken)
+      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
       const nextAction = getNextAction({ ...project, chapters })
       await applyProjectUpdate(projectId, {
         chapters,
@@ -265,14 +292,19 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function polishChapter(projectId: string, chapterIndex: number) {
+  async function polishChapter(projectId: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
+    const targetChapterIndex = resolveChapterIndex(project, 'polishing')
+    if (targetChapterIndex < 0) {
+      throw new Error('No chapter is currently ready for polishing')
+    }
+
     try {
       currentStage.value = 'polishing'
-      progressMessage.value = `Polishing chapter ${chapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, chapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === chapterIndex ? generated : chapter)
+      progressMessage.value = `Polishing chapter ${targetChapterIndex + 1}...`
+      const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken)
+      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
       const nextAction = getNextAction({ ...project, chapters })
       await applyProjectUpdate(projectId, {
         chapters,
@@ -346,11 +378,11 @@ export const useGenerationStore = defineStore('generation', () => {
       case 'chapter-outline':
         return generateChapterPlan(projectId)
       case 'writing':
-        return generateChapterDraft(projectId, action.chapterIndex)
+        return generateChapterDraft(projectId)
       case 'proofreading':
-        return proofreadChapter(projectId, action.chapterIndex)
+        return proofreadChapter(projectId)
       case 'polishing':
-        return polishChapter(projectId, action.chapterIndex)
+        return polishChapter(projectId)
     }
   }
 
@@ -368,7 +400,7 @@ export const useGenerationStore = defineStore('generation', () => {
     errors.value = []
   }
 
-  async function chatWithAssistant(prompt: string): Promise<string> {
+  function getAssistantModelRef(): ProviderModelRef {
     const providerStore = useProviderStore()
     providerManager.setProviders(providerStore.providers)
 
@@ -377,6 +409,15 @@ export const useGenerationStore = defineStore('generation', () => {
     if (!modelRef) {
       throw new Error('No model available for assistant. Please configure a provider first.')
     }
+    return modelRef
+  }
+
+  function getToolCall(toolCalls: ToolCall[], name: string) {
+    return toolCalls.find(toolCall => toolCall.name === name) ?? null
+  }
+
+  async function chatWithAssistant(prompt: string): Promise<string> {
+    const modelRef = getAssistantModelRef()
 
     const messages: ChatMessage[] = [
       { role: 'system', content: 'You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.' },
@@ -393,6 +434,141 @@ export const useGenerationStore = defineStore('generation', () => {
       return response
     } catch (error: any) {
       throw new Error(`Assistant error: ${error?.message || 'Unknown error'}`)
+    }
+  }
+
+  async function editChapterWithTool(prompt: string): Promise<{ content: string; summary: string }> {
+    const modelRef = getAssistantModelRef()
+    const tools: ToolDefinition[] = [{
+      name: 'replace_chapter_content',
+      description: 'Replace the current chapter content with a complete revised version.',
+      parameters: {
+        type: 'object',
+        properties: {
+          revisedContent: {
+            type: 'string',
+            description: 'The complete updated chapter content. This must include the full chapter, not a patch or excerpt.',
+          },
+          summary: {
+            type: 'string',
+            description: 'A short summary of the changes made.',
+          },
+        },
+        required: ['revisedContent'],
+      },
+    }]
+
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: [
+          'You are Vibe AI inside a chapter editor.',
+          'You must use the replace_chapter_content tool for every successful edit.',
+          'Return the full updated chapter content in revisedContent.',
+          'Do not respond with plain prose when an edit is requested.',
+        ].join('\n'),
+      },
+      { role: 'user', content: prompt },
+    ]
+
+    try {
+      const response = await providerManager.chatWithTools(messages, modelRef, tools, 8192, 0.5)
+      const toolCall = getToolCall(response.tool_calls, 'replace_chapter_content')
+      const revisedContent = typeof toolCall?.arguments?.revisedContent === 'string'
+        ? toolCall.arguments.revisedContent.trim()
+        : ''
+
+      if (!revisedContent) {
+        throw new Error('Vibe AI did not call replace_chapter_content with revised content.')
+      }
+
+      return {
+        content: revisedContent,
+        summary: typeof toolCall?.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
+      }
+    } catch (error: any) {
+      throw new Error(`Tool edit error: ${error?.message || 'Unknown error'}`)
+    }
+  }
+
+  async function auditChapterWithTool(prompt: string): Promise<ChapterAuditIssue[]> {
+    const modelRef = getAssistantModelRef()
+    const tools: ToolDefinition[] = [{
+      name: 'report_chapter_issues',
+      description: 'Report concrete issues found in the chapter after checking it against plan, characters, relationships, continuity, and factual logic.',
+      parameters: {
+        type: 'object',
+        properties: {
+          issues: {
+            type: 'array',
+            description: 'Concrete issues found in the current chapter. Return an empty array if no issues are found.',
+            items: {
+              type: 'object',
+              properties: {
+                severity: {
+                  type: 'string',
+                  enum: ['low', 'medium', 'high'],
+                  description: 'How serious the issue is.',
+                },
+                category: {
+                  type: 'string',
+                  enum: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'],
+                  description: 'The issue category.',
+                },
+                title: {
+                  type: 'string',
+                  description: 'A short issue title.',
+                },
+                excerpt: {
+                  type: 'string',
+                  description: 'The shortest exact excerpt from the chapter that demonstrates the issue. Leave empty only if no exact excerpt exists.',
+                },
+                explanation: {
+                  type: 'string',
+                  description: 'Why this is inconsistent, implausible, or unsupported.',
+                },
+                suggestedFix: {
+                  type: 'string',
+                  description: 'A concrete fix instruction that Vibe AI can apply.',
+                },
+              },
+              required: ['severity', 'category', 'title', 'explanation', 'suggestedFix'],
+            },
+          },
+        },
+        required: ['issues'],
+      },
+    }]
+
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: [
+          'You are Editing AI. Audit the current chapter against the supplied chapter plan, characters, relationship state, and story context.',
+          'Focus on concrete contradictions, unsupported facts, chronology errors, relationship inconsistencies, missing plan beats, logic problems, and factual implausibility inside the story world.',
+          'Use report_chapter_issues. Do not return free-form prose.',
+          'Do not invent problems. If the chapter is coherent, report an empty issues array.',
+        ].join('\n'),
+      },
+      { role: 'user', content: prompt },
+    ]
+
+    try {
+      const response = await providerManager.chatWithTools(messages, modelRef, tools, 4096, 0.2)
+      const toolCall = getToolCall(response.tool_calls, 'report_chapter_issues')
+      const rawIssues = Array.isArray(toolCall?.arguments?.issues) ? toolCall.arguments.issues : []
+
+      return rawIssues.map((issue, index) => ({
+        id: `issue-${Date.now()}-${index}`,
+        severity: issue?.severity === 'high' || issue?.severity === 'medium' || issue?.severity === 'low' ? issue.severity : 'medium',
+        category: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'].includes(issue?.category) ? issue.category : 'logic',
+        title: String(issue?.title ?? `Issue ${index + 1}`).trim(),
+        excerpt: String(issue?.excerpt ?? '').trim(),
+        explanation: String(issue?.explanation ?? '').trim(),
+        suggestedFix: String(issue?.suggestedFix ?? '').trim(),
+      })).filter(issue => issue.title && issue.explanation && issue.suggestedFix)
+    } catch (error: any) {
+      throw new Error(`Tool audit error: ${error?.message || 'Unknown error'}`)
     }
   }
 
@@ -417,5 +593,7 @@ export const useGenerationStore = defineStore('generation', () => {
     cancelGeneration,
     clearErrors,
     chatWithAssistant,
+    editChapterWithTool,
+    auditChapterWithTool,
   }
 })

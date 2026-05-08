@@ -66,6 +66,7 @@ function normalizeImportedProject(data: any): StoryProject {
     language: typeof migrated.language === 'string' && migrated.language.trim() ? migrated.language.trim() : 'English',
     style: typeof migrated.style === 'string' ? migrated.style : '',
     styleId: typeof migrated.styleId === 'string' && migrated.styleId.trim() ? migrated.styleId : 'default',
+    writingFormat: migrated.writingFormat === 'markdown' ? 'markdown' : 'plaintext',
     length: migrated.length === 'short' || migrated.length === 'medium' || migrated.length === 'long'
       ? migrated.length
       : 'medium',
@@ -283,6 +284,7 @@ export const useProjectStore = defineStore('project', () => {
     language: string
     style: string
     styleId: string
+    writingFormat: WritingFormat
     length: StoryLength
     constraints: { required: string[]; forbidden: string[] }
     customRequirements: string

@@ -5,6 +5,7 @@ import type { CharacterRelationshipEvent } from './relationship'
 
 export type StoryLength = 'short' | 'medium' | 'long'
 export type StoryStatus = 'draft' | 'generating' | 'completed' | 'error'
+export type WritingFormat = 'plaintext' | 'markdown'
 
 export type GenerationStage =
   | 'idle'
@@ -25,6 +26,7 @@ export interface StoryProject extends Timestamps {
   language: string
   style: string
   styleId: string
+  writingFormat: WritingFormat
   length: StoryLength
   constraints: {
     required: string[]

@@ -67,6 +67,14 @@ export class ChapterTitlePlannerExpert extends BaseAgent {
     }
   }
 
+  protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
+    return Array.isArray(context._chapterTitlesData?.chapters) && context._chapterTitlesData.chapters.length > 0
+  }
+
+  protected getToolResultContent(context: Record<string, any>): string | null {
+    return context._chapterTitlesData ? JSON.stringify(context._chapterTitlesData) : null
+  }
+
   protected getSystemPrompt(): string {
     return `You are an expert story structurer.
 Your job is to estimate the optimal number of chapters for the story based on the requested length, theme, genre, and outline, and then generate the titles and brief objectives for each chapter.

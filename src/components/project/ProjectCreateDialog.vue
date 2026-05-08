@@ -32,6 +32,7 @@ const form = reactive({
   targetReader: '',
   language: 'English',
   styleId: 'default',
+  writingFormat: 'plaintext' as const,
   length: 'medium' as string,
   requiredElements: '',
   forbiddenElements: '',
@@ -151,6 +152,11 @@ const styleOptions = computed(() => [
   ...writingStyleStore.styles.map(s => ({ label: s.name, value: s.id })),
 ])
 
+const writingFormatOptions = [
+  { label: 'Plain Text', value: 'plaintext' },
+  { label: 'Markdown', value: 'markdown' },
+]
+
 function handleCreate() {
   const resolvedStyle = writingStyleStore.resolveStyleContent(form.styleId)
   const resolvedLanguage = form.language.trim() || 'English'
@@ -162,6 +168,7 @@ function handleCreate() {
     language: resolvedLanguage,
     style: resolvedStyle,
     styleId: form.styleId,
+    writingFormat: form.writingFormat,
     length: form.length,
     constraints: {
       required: form.requiredElements.split(',').map(s => s.trim()).filter(Boolean),
@@ -182,6 +189,7 @@ function resetForm() {
   form.targetReader = ''
   form.language = 'English'
   form.styleId = 'default'
+  form.writingFormat = 'plaintext'
   form.length = 'medium'
   form.requiredElements = ''
   form.forbiddenElements = ''

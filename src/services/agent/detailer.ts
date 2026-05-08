@@ -106,6 +106,11 @@ Focus on clarity, specificity, consistency, and generation usefulness.
 Never blank out a field that already contains meaningful content.
 If a field is already valid, preserve it unless you have a clear reason to improve it.
 
+IMPORTANT: Always consider the primary language when refining the configuration.
+- Adapt theme, target reader, and constraints to be culturally and linguistically appropriate.
+- Ensure required/forbidden elements make sense in the context of the target language.
+- If the language differs from English, enhance the configuration to better suit that language's storytelling conventions.
+
 Use the refine_configuration tool to provide the refined configuration.
 
 The writing style is managed separately and should not be included in your response.`
@@ -116,9 +121,16 @@ The writing style is managed separately and should not be included in your respo
 Improve specificity, remove ambiguity, and make it easier for downstream generation agents to follow.
 Do not blank out any field that already has a meaningful value.
 If genre or other fields are already set and valid, preserve them exactly unless you have a clear improvement.
-Preserve the primary language unless the input is clearly invalid.
 The writing style is managed separately. Do not include a style field in your response.
 If you are unsure about a field, keep the current value instead of returning an empty string.
+
+LANGUAGE CONSIDERATION:
+The primary language for this story is: ${context.language || 'English'}
+When refining the configuration, actively consider how the language choice affects the story:
+- Ensure the target reader description is appropriate for ${context.language} audiences
+- Adapt themes and genre descriptions to resonate with ${context.language} storytelling conventions
+- Review required/forbidden elements to ensure they are relevant and achievable in ${context.language}
+- If ${context.language} is non-English, suggest improvements that leverage unique storytelling opportunities in that language
 
 Current configuration:
 ${JSON.stringify(context, null, 2)}
@@ -127,6 +139,7 @@ Guidelines:
 - Keep the same story premise unless a small refinement clearly improves clarity.
 - Preserve the user's genre and intended audience unless the input is inconsistent.
 - Make required and forbidden constraints concise and actionable.
+- Actively refine fields to be appropriate for the selected language (${context.language}).
 - Use the refine_configuration tool to provide the refined configuration.`
   }
 
