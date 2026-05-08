@@ -32,6 +32,11 @@ watch(() => genStore.streamContent, async () => {
     }
   }
 })
+
+function toggleCollapsed() {
+  if (genStore.isFollowingMode) return
+  collapsed.value = !collapsed.value
+}
 </script>
 
 <template>
@@ -43,8 +48,9 @@ watch(() => genStore.streamContent, async () => {
       <div class="rounded-lg border border-surface-4 bg-surface-2 overflow-hidden">
       <!-- Header -->
       <div
-        class="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-surface-3 transition-colors"
-        @click="collapsed = !collapsed"
+        class="flex items-center justify-between px-3 py-2 transition-colors"
+        :class="genStore.isFollowingMode ? 'cursor-default' : 'cursor-pointer hover:bg-surface-3'"
+        @click="toggleCollapsed"
       >
         <div class="flex items-center gap-2">
           <Loader2 :size="12" class="text-accent animate-spin" />
@@ -53,7 +59,7 @@ watch(() => genStore.streamContent, async () => {
             {{ progressText }}
           </span>
         </div>
-        <button class="p-1 hover:bg-surface-4 rounded text-text-muted">
+        <button class="p-1 hover:bg-surface-4 rounded text-text-muted" :disabled="genStore.isFollowingMode">
           <ChevronDown v-if="!collapsed" :size="12" />
           <ChevronUp v-else :size="12" />
         </button>

@@ -1,18 +1,19 @@
 import type { StoryProject } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import { extractJsonPayload } from '@/services/agent/validation'
-import { buildCharacterContext, buildPreviousSummary } from './context'
+import { buildCharacterContextForTask, buildPreviousSummary } from './context'
 import { appendRelationshipEventsForChapter } from '@/services/relationship'
 import { buildRelationshipContext } from '@/services/relationship/context'
 import { buildKnowledgeContextForProject, estimateChapterCount, prepareRuntime } from './runtime'
 import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './types'
 import { generateId } from '@/lib/id'
 import { extractRelationshipEventsForChapter, runStoryPlanningWorkflow } from './planning'
+import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 
 export function formatChapterPlanContext(chapters: Chapter[]) {
   if (!chapters.length) return ''
 
-  return chapters.map((chapter) => {
+  return [...chapters].sort((a, b) => a.index - b.index).map((chapter) => {
     const objective = chapter.outline.objective.trim()
     const conflict = chapter.outline.conflict.trim()
     const keyEvents = chapter.outline.keyEvents.join(' | ')
@@ -32,6 +33,35 @@ export function formatChapterPlanContext(chapters: Chapter[]) {
   }).join('\n\n')
 }
 
+function hasStoryPlan(project: StoryProject) {
+  return !!project.outline.trim() && project.characters.length > 0
+}
+
+function hasChapterPlan(project: StoryProject) {
+  return project.chapters.length > 0 && project.chapters.every(chapter =>
+    chapter.outline.objective.trim() || chapter.outline.endingHook.trim()
+  )
+}
+
+function hasAllDrafts(project: StoryProject) {
+  return project.chapters.length > 0 && project.chapters.every(chapter => chapter.content.trim())
+}
+
+function hasAllProofread(project: StoryProject) {
+  return project.chapters.length > 0 && project.chapters.every(chapter => chapter.proofreadContent.trim())
+}
+
+function hasAllPolished(project: StoryProject) {
+  return project.chapters.length > 0 && project.chapters.every(chapter => chapter.polishedContent.trim())
+}
+
+function chapterPositionsInStoryOrder(chapters: Chapter[]) {
+  return chapters
+    .map((chapter, index) => ({ chapter, index }))
+    .sort((a, b) => a.chapter.index - b.chapter.index)
+    .map(item => item.index)
+}
+
 function buildChapterPlanEntryMap(entries: ChapterPlanEntry[]) {
   const map = new Map<number, ChapterPlanEntry>()
   for (const entry of entries) {
@@ -48,10 +78,12 @@ export function buildChaptersFromPlanEntries(
 ): Chapter[] {
   const now = new Date().toISOString()
   const entryMap = buildChapterPlanEntryMap(entries)
+  const previousByIndex = new Map(previousChapters.map(chapter => [chapter.index, chapter]))
 
   return Array.from({ length: chapterCount }, (_, index) => {
-    const prev = previousChapters[index]
+    const prev = previousByIndex.get(index)
     const entry = entryMap.get(index + 1)
+    const preserveChapterState = Boolean(prev && entry && prev.index + 1 === entry.chapterNumber)
 
     return {
       id: prev?.id || generateId(),
@@ -71,12 +103,12 @@ export function buildChaptersFromPlanEntries(
           : [],
         endingHook: entry?.endingHook?.trim() || '',
       },
-      content: prev?.content || '',
-      proofreadContent: prev?.proofreadContent || '',
-      polishedContent: prev?.polishedContent || '',
-      status: prev?.status || 'outline',
-      summary: prev?.summary || '',
-      characterStateUpdates: prev?.characterStateUpdates || {},
+      content: preserveChapterState ? (prev?.content || '') : '',
+      proofreadContent: preserveChapterState ? (prev?.proofreadContent || '') : '',
+      polishedContent: preserveChapterState ? (prev?.polishedContent || '') : '',
+      status: preserveChapterState ? (prev?.status || 'outline') : 'outline',
+      summary: preserveChapterState ? (prev?.summary || '') : '',
+      characterStateUpdates: preserveChapterState ? (prev?.characterStateUpdates || {}) : {},
       createdAt: prev?.createdAt || now,
       updatedAt: now,
     }
@@ -146,7 +178,7 @@ export async function runChapterPlanningWorkflow(
       language: project.language,
       style: project.style,
       storyOutline: project.outline,
-      characters: buildCharacterContext(project.characters),
+      characters: buildCharacterContextForTask(project.characters, 'outlining'),
       existingChapters: formatChapterPlanContext(
         buildChaptersFromPlanEntries(plannedEntries, plannedEntries.length, project.chapters)
       ),
@@ -186,11 +218,13 @@ export async function generateChapterPlan(
 export async function generateChapterDraft(
   project: StoryProject,
   chapterIndex: number,
-  onToken?: (token: string) => void
+  onToken?: (token: string) => void,
+  onIntermediateChapter?: (chapter: Chapter) => void | Promise<void>
 ) {
   const { writerAgent } = prepareRuntime()
   const chapter = project.chapters[chapterIndex]
-  if (!chapter) throw new Error(`Chapter ${chapterIndex + 1} not found`)
+  if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
+  const chapterNumber = chapter.index + 1
 
   const knowledgeContext = await buildKnowledgeContextForProject(project, {
     theme: project.theme,
@@ -201,24 +235,60 @@ export async function generateChapterDraft(
     chapterOutline: JSON.stringify(chapter.outline),
     previousSummary: buildPreviousSummary(project, chapterIndex),
   })
-  const relationshipContext = buildRelationshipContext(project, chapterIndex - 1)
+  const relationshipContext = buildRelationshipContext(project, chapter.index - 1)
 
   const writerContext: Record<string, any> = {
     chapterOutline: chapter.outline,
     chapterTitle: chapter.title,
     chapterIndex,
-    characters: buildCharacterContext(project.characters),
+    chapterNumber,
+    characters: buildCharacterContextForTask(project.characters, 'writing'),
     relationships: relationshipContext,
     previousSummary: buildPreviousSummary(project, chapterIndex),
     language: project.language,
     style: project.style,
+    writingFormat: project.writingFormat,
     knowledgeContext,
   }
 
+  let lastSavedContent = ''
+  const saveIntermediateChapter = async () => {
+    const draftContent = sanitizeGeneratedChapterContent(
+      typeof writerContext._chapterContent === 'string' ? writerContext._chapterContent : '',
+      {
+        writingFormat: project.writingFormat,
+        writingStyle: project.style,
+        chapterTitle: chapter.title,
+        chapterNumber,
+      }
+    )
+    if (!draftContent || draftContent === lastSavedContent) return
+
+    lastSavedContent = draftContent
+    await onIntermediateChapter?.({
+      ...chapter,
+      content: draftContent,
+      summary: typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
+        ? writerContext._chapterSummary.trim()
+        : `${draftContent.substring(0, 200)}...`,
+      status: 'writing' as const,
+    })
+  }
+  writerContext._onChapterDraftUpdate = saveIntermediateChapter
+
   const writerResult = await writerAgent.execute(writerContext, onToken)
-  const chapterContent = typeof writerContext._chapterContent === 'string' && writerContext._chapterContent.trim()
-    ? writerContext._chapterContent.trim()
-    : writerResult.content
+  await saveIntermediateChapter()
+  const chapterContent = sanitizeGeneratedChapterContent(
+    typeof writerContext._chapterContent === 'string' && writerContext._chapterContent.trim()
+      ? writerContext._chapterContent
+      : writerResult.content,
+    {
+      writingFormat: project.writingFormat,
+      writingStyle: project.style,
+      chapterTitle: chapter.title,
+      chapterNumber,
+    }
+  )
   const chapterSummary = typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
     ? writerContext._chapterSummary.trim()
     : `${chapterContent.substring(0, 200)}...`
@@ -238,7 +308,8 @@ export async function proofreadChapter(
 ) {
   const { proofreaderAgent } = prepareRuntime()
   const chapter = project.chapters[chapterIndex]
-  if (!chapter) throw new Error(`Chapter ${chapterIndex + 1} not found`)
+  if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
+  const chapterNumber = chapter.index + 1
 
   const knowledgeContext = await buildKnowledgeContextForProject(project, {
     theme: project.theme,
@@ -251,20 +322,35 @@ export async function proofreadChapter(
     previousSummary: buildPreviousSummary(project, chapterIndex),
   })
 
-  const result = await proofreaderAgent.execute({
+  const proofreadContext: Record<string, any> = {
     content: chapter.content,
     chapterTitle: chapter.title,
+    chapterNumber,
     chapterOutline: chapter.outline,
-    characters: buildCharacterContext(project.characters),
+    characters: buildCharacterContextForTask(project.characters, 'proofreading'),
     previousSummary: buildPreviousSummary(project, chapterIndex),
     language: project.language,
+    style: project.style,
     project,
+    writingFormat: project.writingFormat,
     knowledgeContext,
-  }, onToken)
+  }
+  const result = await proofreaderAgent.execute(proofreadContext, onToken)
+  const proofreadContent = sanitizeGeneratedChapterContent(
+    typeof proofreadContext._proofreadContent === 'string' && proofreadContext._proofreadContent.trim()
+      ? proofreadContext._proofreadContent
+      : result.content,
+    {
+      writingFormat: project.writingFormat,
+      writingStyle: project.style,
+      chapterTitle: chapter.title,
+      chapterNumber,
+    }
+  )
 
   return {
     ...chapter,
-    proofreadContent: result.content,
+    proofreadContent,
     status: 'proofread' as const,
   }
 }
@@ -276,7 +362,8 @@ export async function polishChapter(
 ) {
   const { polisherAgent } = prepareRuntime()
   const chapter = project.chapters[chapterIndex]
-  if (!chapter) throw new Error(`Chapter ${chapterIndex + 1} not found`)
+  if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
+  const chapterNumber = chapter.index + 1
 
   const contentToPolish = chapter.proofreadContent || chapter.content
   const knowledgeContext = await buildKnowledgeContextForProject(project, {
@@ -287,18 +374,32 @@ export async function polishChapter(
     chapterTitle: chapter.title,
     content: contentToPolish,
   })
-  const result = await polisherAgent.execute({
+  const polishContext: Record<string, any> = {
     content: contentToPolish,
     chapterTitle: chapter.title,
+    chapterNumber,
     language: project.language,
     style: project.style,
     project,
+    writingFormat: project.writingFormat,
     knowledgeContext,
-  }, onToken)
+  }
+  const result = await polisherAgent.execute(polishContext, onToken)
+  const polishedContent = sanitizeGeneratedChapterContent(
+    typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
+      ? polishContext._polishedContent
+      : result.content,
+    {
+      writingFormat: project.writingFormat,
+      writingStyle: project.style,
+      chapterTitle: chapter.title,
+      chapterNumber,
+    }
+  )
 
   return {
     ...chapter,
-    polishedContent: result.content,
+    polishedContent,
     status: 'polished' as const,
   }
 }
@@ -321,214 +422,310 @@ export async function run(
   const stopAfter = options.stopAfterStage
   const save = () => callbacks.onIntermediateSave?.(updatedProject)
 
-  if (isCancelled()) return updatedProject
-  callbacks.onStageChange('planning')
-  callbacks.onProgress('Planning story outline and characters...')
+  if (!hasStoryPlan(updatedProject)) {
+    if (isCancelled()) return updatedProject
+    callbacks.onStageChange('planning')
+    callbacks.onProgress('Planning story outline and characters...')
 
-  try {
-    const planResult = await runStoryPlanningWorkflow(project, callbacks.onToken, callbacks.onProgress, callbacks.onError)
-    updatedProject.outline = planResult.outline
-    updatedProject.characters = planResult.characters
-    updatedProject.generationStage = 'chapter-outline'
-    save()
-  } catch (e: any) {
-    callbacks.onError(`Story planning failed: ${e.message}`)
-    return updatedProject
+    try {
+      const planResult = await runStoryPlanningWorkflow(updatedProject, callbacks.onToken, callbacks.onProgress, callbacks.onError)
+      updatedProject.outline = planResult.outline
+      updatedProject.characters = planResult.characters
+      updatedProject.generationStage = 'chapter-outline'
+      save()
+    } catch (e: any) {
+      callbacks.onError(`Story planning failed: ${e.message}`)
+      return updatedProject
+    }
+  } else {
+    updatedProject.generationStage = hasChapterPlan(updatedProject) ? updatedProject.generationStage : 'chapter-outline'
+    callbacks.onProgress('Story plan already complete. Skipping planning.')
   }
 
   if (stopAfter === 'planning') {
     return updatedProject
   }
 
-  if (isCancelled()) return updatedProject
-  callbacks.onStageChange('chapter-outline')
-  callbacks.onProgress('Planning chapter outlines...')
+  if (!hasChapterPlan(updatedProject)) {
+    if (isCancelled()) return updatedProject
+    callbacks.onStageChange('chapter-outline')
+    callbacks.onProgress('Planning chapter outlines...')
 
-  try {
-    const plannedChapters = await runChapterPlanningWorkflow(
-      updatedProject,
-      callbacks.onToken,
-      callbacks.onProgress,
-      callbacks.onError,
-      (updates) => {
-        Object.assign(updatedProject, updates)
-        save()
-      },
-      isCancelled
-    )
+    try {
+      const plannedChapters = await runChapterPlanningWorkflow(
+        updatedProject,
+        callbacks.onToken,
+        callbacks.onProgress,
+        callbacks.onError,
+        (updates) => {
+          Object.assign(updatedProject, updates)
+          save()
+        },
+        isCancelled
+      )
 
-    updatedProject.chapters = plannedChapters
-    updatedProject.generationStage = 'writing'
-    save()
-  } catch (e: any) {
-    callbacks.onError(`Chapter outline planning failed: ${e.message}`)
-    return updatedProject
+      updatedProject.chapters = plannedChapters
+      updatedProject.generationStage = 'writing'
+      save()
+    } catch (e: any) {
+      callbacks.onError(`Chapter outline planning failed: ${e.message}`)
+      return updatedProject
+    }
+  } else {
+    updatedProject.generationStage = hasAllDrafts(updatedProject) ? updatedProject.generationStage : 'writing'
+    callbacks.onProgress('Chapter plan already complete. Skipping chapter outlining.')
   }
 
   if (stopAfter === 'chapter-outline') {
     return updatedProject
   }
 
-  if (isCancelled()) return updatedProject
-  callbacks.onStageChange('writing')
-  callbacks.onProgress('Writing chapter drafts...')
+  if (!hasAllDrafts(updatedProject)) {
+    if (isCancelled()) return updatedProject
+    callbacks.onStageChange('writing')
+    callbacks.onProgress('Writing chapter drafts...')
 
-  for (let i = 0; i < updatedProject.chapters.length; i++) {
-    if (isCancelled()) break
-    callbacks.onChapterStart(i)
-    callbacks.onProgress(`Writing chapter ${i + 1} of ${updatedProject.chapters.length}...`)
+    for (const i of chapterPositionsInStoryOrder(updatedProject.chapters)) {
+      if (isCancelled()) break
+      const chapter = updatedProject.chapters[i]
+      const chapterNumber = chapter.index + 1
+      if (chapter.content.trim()) continue
 
-    try {
-      const charContext = buildCharacterContext(updatedProject.characters)
-      const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-        theme: updatedProject.theme,
-        genre: updatedProject.genre,
-        targetReader: updatedProject.targetReader,
-        language: updatedProject.language,
-        chapterTitle: updatedProject.chapters[i].title,
-        chapterOutline: JSON.stringify(updatedProject.chapters[i].outline),
-        previousSummary: buildPreviousSummary(updatedProject, i),
-      })
-      const relationshipContext = buildRelationshipContext(updatedProject, i - 1)
-      const writerContext: Record<string, any> = {
-        chapterOutline: updatedProject.chapters[i].outline,
-        chapterTitle: updatedProject.chapters[i].title,
-        chapterIndex: i,
-        characters: charContext,
-        relationships: relationshipContext,
-        previousSummary: buildPreviousSummary(updatedProject, i),
-        language: project.language,
-        style: project.style,
-        knowledgeContext,
+      callbacks.onChapterStart(i)
+      callbacks.onProgress(`Writing chapter ${chapterNumber} of ${updatedProject.chapters.length}...`)
+
+      try {
+        const charContext = buildCharacterContextForTask(updatedProject.characters, 'writing')
+        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
+          theme: updatedProject.theme,
+          genre: updatedProject.genre,
+          targetReader: updatedProject.targetReader,
+          language: updatedProject.language,
+          chapterTitle: chapter.title,
+          chapterOutline: JSON.stringify(chapter.outline),
+          previousSummary: buildPreviousSummary(updatedProject, i),
+        })
+        const relationshipContext = buildRelationshipContext(updatedProject, chapter.index - 1)
+        const writerContext: Record<string, any> = {
+          chapterOutline: chapter.outline,
+          chapterTitle: chapter.title,
+          chapterIndex: i,
+          chapterNumber,
+          characters: charContext,
+          relationships: relationshipContext,
+          previousSummary: buildPreviousSummary(updatedProject, i),
+          language: project.language,
+          style: project.style,
+          writingFormat: project.writingFormat,
+          knowledgeContext,
+        }
+
+        let lastSavedContent = ''
+        const saveIntermediateChapter = () => {
+          const draftContent = sanitizeGeneratedChapterContent(
+            typeof writerContext._chapterContent === 'string' ? writerContext._chapterContent : '',
+            {
+              writingFormat: updatedProject.writingFormat,
+              writingStyle: updatedProject.style,
+              chapterTitle: chapter.title,
+              chapterNumber,
+            }
+          )
+          if (!draftContent || draftContent === lastSavedContent) return
+
+          lastSavedContent = draftContent
+          updatedProject.chapters[i].content = draftContent
+          updatedProject.chapters[i].summary = typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
+            ? writerContext._chapterSummary.trim()
+            : `${draftContent.substring(0, 200)}...`
+          updatedProject.chapters[i].status = 'writing'
+          save()
+        }
+        writerContext._onChapterDraftUpdate = saveIntermediateChapter
+
+        const writerResult = await writerAgent.execute(writerContext, callbacks.onToken)
+        saveIntermediateChapter()
+        const chapterContent = sanitizeGeneratedChapterContent(
+          typeof writerContext._chapterContent === 'string' && writerContext._chapterContent.trim()
+            ? writerContext._chapterContent
+            : writerResult.content,
+          {
+            writingFormat: updatedProject.writingFormat,
+            writingStyle: updatedProject.style,
+            chapterTitle: chapter.title,
+            chapterNumber,
+          }
+        )
+        const chapterSummary = typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
+          ? writerContext._chapterSummary.trim()
+          : `${chapterContent.substring(0, 200)}...`
+
+        updatedProject.chapters[i].content = chapterContent
+        updatedProject.chapters[i].summary = chapterSummary
+        updatedProject.chapters[i].status = 'draft'
+
+        const relationshipEvents = await extractRelationshipEventsForChapter(
+          updatedProject,
+          i,
+          relationshipTrackerAgent,
+          callbacks.onToken
+        )
+        updatedProject.relationshipEvents = appendRelationshipEventsForChapter(
+          updatedProject,
+          updatedProject.chapters[i].id,
+          relationshipEvents
+        )
+
+        callbacks.onChapterComplete(i)
+        save()
+      } catch (e: any) {
+        callbacks.onError(`Chapter ${chapterNumber} writing failed: ${e.message}`)
       }
-
-      const writerResult = await writerAgent.execute(writerContext, callbacks.onToken)
-      const chapterContent = typeof writerContext._chapterContent === 'string' && writerContext._chapterContent.trim()
-        ? writerContext._chapterContent.trim()
-        : writerResult.content
-      const chapterSummary = typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
-        ? writerContext._chapterSummary.trim()
-        : `${chapterContent.substring(0, 200)}...`
-
-      updatedProject.chapters[i].content = chapterContent
-      updatedProject.chapters[i].summary = chapterSummary
-      updatedProject.chapters[i].status = 'draft'
-
-      const relationshipEvents = await extractRelationshipEventsForChapter(
-        updatedProject,
-        i,
-        relationshipTrackerAgent,
-        callbacks.onToken
-      )
-      updatedProject.relationshipEvents = appendRelationshipEventsForChapter(
-        updatedProject,
-        updatedProject.chapters[i].id,
-        relationshipEvents
-      )
-
-      callbacks.onChapterComplete(i)
-      save()
-    } catch (e: any) {
-      callbacks.onError(`Chapter ${i + 1} writing failed: ${e.message}`)
     }
-  }
 
-  updatedProject.generationStage = 'proofreading'
-  save()
+    if (isCancelled()) return updatedProject
+    updatedProject.generationStage = 'proofreading'
+    save()
+  } else {
+    updatedProject.generationStage = hasAllProofread(updatedProject) ? updatedProject.generationStage : 'proofreading'
+    callbacks.onProgress('Chapter drafts already complete. Skipping writing.')
+  }
 
   if (stopAfter === 'writing') {
     return updatedProject
   }
 
-  if (isCancelled()) return updatedProject
-  callbacks.onStageChange('proofreading')
-  callbacks.onProgress('Proofreading chapter drafts...')
+  if (!hasAllProofread(updatedProject)) {
+    if (isCancelled()) return updatedProject
+    callbacks.onStageChange('proofreading')
+    callbacks.onProgress('Proofreading chapter drafts...')
 
-  for (let i = 0; i < updatedProject.chapters.length; i++) {
-    if (isCancelled()) break
-    callbacks.onProgress(`Proofreading chapter ${i + 1}...`)
+    for (const i of chapterPositionsInStoryOrder(updatedProject.chapters)) {
+      if (isCancelled()) break
+      const chapter = updatedProject.chapters[i]
+      const chapterNumber = chapter.index + 1
+      if (chapter.proofreadContent.trim()) continue
 
-    try {
-      const charContext = buildCharacterContext(updatedProject.characters)
-      const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-        theme: updatedProject.theme,
-        genre: updatedProject.genre,
-        targetReader: updatedProject.targetReader,
-        language: updatedProject.language,
-        chapterTitle: updatedProject.chapters[i].title,
-        chapterOutline: JSON.stringify(updatedProject.chapters[i].outline),
-        content: updatedProject.chapters[i].content,
-        previousSummary: buildPreviousSummary(updatedProject, i),
-      })
-      const proofreadContext: Record<string, any> = {
-        content: updatedProject.chapters[i].content,
-        chapterTitle: updatedProject.chapters[i].title,
-        chapterOutline: updatedProject.chapters[i].outline,
-        characters: charContext,
-        previousSummary: buildPreviousSummary(updatedProject, i),
-        language: project.language,
-        project: updatedProject,
-        knowledgeContext,
+      callbacks.onChapterStart(i)
+      callbacks.onProgress(`Proofreading chapter ${chapterNumber}...`)
+
+      try {
+        const charContext = buildCharacterContextForTask(updatedProject.characters, 'proofreading')
+        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
+          theme: updatedProject.theme,
+          genre: updatedProject.genre,
+          targetReader: updatedProject.targetReader,
+          language: updatedProject.language,
+          chapterTitle: chapter.title,
+          chapterOutline: JSON.stringify(chapter.outline),
+          content: chapter.content,
+          previousSummary: buildPreviousSummary(updatedProject, i),
+        })
+        const proofreadContext: Record<string, any> = {
+          content: chapter.content,
+          chapterTitle: chapter.title,
+          chapterNumber,
+          chapterOutline: chapter.outline,
+          characters: charContext,
+          previousSummary: buildPreviousSummary(updatedProject, i),
+          language: project.language,
+          style: project.style,
+          project: updatedProject,
+          writingFormat: updatedProject.writingFormat,
+          knowledgeContext,
+        }
+
+        const result = await proofreaderAgent.execute(proofreadContext, callbacks.onToken)
+
+        updatedProject.chapters[i].proofreadContent = sanitizeGeneratedChapterContent(
+          typeof proofreadContext._proofreadContent === 'string' && proofreadContext._proofreadContent.trim()
+            ? proofreadContext._proofreadContent
+            : result.content,
+          {
+            writingFormat: updatedProject.writingFormat,
+            writingStyle: updatedProject.style,
+            chapterTitle: chapter.title,
+            chapterNumber,
+          }
+        )
+        updatedProject.chapters[i].status = 'proofread'
+        callbacks.onChapterComplete(i)
+        save()
+      } catch (e: any) {
+        callbacks.onError(`Proofreading chapter ${chapterNumber} failed: ${e.message}`)
       }
-
-      const result = await proofreaderAgent.execute(proofreadContext, callbacks.onToken)
-
-      updatedProject.chapters[i].proofreadContent = typeof proofreadContext._proofreadContent === 'string' && proofreadContext._proofreadContent.trim()
-        ? proofreadContext._proofreadContent.trim()
-        : result.content
-      updatedProject.chapters[i].status = 'proofread'
-      save()
-    } catch (e: any) {
-      callbacks.onError(`Proofreading chapter ${i + 1} failed: ${e.message}`)
     }
-  }
 
-  updatedProject.generationStage = 'polishing'
-  save()
+    if (isCancelled()) return updatedProject
+    updatedProject.generationStage = 'polishing'
+    save()
+  } else {
+    updatedProject.generationStage = hasAllPolished(updatedProject) ? updatedProject.generationStage : 'polishing'
+    callbacks.onProgress('Proofread chapters already complete. Skipping proofreading.')
+  }
 
   if (stopAfter === 'proofreading') {
     return updatedProject
   }
 
-  if (isCancelled()) return updatedProject
-  callbacks.onStageChange('polishing')
-  callbacks.onProgress('Polishing chapter drafts...')
+  if (!hasAllPolished(updatedProject)) {
+    if (isCancelled()) return updatedProject
+    callbacks.onStageChange('polishing')
+    callbacks.onProgress('Polishing chapter drafts...')
 
-  for (let i = 0; i < updatedProject.chapters.length; i++) {
-    if (isCancelled()) break
-    callbacks.onProgress(`Polishing chapter ${i + 1}...`)
+    for (const i of chapterPositionsInStoryOrder(updatedProject.chapters)) {
+      if (isCancelled()) break
+      const chapter = updatedProject.chapters[i]
+      const chapterNumber = chapter.index + 1
+      if (chapter.polishedContent.trim()) continue
 
-    try {
-      const contentToPolish = updatedProject.chapters[i].proofreadContent || updatedProject.chapters[i].content
-      const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-        theme: updatedProject.theme,
-        genre: updatedProject.genre,
-        targetReader: updatedProject.targetReader,
-        language: updatedProject.language,
-        chapterTitle: updatedProject.chapters[i].title,
-        content: contentToPolish,
-      })
-      const polishContext: Record<string, any> = {
-        content: contentToPolish,
-        chapterTitle: updatedProject.chapters[i].title,
-        language: project.language,
-        style: project.style,
-        project: updatedProject,
-        knowledgeContext,
+      callbacks.onChapterStart(i)
+      callbacks.onProgress(`Polishing chapter ${chapterNumber}...`)
+
+      try {
+        const contentToPolish = chapter.proofreadContent || chapter.content
+        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
+          theme: updatedProject.theme,
+          genre: updatedProject.genre,
+          targetReader: updatedProject.targetReader,
+          language: updatedProject.language,
+          chapterTitle: chapter.title,
+          content: contentToPolish,
+        })
+        const polishContext: Record<string, any> = {
+          content: contentToPolish,
+          chapterTitle: chapter.title,
+          chapterNumber,
+          language: project.language,
+          style: project.style,
+          project: updatedProject,
+          writingFormat: updatedProject.writingFormat,
+          knowledgeContext,
+        }
+
+        const result = await polisherAgent.execute(polishContext, callbacks.onToken)
+
+        updatedProject.chapters[i].polishedContent = sanitizeGeneratedChapterContent(
+          typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
+            ? polishContext._polishedContent
+            : result.content,
+          {
+            writingFormat: updatedProject.writingFormat,
+            writingStyle: updatedProject.style,
+            chapterTitle: chapter.title,
+            chapterNumber,
+          }
+        )
+        updatedProject.chapters[i].status = 'polished'
+        callbacks.onChapterComplete(i)
+        save()
+      } catch (e: any) {
+        callbacks.onError(`Polishing chapter ${chapterNumber} failed: ${e.message}`)
       }
-
-      const result = await polisherAgent.execute(polishContext, callbacks.onToken)
-
-      updatedProject.chapters[i].polishedContent = typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
-        ? polishContext._polishedContent.trim()
-        : result.content
-      updatedProject.chapters[i].status = 'polished'
-      save()
-    } catch (e: any) {
-      callbacks.onError(`Polishing chapter ${i + 1} failed: ${e.message}`)
     }
   }
 
+  if (isCancelled()) return updatedProject
   updatedProject.status = 'completed'
   updatedProject.generationStage = 'done'
   save()

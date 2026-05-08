@@ -40,8 +40,13 @@ export class StoryPipeline {
     return generateChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave, () => this.cancelled)
   }
 
-  async generateChapterDraft(project: StoryProject, chapterIndex: number, onToken?: (token: string) => void) {
-    return generateChapterDraftWorkflow(project, chapterIndex, onToken)
+  async generateChapterDraft(
+    project: StoryProject,
+    chapterIndex: number,
+    onToken?: (token: string) => void,
+    onIntermediateChapter?: (chapter: StoryProject['chapters'][number]) => void | Promise<void>
+  ) {
+    return generateChapterDraftWorkflow(project, chapterIndex, onToken, onIntermediateChapter)
   }
 
   async proofreadChapter(project: StoryProject, chapterIndex: number, onToken?: (token: string) => void) {

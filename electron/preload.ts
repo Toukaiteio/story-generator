@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPath: (name: string) => ipcRenderer.invoke('app:get-path', name),
   },
 
+  // Shell operations
+  shell: {
+    reveal: (path: string) => ipcRenderer.invoke('shell:reveal', path),
+  },
+
   // Project operations
   project: {
     list: () => ipcRenderer.invoke('project:list'),

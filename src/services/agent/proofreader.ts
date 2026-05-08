@@ -3,6 +3,7 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, countWords } from './validation'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
+import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 
 export class ProofreaderExpert extends BaseAgent {
   type: AgentType = 'proofreader'
@@ -40,7 +41,12 @@ export class ProofreaderExpert extends BaseAgent {
 
     if (toolCall.name === 'proofread_chapter') {
       // Store the proofread content in context
-      context._proofreadContent = toolCall.arguments.correctedContent
+      context._proofreadContent = sanitizeGeneratedChapterContent(String(toolCall.arguments.correctedContent ?? ''), {
+        writingFormat: context.writingFormat,
+        writingStyle: context.style,
+        chapterTitle: context.chapterTitle,
+        chapterNumber: context.chapterNumber,
+      })
       context._corrections = toolCall.arguments.corrections
       return {
         tool_call_id: toolCall.id,
@@ -68,24 +74,26 @@ Use the proofread_chapter tool to provide the corrected text and a summary of ch
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterOutline, characters, previousSummary, language, knowledgeContext } = context
+    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat } = context
 
     return `Proofread and correct the following chapter:
 
-**Chapter: ${chapterTitle}**
-**Primary Language:** ${language || 'English'}
+Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
+Primary Language: ${language || 'English'}
 
-**Content to proofread:**
+${buildWritingFormatInstruction(writingFormat, style)}
+
+Content to proofread:
 ${content}
 
-**Chapter Outline (for consistency check):**
+Chapter Outline (for consistency check):
 ${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOutline, null, 2)}
 
-**Character Reference:**
+Character Reference:
 ${characters}
 
-${previousSummary ? `**Previous Story Summary:**\n${previousSummary}` : ''}
-${knowledgeContext ? `**Reference Material:**\n${knowledgeContext}\n` : ''}
+${previousSummary ? `Previous Story Summary:\n${previousSummary}` : ''}
+${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Relationship query tools are available. Use them when checking whether character behavior, dialogue, trust, conflict, or references to prior events are consistent. Query only the specific characters or events you need.
 

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 import { URL } from 'url'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs'
@@ -72,6 +72,13 @@ ipcMain.on('window:maximize', () => {
 })
 ipcMain.on('window:close', () => mainWindow?.close())
 ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
+
+// Shell operations
+ipcMain.handle('shell:reveal', (_event, path: string) => {
+  if (!path || !existsSync(path)) return false
+  shell.showItemInFolder(path)
+  return true
+})
 
 // Project file operations
 function loadFullProject(id: string, folder: string) {

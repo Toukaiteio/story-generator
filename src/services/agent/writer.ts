@@ -2,6 +2,7 @@ import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, countParagraphs, countWords } from './validation'
+import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 
 export class WriterExpert extends BaseAgent {
   type: AgentType = 'writer'
@@ -11,13 +12,13 @@ export class WriterExpert extends BaseAgent {
     return [
       {
         name: 'write_chapter',
-        description: 'Write the chapter in sections, appending each section until the chapter is complete',
+        description: 'Write the chapter prose in sections, appending each section until the chapter is complete. Follow the requested output format exactly.',
         parameters: {
           type: 'object',
           properties: {
             content: {
               type: 'string',
-              description: 'The next section of chapter prose to append',
+              description: 'The next section of chapter prose to append. Do not include chapter title, chapter number, table of contents, notes, labels, or Markdown headings unless Markdown format was explicitly requested.',
             },
             summary: {
               type: 'string',
@@ -37,9 +38,15 @@ export class WriterExpert extends BaseAgent {
   protected async handleToolCall(toolCall: ToolCall, context: Record<string, any>): Promise<ToolResult> {
     if (toolCall.name === 'write_chapter') {
       // Store the chapter content in context
-      const content = typeof toolCall.arguments.content === 'string'
+      const rawContent = typeof toolCall.arguments.content === 'string'
         ? toolCall.arguments.content.trim()
         : ''
+      const content = sanitizeGeneratedChapterContent(rawContent, {
+        writingFormat: context.writingFormat,
+        writingStyle: context.style,
+        chapterTitle: context.chapterTitle,
+        chapterNumber: context.chapterNumber,
+      })
       const summary = typeof toolCall.arguments.summary === 'string'
         ? toolCall.arguments.summary.trim()
         : ''
@@ -63,6 +70,14 @@ export class WriterExpert extends BaseAgent {
         ? `${context._chapterContent.substring(0, 200)}...`
         : `${content.substring(0, 200)}...`)
 
+      if (typeof context._onChapterDraftUpdate === 'function') {
+        await context._onChapterDraftUpdate({
+          content: context._chapterContent,
+          summary: context._chapterSummary,
+          isComplete,
+        })
+      }
+
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({
@@ -82,6 +97,10 @@ export class WriterExpert extends BaseAgent {
 
   protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
     return context._chapterComplete === true && typeof context._chapterContent === 'string' && context._chapterContent.trim().length > 0
+  }
+
+  protected shouldStreamToolProgress(_context: Record<string, any>): boolean {
+    return true
   }
 
   protected getToolResultContent(context: Record<string, any>): string | null {
@@ -112,32 +131,36 @@ Use the write_chapter tool to write the chapter in multiple sections.
 Each tool call should provide the next section of prose, typically 300-600 words.
 Set isComplete to true only on the final section once the full chapter is done.
 Do not include meta-commentary or notes.
+Never include the chapter title or chapter number in the generated prose; the application renders those separately.
 Write prose only.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { chapterOutline, chapterTitle, chapterIndex, characters, relationships, previousSummary, language, style, knowledgeContext } = context
+    const { chapterOutline, chapterTitle, chapterIndex, chapterNumber, characters, relationships, previousSummary, language, style, knowledgeContext, writingFormat } = context
+    const displayChapterNumber = Number.isInteger(chapterNumber) ? chapterNumber : chapterIndex + 1
 
     return `Write the following chapter:
 
-**Chapter ${chapterIndex + 1}: ${chapterTitle}**
+Chapter to write: ${displayChapterNumber}. ${chapterTitle}
 
-**Primary Language:** ${language || 'English'}
-${style ? `**Writing Style Guide:**\n${style}` : '**Writing Style:** Use a writing style appropriate for the genre and target reader.'}
+Primary Language: ${language || 'English'}
+${style ? `Writing Style Guide:\n${style}` : 'Writing Style: Use a writing style appropriate for the genre and target reader.'}
 
-**Chapter Outline:**
+${buildWritingFormatInstruction(writingFormat, style)}
+
+Chapter Outline:
 ${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOutline, null, 2)}
 
-**Characters:**
+Characters:
 ${characters}
 
-${relationships ? `**Relationship State:**\n${relationships}\n` : ''}
-${previousSummary ? `**Previous Story Summary:**\n${previousSummary}` : 'This is the first chapter.'}
-${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}
+${relationships ? `Relationship State:\n${relationships}\n` : ''}
+${previousSummary ? `Previous Story Summary:\n${previousSummary}` : 'This is the first chapter.'}
+${knowledgeContext ? `\nReference Material:\n${knowledgeContext}` : ''}
 
 Write the chapter in multiple tool-call sections in ${language || 'English'}. Aim for a total of 2000-3000 words across all sections. Each section should stay focused and substantial, but do not try to fit the whole chapter into one tool call. Include natural dialogue, vivid descriptions, and advance the plot according to the outline.
 
-Use the write_chapter tool to provide the chapter content.`
+Use the write_chapter tool to provide prose content only. Unless the Writing Style Guide explicitly requires title or section structures, the content field must not start with the chapter title, "Chapter ${displayChapterNumber}", a Chinese chapter-number heading, or any section heading.`
   }
 
   parseResponse(response: string): any {

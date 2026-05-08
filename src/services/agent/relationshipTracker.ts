@@ -196,6 +196,7 @@ If nothing meaningful changed, call finalize_relationship_events without recordi
   protected buildPrompt(context: Record<string, any>): string {
     const {
       chapterIndex,
+      chapterNumber,
       chapterTitle,
       characters,
       previousRelationships,
@@ -203,9 +204,11 @@ If nothing meaningful changed, call finalize_relationship_events without recordi
       language,
     } = context
 
+    const displayChapterNumber = Number.isInteger(chapterNumber) ? chapterNumber : chapterIndex + 1
+
     return `Track relationship changes for this chapter.
 
-Chapter ${chapterIndex + 1}: ${chapterTitle}
+Chapter ${displayChapterNumber}: ${chapterTitle}
 Primary language: ${language || 'English'}
 
 Characters:

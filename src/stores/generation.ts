@@ -50,6 +50,8 @@ export const useGenerationStore = defineStore('generation', () => {
   const errors = ref<GenerationError[]>([])
   const cancelled = ref(false)
   const currentProjectId = ref<string | null>(null)
+  const isFollowingMode = ref(false)
+  const currentChapterIndex = ref<number | null>(null)
 
   let errorCounter = 0
   let pipeline: StoryPipeline | null = null
@@ -60,14 +62,16 @@ export const useGenerationStore = defineStore('generation', () => {
     return completedStages.value.has(stage)
   }
 
-  function resetRunState(projectId: string) {
+  function resetRunState(projectId: string, follow = false) {
     isGenerating.value = true
+    isFollowingMode.value = follow
     cancelled.value = false
     errors.value = []
     currentProjectId.value = projectId
     progressMessage.value = ''
     streamContent.value = ''
     currentStage.value = 'idle'
+    currentChapterIndex.value = null
     pipeline = new StoryPipeline()
   }
 
@@ -77,7 +81,9 @@ export const useGenerationStore = defineStore('generation', () => {
 
   function finishRun() {
     isGenerating.value = false
+    isFollowingMode.value = false
     progressMessage.value = ''
+    currentChapterIndex.value = null
     pipeline = null
   }
 
@@ -101,19 +107,33 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  function findNextChapterPosition(
+    chapters: StoryProject['chapters'],
+    predicate: (chapter: StoryProject['chapters'][number]) => boolean
+  ) {
+    let nextIndex = -1
+    for (let index = 0; index < chapters.length; index++) {
+      if (!predicate(chapters[index])) continue
+      if (nextIndex === -1 || chapters[index].index < chapters[nextIndex].index) {
+        nextIndex = index
+      }
+    }
+    return nextIndex
+  }
+
   function getNextAction(project: StoryProject): NextAction {
     if (!project.outline.trim() || !project.characters.length) return { stage: 'planning' }
     if (!project.chapters.length || project.chapters.some(ch => !ch.outline.objective || !ch.outline.endingHook)) {
       return { stage: 'chapter-outline' }
     }
 
-    const writingIndex = project.chapters.findIndex(ch => !ch.content.trim())
+    const writingIndex = findNextChapterPosition(project.chapters, ch => !ch.content.trim())
     if (writingIndex !== -1) return { stage: 'writing', chapterIndex: writingIndex }
 
-    const proofreadingIndex = project.chapters.findIndex(ch => ch.content.trim() && !ch.proofreadContent.trim())
+    const proofreadingIndex = findNextChapterPosition(project.chapters, ch => ch.content.trim() && !ch.proofreadContent.trim())
     if (proofreadingIndex !== -1) return { stage: 'proofreading', chapterIndex: proofreadingIndex }
 
-    const polishingIndex = project.chapters.findIndex(ch => (ch.proofreadContent.trim() || ch.content.trim()) && !ch.polishedContent.trim())
+    const polishingIndex = findNextChapterPosition(project.chapters, ch => (ch.proofreadContent.trim() || ch.content.trim()) && !ch.polishedContent.trim())
     if (polishingIndex !== -1) return { stage: 'polishing', chapterIndex: polishingIndex }
 
     return { stage: 'done' }
@@ -122,6 +142,10 @@ export const useGenerationStore = defineStore('generation', () => {
   function resolveChapterIndex(project: StoryProject, stage: Exclude<NextAction['stage'], 'planning' | 'chapter-outline' | 'done'>) {
     const action = getNextAction(project)
     return action.stage === stage ? action.chapterIndex : -1
+  }
+
+  function resolveChapterIndexById(project: StoryProject, chapterId: string) {
+    return project.chapters.findIndex(chapter => chapter.id === chapterId)
   }
 
   async function applyProjectUpdate(projectId: string, updates: Partial<StoryProject>) {
@@ -234,27 +258,53 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function generateChapterDraft(projectId: string) {
+  async function generateChapterDraftAt(projectId: string, targetChapterIndex: number) {
+    const project = validateProject(projectId)
+    const targetChapter = project.chapters[targetChapterIndex]
+    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
+
+    currentStage.value = 'writing'
+    currentChapterIndex.value = targetChapterIndex
+    progressMessage.value = `Writing chapter ${targetChapter.index + 1}...`
+
+    const generated = await (pipeline ?? new StoryPipeline()).generateChapterDraft(
+      project,
+      targetChapterIndex,
+      appendStreamToken,
+      async (intermediateChapter) => {
+        const latestProject = validateProject(projectId)
+        const chapters = latestProject.chapters.map((chapter) =>
+          chapter.id === targetChapter.id ? intermediateChapter : chapter
+        )
+        await applyProjectUpdate(projectId, { chapters })
+      }
+    )
+    const latestProject = validateProject(projectId)
+    const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
+    const nextAction = getNextAction({ ...latestProject, chapters })
+    await applyProjectUpdate(projectId, {
+      chapters,
+      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
+    })
+    markCompleted('writing')
+    currentStage.value = nextAction.stage
+    currentChapterIndex.value = null
+    return generated
+  }
+
+  async function generateChapterDraft(projectId: string, chapterId?: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
-    const targetChapterIndex = resolveChapterIndex(project, 'writing')
+    const targetChapterIndex = chapterId
+      ? resolveChapterIndexById(project, chapterId)
+      : resolveChapterIndex(project, 'writing')
     if (targetChapterIndex < 0) {
+      finishRun()
       throw new Error('No chapter is currently ready for writing')
     }
 
     try {
-      currentStage.value = 'writing'
-      progressMessage.value = `Writing chapter ${targetChapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).generateChapterDraft(project, targetChapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
-      const nextAction = getNextAction({ ...project, chapters })
-      await applyProjectUpdate(projectId, {
-        chapters,
-        generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-      })
-      markCompleted('writing')
-      currentStage.value = nextAction.stage
-      return generated
+      return await generateChapterDraftAt(projectId, targetChapterIndex)
     } catch (error: any) {
       addError('writing', error?.message || 'Writing failed')
       throw error
@@ -263,27 +313,38 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function proofreadChapter(projectId: string) {
+  async function generateAllChapterDrafts(projectId: string) {
+    resetRunState(projectId)
+    try {
+      while (!cancelled.value) {
+        const project = validateProject(projectId)
+        const action = getNextAction(project)
+        if (action.stage !== 'writing') return project
+        streamContent.value = ''
+        await generateChapterDraftAt(projectId, action.chapterIndex)
+      }
+      return validateProject(projectId)
+    } catch (error: any) {
+      addError('writing', error?.message || 'Writing failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function proofreadChapter(projectId: string, chapterId?: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
-    const targetChapterIndex = resolveChapterIndex(project, 'proofreading')
+    const targetChapterIndex = chapterId
+      ? resolveChapterIndexById(project, chapterId)
+      : resolveChapterIndex(project, 'proofreading')
     if (targetChapterIndex < 0) {
+      finishRun()
       throw new Error('No chapter is currently ready for proofreading')
     }
 
     try {
-      currentStage.value = 'proofreading'
-      progressMessage.value = `Proofreading chapter ${targetChapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).proofreadChapter(project, targetChapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
-      const nextAction = getNextAction({ ...project, chapters })
-      await applyProjectUpdate(projectId, {
-        chapters,
-        generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-      })
-      markCompleted('proofreading')
-      currentStage.value = nextAction.stage
-      return generated
+      return await proofreadChapterAt(projectId, targetChapterIndex)
     } catch (error: any) {
       addError('proofreading', error?.message || 'Proofreading failed')
       throw error
@@ -292,28 +353,102 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function polishChapter(projectId: string) {
+  async function proofreadChapterAt(projectId: string, targetChapterIndex: number) {
+    const project = validateProject(projectId)
+    const targetChapter = project.chapters[targetChapterIndex]
+    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
+
+    currentStage.value = 'proofreading'
+    currentChapterIndex.value = targetChapterIndex
+    progressMessage.value = `Proofreading chapter ${targetChapter.index + 1}...`
+    const generated = await (pipeline ?? new StoryPipeline()).proofreadChapter(project, targetChapterIndex, appendStreamToken)
+    const latestProject = validateProject(projectId)
+    const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
+    const nextAction = getNextAction({ ...project, chapters })
+    await applyProjectUpdate(projectId, {
+      chapters,
+      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
+    })
+    markCompleted('proofreading')
+    currentStage.value = nextAction.stage
+    currentChapterIndex.value = null
+    return generated
+  }
+
+  async function proofreadAllChapters(projectId: string) {
+    resetRunState(projectId)
+    try {
+      while (!cancelled.value) {
+        const project = validateProject(projectId)
+        const action = getNextAction(project)
+        if (action.stage !== 'proofreading') return project
+        streamContent.value = ''
+        await proofreadChapterAt(projectId, action.chapterIndex)
+      }
+      return validateProject(projectId)
+    } catch (error: any) {
+      addError('proofreading', error?.message || 'Proofreading failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function polishChapter(projectId: string, chapterId?: string) {
     resetRunState(projectId)
     const project = validateProject(projectId)
-    const targetChapterIndex = resolveChapterIndex(project, 'polishing')
+    const targetChapterIndex = chapterId
+      ? resolveChapterIndexById(project, chapterId)
+      : resolveChapterIndex(project, 'polishing')
     if (targetChapterIndex < 0) {
+      finishRun()
       throw new Error('No chapter is currently ready for polishing')
     }
 
     try {
-      currentStage.value = 'polishing'
-      progressMessage.value = `Polishing chapter ${targetChapterIndex + 1}...`
-      const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken)
-      const chapters = project.chapters.map((chapter, index) => index === targetChapterIndex ? generated : chapter)
-      const nextAction = getNextAction({ ...project, chapters })
-      await applyProjectUpdate(projectId, {
-        chapters,
-        generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-        status: chapters.every(ch => ch.status === 'polished') ? 'completed' : project.status,
-      })
-      markCompleted('polishing')
-      currentStage.value = nextAction.stage === 'done' ? 'done' : nextAction.stage
-      return generated
+      return await polishChapterAt(projectId, targetChapterIndex)
+    } catch (error: any) {
+      addError('polishing', error?.message || 'Polishing failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function polishChapterAt(projectId: string, targetChapterIndex: number) {
+    const project = validateProject(projectId)
+    const targetChapter = project.chapters[targetChapterIndex]
+    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
+
+    currentStage.value = 'polishing'
+    currentChapterIndex.value = targetChapterIndex
+    progressMessage.value = `Polishing chapter ${targetChapter.index + 1}...`
+    const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken)
+    const latestProject = validateProject(projectId)
+    const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
+    const nextAction = getNextAction({ ...project, chapters })
+    await applyProjectUpdate(projectId, {
+      chapters,
+      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
+      status: chapters.every(ch => ch.status === 'polished') ? 'completed' : latestProject.status,
+    })
+    markCompleted('polishing')
+    currentStage.value = nextAction.stage === 'done' ? 'done' : nextAction.stage
+    currentChapterIndex.value = null
+    return generated
+  }
+
+  async function polishAllChapters(projectId: string) {
+    resetRunState(projectId)
+    try {
+      while (!cancelled.value) {
+        const project = validateProject(projectId)
+        const action = getNextAction(project)
+        if (action.stage !== 'polishing') return project
+        streamContent.value = ''
+        await polishChapterAt(projectId, action.chapterIndex)
+      }
+      return validateProject(projectId)
     } catch (error: any) {
       addError('polishing', error?.message || 'Polishing failed')
       throw error
@@ -323,9 +458,14 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   async function generateAll(projectId: string) {
-    resetRunState(projectId)
+    resetRunState(projectId, true)
     const projectStore = useProjectStore()
     const project = validateProject(projectId)
+    const initialAction = getNextAction(project)
+    if (initialAction.stage !== 'done') {
+      currentStage.value = initialAction.stage
+      currentChapterIndex.value = 'chapterIndex' in initialAction ? initialAction.chapterIndex : null
+    }
     try {
       const currentPipeline = pipeline ?? new StoryPipeline()
       pipeline = currentPipeline
@@ -333,6 +473,7 @@ export const useGenerationStore = defineStore('generation', () => {
         onStageChange: stage => {
           currentStage.value = stage as GenerationStage
           streamContent.value = ''
+          currentChapterIndex.value = null
           if (stage !== 'done') markCompleted(stage as GenerationStage)
         },
         onProgress: message => {
@@ -341,7 +482,8 @@ export const useGenerationStore = defineStore('generation', () => {
         onError: error => {
           addError(currentStage.value, error)
         },
-        onChapterStart: () => {
+        onChapterStart: index => {
+          currentChapterIndex.value = index
           streamContent.value = ''
         },
         onChapterComplete: () => {},
@@ -356,8 +498,11 @@ export const useGenerationStore = defineStore('generation', () => {
       if (!saved) {
         throw new Error('Failed to persist generated project')
       }
-      completedStages.value = new Set(stageOrder)
-      currentStage.value = 'done'
+      if (!cancelled.value && getNextAction(updated).stage === 'done') {
+        completedStages.value = new Set(stageOrder)
+        currentStage.value = 'done'
+      }
+      currentChapterIndex.value = null
       return updated
     } finally {
       finishRun()
@@ -390,7 +535,9 @@ export const useGenerationStore = defineStore('generation', () => {
     cancelled.value = true
     pipeline?.cancel()
     isGenerating.value = false
+    isFollowingMode.value = false
     currentStage.value = 'idle'
+    currentChapterIndex.value = null
     progressMessage.value = ''
     streamContent.value = ''
     pipeline = null
@@ -578,6 +725,8 @@ export const useGenerationStore = defineStore('generation', () => {
     progressMessage,
     streamContent,
     errors,
+    isFollowingMode,
+    currentChapterIndex,
     completedStages,
     isStageComplete,
     getNextAction,
@@ -586,6 +735,7 @@ export const useGenerationStore = defineStore('generation', () => {
     generateStoryPlan,
     generateChapterPlan,
     generateChapterDraft,
+    generateAllChapterDrafts,
     proofreadChapter,
     polishChapter,
     generateAll,

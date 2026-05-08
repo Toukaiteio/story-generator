@@ -80,7 +80,9 @@ function buildFixInstruction(items: ChapterAuditIssue[]) {
 
   return [
     'Fix the following Editing AI findings in the current chapter.',
-    'Preserve the chapter plan, characters, relationship continuity, and Markdown formatting.',
+    props.writingFormat === 'markdown'
+      ? 'Preserve the chapter plan, characters, relationship continuity, and Markdown formatting.'
+      : 'Preserve the chapter plan, characters, and relationship continuity. Output Plain Text by default; do not add Markdown headings, chapter title lines, or chapter number lines unless the Writing Style Guide explicitly requires them.',
     'Return the full revised chapter content through the replace_chapter_content tool.',
     '',
     issueText,

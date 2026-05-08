@@ -83,6 +83,9 @@ function buildContextPrompt(): string {
   const ctx = props.context || {}
   const parts: string[] = []
   if (ctx.outline) parts.push(`Outline:\n${ctx.outline}`)
+  if (ctx.writingStyle) {
+    parts.push(`Writing Style Guide (higher priority than Content Format):\n${ctx.writingStyle}`)
+  }
   if (ctx.chapter) {
     parts.push([
       'The application has already selected the current chapter. Edit only this chapter; do not choose or request another chapter.',
@@ -98,6 +101,7 @@ function buildContextPrompt(): string {
 }
 
 function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: string) {
+  const ctx = props.context || {}
   if (props.mode !== 'editor-agent') {
     return contextPrompt
       ? `${systemPrompt}\n\nContext:\n${contextPrompt}\n\nUser: ${userMessage}`
@@ -109,7 +113,10 @@ function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: s
     'Rules:',
     '- Apply the user request to the current chapter content.',
     '- Preserve the original language, names, continuity, and chapter intent unless the user explicitly asks otherwise.',
-    '- Preserve Markdown structure when the current content is Markdown. If the request is about Markdown, normalize headings, lists, emphasis, blockquotes, and spacing.',
+    '- Writing Style Guide has higher priority than Content Format. If they conflict, follow the Writing Style Guide.',
+    ctx.writingFormat === 'markdown'
+      ? '- Preserve Markdown structure. Normalize headings, lists, emphasis, blockquotes, and spacing only when the request requires it.'
+      : '- Output Plain Text by default. Do not use Markdown syntax, headings, lists, code fences, chapter title lines, or chapter number lines unless the Writing Style Guide explicitly requires them.',
     '- Return only the full updated chapter content. Do not include analysis, summaries, labels, markdown code fences, or before/after notes.',
     contextPrompt ? `Context:\n${contextPrompt}` : '',
     `User Request:\n${userMessage}`,

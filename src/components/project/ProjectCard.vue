@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Calendar, BookOpen, MoreVertical, Trash2, FolderOpen, FileDown, Link, Unlink, RefreshCw } from 'lucide-vue-next'
+import { Calendar, BookOpen, MoreVertical, Trash2, FolderOpen, FileDown, Link, Unlink, RefreshCw, Search } from 'lucide-vue-next'
 import type { StoryProject } from '@/types/project'
 import type { ProjectExportBinding } from '@/services/projectExportSync'
 import BaseTag from '@/components/ui/BaseTag.vue'
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   bindExportDirectory: [id: string]
   syncExport: [id: string]
   unbindExportDirectory: [id: string]
+  reveal: [path: string]
 }>()
 
 const statusVariant = computed(() => {
@@ -46,6 +47,7 @@ const formattedDate = computed(() => {
 
 const dropdownItems = computed(() => [
   { label: 'Open', icon: FolderOpen, action: () => emit('open', props.project.id) },
+  { label: 'Reveal in Explorer', icon: Search, action: () => emit('reveal', props.project.directoryPath) },
   { label: exportBinding.value ? 'Rebind Export Directory' : 'Bind Export Directory', icon: Link, action: () => emit('bindExportDirectory', props.project.id) },
   { label: 'Sync Export Now', icon: RefreshCw, disabled: !exportBinding.value || props.isExportSyncing, action: () => emit('syncExport', props.project.id) },
   ...(exportBinding.value ? [{ label: 'Unbind Export Directory', icon: Unlink, danger: true, action: () => emit('unbindExportDirectory', props.project.id) }] : []),

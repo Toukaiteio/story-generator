@@ -3,7 +3,7 @@ import type { Character } from '@/types/character'
 import type { CharacterRelationshipEvent, ExtractedRelationshipEvent } from '@/types/relationship'
 import { getAgent } from '@/services/agent'
 import { extractJsonPayload } from '@/services/agent/validation'
-import { buildCharacterContext } from './context'
+import { buildCharacterContextForTask } from './context'
 import { buildRelationshipContext } from '@/services/relationship/context'
 import { buildKnowledgeContextForProject, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
 import { generateId } from '@/lib/id'
@@ -308,7 +308,7 @@ export function toRelationshipEvents(
     events.push({
       id: generateId(),
       chapterId: chapter.id,
-      chapterIndex,
+      chapterIndex: chapter.index,
       fromId,
       toId,
       type: extracted.type ?? 'other',
@@ -340,12 +340,14 @@ export async function extractRelationshipEventsForChapter(
 ): Promise<CharacterRelationshipEvent[]> {
   const chapter = project.chapters[chapterIndex]
   if (!chapter?.content?.trim()) return []
+  const chapterNumber = chapter.index + 1
 
   const context: Record<string, any> = {
     chapterIndex,
+    chapterNumber,
     chapterTitle: chapter.title,
-    characters: buildCharacterContext(project.characters),
-    previousRelationships: buildRelationshipContext(project, chapterIndex - 1),
+    characters: buildCharacterContextForTask(project.characters, 'planning'),
+    previousRelationships: buildRelationshipContext(project, chapter.index - 1),
     chapterContent: chapter.content,
     project,
     language: project.language,
@@ -482,7 +484,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
       synopsis: draft.synopsis,
       targetReader: project.targetReader,
       language: project.language,
-      existingCharacters: buildCharacterContext(project.characters),
+      existingCharacters: buildCharacterContextForTask(project.characters, 'planning'),
       characterSignals: draft.characterSignals,
       preferredCount: getPreferredCharacterCount(project),
       knowledgeContext,
@@ -515,7 +517,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
     title: draft.title,
     synopsis: draft.synopsis,
     outline: draft.outline,
-    characters: buildCharacterContext(characters.length ? characters : project.characters),
+    characters: buildCharacterContextForTask(characters.length ? characters : project.characters, 'outlining'),
     characterSignals: draft.characterSignals,
   }
 
@@ -593,7 +595,7 @@ export async function generateCharacters(project: StoryProject) {
     outline: project.outline,
     targetReader: project.targetReader,
     language: project.language,
-    existingCharacters: buildCharacterContext(project.characters),
+    existingCharacters: buildCharacterContextForTask(project.characters, 'planning'),
     preferredCount: getPreferredCharacterCount(project),
     knowledgeContext,
   }

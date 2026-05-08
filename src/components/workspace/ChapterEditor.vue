@@ -4,6 +4,7 @@ import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
 import { detectMarkdown, markdownToHtml } from '@/services/markdown'
 import { buildRelationshipContext } from '@/services/relationship/context'
+import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import VibeAssistant from '@/components/workspace/VibeAssistant.vue'
@@ -39,12 +40,18 @@ watch(chapter, (ch) => {
 
 async function save() {
   if (!chapter.value || !project.value) return
+  const nextContent = sanitizeGeneratedChapterContent(content.value, {
+    writingFormat: project.value.writingFormat,
+    writingStyle: project.value.style,
+    chapterTitle: title.value,
+    chapterNumber: chapter.value.index + 1,
+  })
+  content.value = nextContent
   const chapters = project.value.chapters.map(ch =>
-    ch.id === props.chapterId ? { ...ch, title: title.value, content: content.value } : ch
+    ch.id === props.chapterId ? { ...ch, title: title.value, content: nextContent } : ch
   )
   const saved = await projectStore.updateProject(project.value.id, {
     chapters,
-    writingFormat: isMarkdownContent.value ? 'markdown' : project.value.writingFormat,
   })
   if (!saved) {
     toast.error('Failed to save chapter')
@@ -84,14 +91,13 @@ const wordCount = computed(() => {
   return text.trim() ? text.trim().split(/\s+/).length : 0
 })
 
-const isMarkdownContent = computed(() =>
-  project.value?.writingFormat === 'markdown' || detectMarkdown(content.value)
-)
+const isMarkdownContent = computed(() => project.value?.writingFormat === 'markdown')
 
 const renderedContent = computed(() => markdownToHtml(content.value))
 
 const vibeContext = computed(() => ({
   writingFormat: isMarkdownContent.value ? 'markdown' : 'plaintext',
+  writingStyle: project.value?.style ?? '',
   outline: project.value?.outline ?? '',
   chapter: chapter.value
     ? {
@@ -120,8 +126,17 @@ const relationshipContext = computed(() => {
 })
 
 function applyVibeContent(nextContent: string) {
-  content.value = nextContent
-  if (detectMarkdown(nextContent)) viewMode.value = 'preview'
+  if (!project.value || !chapter.value) {
+    content.value = nextContent
+    return
+  }
+  content.value = sanitizeGeneratedChapterContent(nextContent, {
+    writingFormat: project.value.writingFormat,
+    writingStyle: project.value.style,
+    chapterTitle: title.value,
+    chapterNumber: chapter.value.index + 1,
+  })
+  if (project.value.writingFormat === 'markdown' && detectMarkdown(content.value)) viewMode.value = 'preview'
 }
 
 async function sendToVibe(instruction: string) {

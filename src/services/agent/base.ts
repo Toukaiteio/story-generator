@@ -69,6 +69,15 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
   }
 
   /**
+   * Controls whether tool-call rounds should be streamed to the UI.
+   * Writers can disable this so the chapter only appears once the full
+   * multi-round task is complete.
+   */
+  protected shouldStreamToolProgress(_context: Record<string, any>): boolean {
+    return true
+  }
+
+  /**
    * Returns the textual content populated by tool calls, when the agent's output
    * should come from function arguments rather than a final assistant message.
    */
@@ -221,6 +230,8 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
     let lastProgressKey = this.getToolProgressKey(context)
     let stalledToolRounds = 0
     const maxStalledToolRounds = 3
+    const streamToolProgress = this.shouldStreamToolProgress(context)
+    let lastStreamedToolContent = ''
 
     while (true) {
       let result: FunctionCallingResponse
@@ -237,11 +248,15 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
           {
             onToken: (token) => {
               roundContent += token
-              onToken(token)
+              if (streamToolProgress) {
+                onToken(token)
+              }
             },
             onToolCall: (toolCall) => {
               roundToolCalls.push(toolCall)
-              onToken(`\n[Agent using tool: ${toolCall.name}...]\n`)
+              if (streamToolProgress) {
+                onToken(`\n[Agent using tool: ${toolCall.name}...]\n`)
+              }
             },
             onToolResult: () => {}, // Handled manually below
             onComplete: (response) => {
@@ -307,9 +322,22 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
             content: toolResult.content,
           })
           
-          if (onToken) {
+          if (onToken && streamToolProgress) {
             const summary = this.formatToolResultSummary(toolCall, toolResult)
             onToken(`\n${summary}\n`)
+          }
+
+          if (onToken && streamToolProgress) {
+            const currentToolContent = this.getToolResultContent(context)
+            if (typeof currentToolContent === 'string' && currentToolContent.length > lastStreamedToolContent.length) {
+              const delta = currentToolContent.slice(lastStreamedToolContent.length)
+              if (delta) {
+                onToken(delta)
+              }
+              lastStreamedToolContent = currentToolContent
+            } else if (typeof currentToolContent === 'string') {
+              lastStreamedToolContent = currentToolContent
+            }
           }
         } catch (error: any) {
           currentMessages.push({
@@ -318,7 +346,7 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
             content: `Error: ${error.message}`,
           })
           
-          if (onToken) {
+          if (onToken && streamToolProgress) {
             onToken(`\n[Error in tool ${toolCall.name}: ${error.message}]\n`)
           }
         }

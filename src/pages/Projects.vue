@@ -43,6 +43,22 @@ function handleOpen(id: string) {
   router.push(`/workspace/${id}`)
 }
 
+async function handleReveal(path: string) {
+  if (!path) {
+    toast.error('Project directory not found')
+    return
+  }
+  
+  if (window.electronAPI?.shell?.reveal) {
+    const success = await window.electronAPI.shell.reveal(path)
+    if (!success) {
+      toast.error('Failed to reveal directory')
+    }
+  } else {
+    toast.error('Reveal in Explorer is only available in the Electron desktop app')
+  }
+}
+
 function getProjectExportBinding(projectId: string): ProjectExportBinding | null {
   return projectStore.getProjectExportBinding(projectId)
 }
@@ -231,6 +247,7 @@ async function handleImportProjectFile() {
             :export-binding="getProjectExportBinding(project.id)"
             :is-export-syncing="projectStore.exportSyncingProjectIds.includes(project.id)"
             @open="handleOpen"
+            @reveal="handleReveal"
             @bind-export-directory="handleBindExportDirectory"
             @sync-export="handleSyncExport"
             @unbind-export-directory="handleUnbindExportDirectory"

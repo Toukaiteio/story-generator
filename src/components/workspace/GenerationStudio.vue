@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/project'
 import { useGenerationStore } from '@/stores/generation'
 import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
+import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import type { Character } from '@/types/character'
 import type { Chapter } from '@/types/chapter'
 import type { GenerationStage } from '@/types/project'
@@ -65,9 +66,12 @@ const vibeContext = computed(() => {
   if (project.value) {
     ctx.outline = outlineDraft.value
     ctx.characters = charactersDraft.value.map(c => `${c.name} (${c.role}): ${c.personality.join(', ')}`).join('\n')
+    ctx.writingFormat = project.value.writingFormat
+    ctx.writingStyle = project.value.style
   }
   if (selectedChapter.value && (activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing')) {
     ctx.chapter = {
+      index: selectedChapter.value.index,
       title: selectedChapter.value.title,
       content: selectedChapter.value.content,
       proofreadContent: selectedChapter.value.proofreadContent,
@@ -88,7 +92,14 @@ function handleVibeApply(content: string) {
     }
   } else if (activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing') {
     if (selectedChapter.value) {
-      updateCurrentChapterText(content)
+      updateCurrentChapterText(project.value
+        ? sanitizeGeneratedChapterContent(content, {
+          writingFormat: project.value.writingFormat,
+          writingStyle: project.value.style,
+          chapterTitle: selectedChapter.value.title,
+          chapterNumber: selectedChapter.value.index + 1,
+        })
+        : content)
     }
   }
 }
@@ -102,16 +113,18 @@ function cloneCharacters(value: Character[]) {
 }
 
 function cloneChapters(value: Chapter[]) {
-  return value.map(chapter => ({
-    ...chapter,
-    outline: {
-      ...chapter.outline,
-      keyEvents: [...chapter.outline.keyEvents],
-      characterActions: [...chapter.outline.characterActions],
-      infoReveals: [...chapter.outline.infoReveals],
-    },
-    characterStateUpdates: { ...chapter.characterStateUpdates },
-  }))
+  return [...value]
+    .sort((a, b) => a.index - b.index)
+    .map(chapter => ({
+      ...chapter,
+      outline: {
+        ...chapter.outline,
+        keyEvents: [...chapter.outline.keyEvents],
+        characterActions: [...chapter.outline.characterActions],
+        infoReveals: [...chapter.outline.infoReveals],
+      },
+      characterStateUpdates: { ...chapter.characterStateUpdates },
+    }))
 }
 
 function createEmptyCharacter(): Character {
@@ -205,6 +218,10 @@ const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
 })
 
 const nextAction = computed(() => project.value ? genStore.getNextAction(project.value) : { stage: 'done' as const })
+const nextActionChapterNumber = computed(() => {
+  if (!project.value || !('chapterIndex' in nextAction.value)) return null
+  return (project.value.chapters[nextAction.value.chapterIndex]?.index ?? nextAction.value.chapterIndex) + 1
+})
 
 function syncFromProject() {
   if (!project.value) return
@@ -223,7 +240,11 @@ function syncFromProject() {
   }
 }
 
-watch(project, syncFromProject, { immediate: true, deep: true })
+watch(project, () => {
+  if (genStore.isGenerating) syncFromProject()
+}, { deep: true })
+
+watch(() => project.value?.id, syncFromProject, { immediate: true })
 watch(() => ui.activeWorkspaceNode, (node) => {
   if (!node?.startsWith('generation-')) return
   const key = node.replace('generation-', '') as StageKey
@@ -297,9 +318,20 @@ async function generateChapterPlanStage() {
 async function generateCurrentChapterDraft() {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.generateChapterDraft(project.value.id)
+    await genStore.generateChapterDraft(project.value.id, selectedChapterId.value)
     syncFromProject()
     toast.success('Chapter draft generated')
+  } catch (error: any) {
+    toast.error(error?.message || 'Writing failed')
+  }
+}
+
+async function generateAllChapterDrafts() {
+  if (!project.value || genStore.isGenerating) return
+  try {
+    await genStore.generateAllChapterDrafts(project.value.id)
+    syncFromProject()
+    toast.success('All chapter drafts generated')
   } catch (error: any) {
     toast.error(error?.message || 'Writing failed')
   }
@@ -308,9 +340,20 @@ async function generateCurrentChapterDraft() {
 async function proofreadCurrentChapter() {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.proofreadChapter(project.value.id)
+    await genStore.proofreadChapter(project.value.id, selectedChapterId.value)
     syncFromProject()
     toast.success('Chapter proofread')
+  } catch (error: any) {
+    toast.error(error?.message || 'Proofreading failed')
+  }
+}
+
+async function proofreadAllChapters() {
+  if (!project.value || genStore.isGenerating) return
+  try {
+    await genStore.proofreadAllChapters(project.value.id)
+    syncFromProject()
+    toast.success('All chapters proofread')
   } catch (error: any) {
     toast.error(error?.message || 'Proofreading failed')
   }
@@ -319,9 +362,20 @@ async function proofreadCurrentChapter() {
 async function polishCurrentChapter() {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   try {
-    await genStore.polishChapter(project.value.id)
+    await genStore.polishChapter(project.value.id, selectedChapterId.value)
     syncFromProject()
     toast.success('Chapter polished')
+  } catch (error: any) {
+    toast.error(error?.message || 'Polishing failed')
+  }
+}
+
+async function polishAllChapters() {
+  if (!project.value || genStore.isGenerating) return
+  try {
+    await genStore.polishAllChapters(project.value.id)
+    syncFromProject()
+    toast.success('All chapters polished')
   } catch (error: any) {
     toast.error(error?.message || 'Polishing failed')
   }
@@ -361,6 +415,7 @@ function performClearChapter() {
     if (activeStage.value === 'writing') chapter.content = ''
     else if (activeStage.value === 'proofreading') chapter.proofreadContent = ''
     else if (activeStage.value === 'polishing') chapter.polishedContent = ''
+    saveChapters()
     toast.success('Chapter content cleared')
   }
   chapterToDeleteId.value = null
@@ -442,7 +497,7 @@ function updateCurrentChapterText(text: string) {
             <span class="text-[10px] font-bold text-text-secondary uppercase tracking-wider">Next:</span>
             <span class="text-[10px] font-medium text-text-primary">
               {{ nextAction.stage }}
-              <span v-if="'chapterIndex' in nextAction" class="text-accent ml-0.5">#{{ nextAction.chapterIndex + 1 }}</span>
+              <span v-if="nextActionChapterNumber" class="text-accent ml-0.5">#{{ nextActionChapterNumber }}</span>
             </span>
             <div v-if="genStore.progressMessage" class="h-3 w-px bg-surface-4 mx-1"></div>
             <span v-if="genStore.progressMessage" class="text-[10px] text-text-muted truncate max-w-[120px]">{{ genStore.progressMessage }}</span>
@@ -604,7 +659,7 @@ function updateCurrentChapterText(text: string) {
                     </div>
                     <div class="space-y-4">
                       <BaseTextarea :model-value="selectedChapter.outline.keyEvents.join('\n')" label="Plot Beats" :rows="4" @update:model-value="selectedChapter.outline.keyEvents = parseList($event)" />
-                      <BaseTextarea :model-value="selectedChapter.outline.characterActions.join('\n')" label="Character Actions" :rows="4" @update:model-value="selectedCharacter.outline.characterActions = parseList($event)" />
+                      <BaseTextarea :model-value="selectedChapter.outline.characterActions.join('\n')" label="Character Actions" :rows="4" @update:model-value="selectedChapter.outline.characterActions = parseList($event)" />
                       <BaseTextarea :model-value="selectedChapter.outline.infoReveals.join('\n')" label="Reveals" :rows="4" @update:model-value="selectedChapter.outline.infoReveals = parseList($event)" />
                     </div>
                   </div>
@@ -627,7 +682,17 @@ function updateCurrentChapterText(text: string) {
                 @click="activeStage === 'writing' ? generateCurrentChapterDraft() : activeStage === 'proofreading' ? proofreadCurrentChapter() : polishCurrentChapter()"
               >
                 <Sparkles :size="14" class="mr-1.5" />
-                <span>{{ activeStage === 'writing' ? 'Generate' : activeStage === 'proofreading' ? 'Proofread' : 'Polish' }}</span>
+                <span>{{ activeStage === 'writing' ? 'Generate' : activeStage === 'proofreading' ? 'Proofread' : 'Polish' }} Current</span>
+              </BaseButton>
+              <BaseButton 
+                variant="secondary" 
+                size="sm" 
+                class="!h-8" 
+                :loading="genStore.isGenerating" 
+                @click="activeStage === 'writing' ? generateAllChapterDrafts() : activeStage === 'proofreading' ? proofreadAllChapters() : polishAllChapters()"
+              >
+                <Sparkles :size="14" class="mr-1.5" />
+                <span>{{ activeStage === 'writing' ? 'Generate' : activeStage === 'proofreading' ? 'Proofread' : 'Polish' }} All</span>
               </BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />Save</BaseButton>
             </div>

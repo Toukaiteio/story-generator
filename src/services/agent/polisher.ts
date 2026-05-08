@@ -3,6 +3,7 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, countWords } from './validation'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
+import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 
 export class PolisherExpert extends BaseAgent {
   type: AgentType = 'polisher'
@@ -36,7 +37,12 @@ export class PolisherExpert extends BaseAgent {
 
     if (toolCall.name === 'polish_chapter') {
       // Store the polished content in context
-      context._polishedContent = toolCall.arguments.polishedContent
+      context._polishedContent = sanitizeGeneratedChapterContent(String(toolCall.arguments.polishedContent ?? ''), {
+        writingFormat: context.writingFormat,
+        writingStyle: context.style,
+        chapterTitle: context.chapterTitle,
+        chapterNumber: context.chapterNumber,
+      })
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({ success: true, message: 'Chapter polished successfully', wordCount: countWords(toolCall.arguments.polishedContent) }),
@@ -65,18 +71,20 @@ Preserve the story meaning and chapter structure.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, language, style, knowledgeContext } = context
+    const { content, chapterTitle, chapterNumber, language, style, knowledgeContext, writingFormat } = context
 
     return `Polish and enhance the following chapter:
 
-**Chapter: ${chapterTitle}**
-**Primary Language:** ${language || 'English'}
-${style ? `**Target Style Guide:**\n${style}` : '**Target Style:** Maintain a style consistent with the genre and target reader.'}
+Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
+Primary Language: ${language || 'English'}
+${style ? `Target Style Guide:\n${style}` : 'Target Style: Maintain a style consistent with the genre and target reader.'}
 
-**Content to polish:**
+${buildWritingFormatInstruction(writingFormat, style)}
+
+Content to polish:
 ${content}
 
-${knowledgeContext ? `**Reference Material:**\n${knowledgeContext}\n` : ''}
+${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Relationship query tools are available. Use them sparingly when preserving a character's attitude, emotional distance, conflict, trust, or references to prior relationship events matters.
 
