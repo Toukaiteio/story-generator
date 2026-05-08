@@ -3,7 +3,7 @@ import type { KnowledgeEmbeddingConfig } from '@/types/knowledge'
 import { searchChunks } from './search'
 import { searchVectorChunks, mergeSearchResults } from './vector'
 import { createKnowledgeBase, createDocument } from './storage'
-import { chunkText } from './chunker'
+import { chunkText, estimateTokens } from './chunker'
 import { createTextEmbedding } from './embeddings'
 
 function allChunks(kb: KnowledgeBase) {
@@ -76,7 +76,7 @@ export class KnowledgeBaseService {
       fileType: updates.fileType ?? current.fileType,
       sourceName: updates.sourceName?.trim() || current.sourceName,
       updatedAt: new Date().toISOString(),
-      tokenCount: Math.ceil((typeof updates.content === 'string' ? updates.content : current.content).length / 4),
+      tokenCount: estimateTokens(typeof updates.content === 'string' ? updates.content : current.content),
     }
 
     next.chunks = chunkText(next.content, next.id)

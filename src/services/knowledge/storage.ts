@@ -1,7 +1,7 @@
 import type { DocumentChunk, KnowledgeBase, KnowledgeDocument } from '@/types/knowledge'
 import type { KnowledgeBaseMode, KnowledgeEmbeddingConfig, KnowledgeEmbeddingStatus } from '@/types/knowledge'
 import { generateId } from '@/lib/id'
-import { chunkText } from './chunker'
+import { chunkText, estimateTokens } from './chunker'
 import { decodeProviderModelRef } from '@/services/provider/catalog'
 
 function normalizeEmbeddingConfig(value: any): KnowledgeEmbeddingConfig {
@@ -68,7 +68,7 @@ export function createDocument(
     sourceName: options.sourceName,
     content,
     chunks: [],
-    tokenCount: Math.ceil(content.length / 4),
+    tokenCount: estimateTokens(content),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
@@ -88,7 +88,7 @@ function normalizeChunk(chunk: Partial<DocumentChunk>, documentId: string, index
     embedding: Array.isArray(chunk.embedding) ? chunk.embedding.map(value => Number(value)).filter(Number.isFinite) : undefined,
     tokenCount: Number.isFinite(chunk.tokenCount) && Number(chunk.tokenCount) > 0
       ? Number(chunk.tokenCount)
-      : Math.ceil(content.length / 4),
+      : estimateTokens(content),
   }
 }
 
@@ -110,7 +110,7 @@ function normalizeDocument(document: Partial<KnowledgeDocument>): KnowledgeDocum
     chunks,
     tokenCount: Number.isFinite(document.tokenCount) && Number(document.tokenCount) > 0
       ? Number(document.tokenCount)
-      : Math.ceil(content.length / 4),
+      : estimateTokens(content),
     createdAt: document.createdAt ?? now,
     updatedAt: document.updatedAt ?? now,
   }
