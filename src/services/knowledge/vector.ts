@@ -24,14 +24,60 @@ function cosineSimilarity(a: number[], b: number[]) {
   return dot / (Math.sqrt(magnitudeA) * Math.sqrt(magnitudeB))
 }
 
-function buildHighlight(content: string, query: string) {
-  const queryLower = query.toLowerCase().trim()
-  const contentLower = content.toLowerCase()
-  const words = queryLower.split(/\s+/).filter(word => word.length > 2)
+function isCJK(char: string): boolean {
+  const code = char.charCodeAt(0)
+  if (char.length === 2) {
+    const high = char.charCodeAt(0)
+    const low = char.charCodeAt(1)
+    const full = (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+    return (full >= 0x20000 && full <= 0x2A6DF) || (full >= 0x2F800 && full <= 0x2FA1F)
+  }
+  return (
+    (code >= 0x2E80 && code <= 0x303F) ||
+    (code >= 0x3040 && code <= 0x309F) ||
+    (code >= 0x30A0 && code <= 0x30FF) ||
+    (code >= 0x3400 && code <= 0x4DBF) ||
+    (code >= 0x4E00 && code <= 0x9FFF) ||
+    (code >= 0xAC00 && code <= 0xD7AF) ||
+    (code >= 0xFF00 && code <= 0xFFEF)
+  )
+}
+
+function hasCJK(text: string): boolean {
+  for (const char of text) {
+    if (isCJK(char)) return true
+  }
+  return false
+}
+
+function findFirstMatchIndex(contentLower: string, query: string): number {
+  if (hasCJK(query)) {
+    // For CJK, try bigrams first, then individual characters.
+    const chars: string[] = []
+    for (const char of query) {
+      if (isCJK(char)) chars.push(char)
+    }
+    for (let i = 0; i < chars.length; i++) {
+      if (i + 1 < chars.length) {
+        const idx = contentLower.indexOf(chars[i] + chars[i + 1])
+        if (idx !== -1) return idx
+      }
+      const idx = contentLower.indexOf(chars[i])
+      if (idx !== -1) return idx
+    }
+    return 0
+  }
+
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2)
   const matchWord = words.find(word => contentLower.includes(word)) ?? words[0] ?? ''
-  const matchIndex = matchWord ? contentLower.indexOf(matchWord) : 0
+  return matchWord ? contentLower.indexOf(matchWord) : 0
+}
+
+function buildHighlight(content: string, query: string) {
+  const contentLower = content.toLowerCase()
+  const matchIndex = findFirstMatchIndex(contentLower, query)
   const start = Math.max(0, matchIndex - 50)
-  const end = Math.min(content.length, matchIndex + (matchWord.length || 0) + 120)
+  const end = Math.min(content.length, matchIndex + query.length + 120)
   return `${start > 0 ? '...' : ''}${content.slice(start, end)}${end < content.length ? '...' : ''}`.trim()
 }
 
