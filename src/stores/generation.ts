@@ -159,10 +159,14 @@ export const useGenerationStore = defineStore('generation', () => {
     const writingIndex = findNextChapterPosition(project.chapters, ch => !ch.content.trim())
     if (writingIndex !== -1) return { stage: 'writing', chapterIndex: writingIndex }
 
-    const proofreadingIndex = findNextChapterPosition(project.chapters, ch => ch.content.trim() && !ch.proofreadContent.trim())
+    const proofreadingIndex = findNextChapterPosition(project.chapters, ch =>
+      ch.content.trim() && !['proofread', 'polishing', 'polished'].includes(ch.status)
+    )
     if (proofreadingIndex !== -1) return { stage: 'proofreading', chapterIndex: proofreadingIndex }
 
-    const polishingIndex = findNextChapterPosition(project.chapters, ch => (ch.proofreadContent.trim() || ch.content.trim()) && !ch.polishedContent.trim())
+    const polishingIndex = findNextChapterPosition(project.chapters, ch =>
+      ch.content.trim() && ch.status === 'proofread' && !ch.polishedContent.trim()
+    )
     if (polishingIndex !== -1) return { stage: 'polishing', chapterIndex: polishingIndex }
 
     return { stage: 'done' }
@@ -388,7 +392,7 @@ export const useGenerationStore = defineStore('generation', () => {
     if (!chapter) throw new Error(`Chapter ${chapterIndex + 1} not found`)
 
     const { proofreaderAgent } = prepareRuntime()
-    const content = chapter.proofreadContent || chapter.content
+    const content = chapter.content
     
     const segments = buildProofreadingSegments(content)
 
@@ -445,12 +449,12 @@ export const useGenerationStore = defineStore('generation', () => {
   async function fixChapterIssues(projectId: string, chapterIndex: number, issues: ChapterAuditIssue[]): Promise<string> {
     if (!issues.length) {
       const project = validateProject(projectId)
-      return project.chapters[chapterIndex]?.proofreadContent || project.chapters[chapterIndex]?.content || ''
+      return project.chapters[chapterIndex]?.content || ''
     }
 
     const project = validateProject(projectId)
     const chapter = project.chapters[chapterIndex]
-    const content = chapter.proofreadContent || chapter.content
+    const content = chapter.content
 
     const issueText = issues.map((issue, index) => [
       `${index + 1}. ${issue.title}`,
@@ -486,35 +490,18 @@ export const useGenerationStore = defineStore('generation', () => {
     currentChapterIndex.value = targetChapterIndex
     progressMessage.value = `Auditing chapter ${targetChapter.index + 1}...`
     
-    // 1. Audit
     const issues = await auditChapter(projectId, targetChapterIndex, 'proofread')
-    
-    if (issues.length > 0) {
-      progressMessage.value = `Fixing ${issues.length} issues in chapter ${targetChapter.index + 1}...`
-      // 2. Fix
-      const correctedContent = await fixChapterIssues(projectId, targetChapterIndex, issues)
-      
-      const latestProject = validateProject(projectId)
-      const chapters = latestProject.chapters.map((chapter) => 
-        chapter.id === targetChapter.id 
-          ? { ...chapter, proofreadContent: correctedContent, status: 'proofread' as const } 
-          : chapter
-      )
-      const nextAction = getNextAction({ ...project, chapters })
-      await applyProjectUpdate(projectId, {
-        chapters,
-        generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-      })
-    } else {
-      // Mark as proofread even if no issues found
-      const latestProject = validateProject(projectId)
-      const chapters = latestProject.chapters.map((chapter) => 
-        chapter.id === targetChapter.id 
-          ? { ...chapter, proofreadContent: chapter.content, status: 'proofread' as const } 
-          : chapter
-      )
-      await applyProjectUpdate(projectId, { chapters })
-    }
+    const latestProject = validateProject(projectId)
+    const chapters = latestProject.chapters.map((chapter) =>
+      chapter.id === targetChapter.id
+        ? { ...chapter, proofreadingIssues: issues, proofreadingIssuesStale: false, status: 'proofread' as const }
+        : chapter
+    )
+    const nextAction = getNextAction({ ...latestProject, chapters })
+    await applyProjectUpdate(projectId, {
+      chapters,
+      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
+    })
 
     markCompleted('proofreading')
     currentStage.value = 'proofreading' // Stay in proofreading stage if doing one by one
@@ -570,7 +557,22 @@ export const useGenerationStore = defineStore('generation', () => {
     currentStage.value = 'polishing'
     currentChapterIndex.value = targetChapterIndex
     progressMessage.value = `Polishing chapter ${targetChapter.index + 1}...`
-    const generated = await (pipeline ?? new StoryPipeline()).polishChapter(project, targetChapterIndex, appendStreamToken, proofreadingIssues)
+    const generated = await (pipeline ?? new StoryPipeline()).polishChapter(
+      project,
+      targetChapterIndex,
+      appendStreamToken,
+      proofreadingIssues,
+      async (intermediateChapter) => {
+        const latestProject = validateProject(projectId)
+        const chapters = latestProject.chapters.map((chapter) =>
+          chapter.id === targetChapter.id ? intermediateChapter : chapter
+        )
+        await applyProjectUpdate(projectId, {
+          chapters,
+          generationStage: 'polishing',
+        })
+      }
+    )
     const latestProject = validateProject(projectId)
     const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
     const nextAction = getNextAction({ ...project, chapters })
@@ -1316,7 +1318,7 @@ export const useGenerationStore = defineStore('generation', () => {
         ? {
             ...chapter,
             proofreadingIssues: issues,
-            proofreadContent: chapter.proofreadContent || contentFallback || chapter.content,
+            proofreadingIssuesStale: false,
             status: 'proofread' as const,
           }
         : chapter

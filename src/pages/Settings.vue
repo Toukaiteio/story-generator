@@ -12,6 +12,12 @@ const ui = useUiStore()
 const providerStore = useProviderStore()
 onMounted(() => ui.navigateTo('settings'))
 
+const issueSeverityOptions = [
+  { label: 'Low - process all issues', value: 'low' },
+  { label: 'Medium - ignore low severity', value: 'medium' },
+  { label: 'High - only process high severity', value: 'high' },
+]
+
 const langOptions = [
   { label: 'English', value: 'en' },
   { label: '中文', value: 'zh' },
@@ -23,6 +29,10 @@ function handleLanguageChange(value: any) {
 
 function handleMaxToolRoundsChange(value: string) {
   providerStore.setMaxToolCallRounds(Number(value))
+}
+
+function handleMinIssueSeverityChange(value: any) {
+  providerStore.setMinIssueSeverity(value)
 }
 
 async function handleBrowseStorage() {
@@ -89,6 +99,17 @@ async function handleBrowseStorage() {
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
               Default is 16. When a model reaches this limit without submitting a final result, the app will ask whether to continue and will auto-continue after 8 seconds.
             </p>
+            <div class="mt-4">
+              <BaseSelect
+                :model-value="providerStore.toolWorkflowSettings.minIssueSeverity"
+                label="Minimum issue severity to polish"
+                :options="issueSeverityOptions"
+                @update:model-value="handleMinIssueSeverityChange"
+              />
+              <p class="mt-2 text-xs leading-relaxed text-text-muted">
+                Default is Low. Raising this threshold marks lower-severity issues as ignored during Polish.
+              </p>
+            </div>
           </div>
         </section>
 

@@ -19,12 +19,12 @@ const stats = computed<StatItem[]>(() => {
   if (!p) return []
 
   const totalTokens = p.chapters.reduce((sum, ch) => {
-    const content = ch.polishedContent || ch.proofreadContent || ch.content
+    const content = ch.polishedContent || ch.content
     return sum + estimateTokens(content)
   }, 0)
 
   const completedChapters = p.chapters.filter(ch =>
-    ch.polishedContent || ch.proofreadContent || ch.content
+    ch.polishedContent || ch.content
   ).length
 
   return [

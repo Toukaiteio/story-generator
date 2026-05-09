@@ -37,7 +37,7 @@ const stageStatus = computed(() => {
     } else if (stage.key === 'writing') {
       done = p.chapters.length > 0 && p.chapters.every(ch => ch.content.trim())
     } else if (stage.key === 'proofreading') {
-      done = p.chapters.length > 0 && p.chapters.every(ch => ch.proofreadContent.trim())
+      done = p.chapters.length > 0 && p.chapters.every(ch => ['proofread', 'polishing', 'polished'].includes(ch.status))
     } else if (stage.key === 'polishing') {
       done = p.chapters.length > 0 && p.chapters.every(ch => ch.polishedContent.trim())
     }

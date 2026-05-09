@@ -130,6 +130,8 @@ Rules:
 - Preserve story meaning, plot, and character voices
 - Include all original content for the current input segment or chapter, just enhanced
 - When fixing, provide exact word indices and replacement text
+- When specific issues are supplied, make the minimal necessary edits for those issues only
+- Do not perform broad rewrites, scene expansion, paragraph reordering, or unrelated style changes
 
 Tools available:
 - fix_section: Polish a specific section of text
@@ -157,7 +159,7 @@ Tools available:
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}${rangeInfo}
 Language: ${language || 'English'}
 Format: ${writingFormat || 'plaintext'}
-${issuesSection || '\nNo specific issue was assigned to this segment. Polish only local prose quality.\n'}
+${issuesSection || '\nNo specific issue was assigned to this segment. Return the segment unchanged through polish_complete.\n'}
 
 Compact Character Directory:
 ${characters || 'No characters'}
@@ -167,7 +169,8 @@ ${content}
 
 Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
 
-Use fix_section to improve prose in this segment when useful. When done with this segment, call polish_complete with only the polished segment text in finalContent.
+Only change text needed to fix the listed issues or the explicit user adjustment. Do not perform broad style rewrites, do not reorder paragraphs, and do not add or remove scene content.
+Use fix_section only for targeted fixes. When done with this segment, call polish_complete with only the polished segment text in finalContent.
 For every issue listed above, include an item in issueResults using that issue id and status fixed, ignored, or failed.`
     }
 

@@ -24,11 +24,11 @@ const chapters = computed<ChapterStatus[]>(() => {
   return p.chapters.map(ch => {
     let status: ChapterStatus['status'] = 'empty'
     if (ch.polishedContent) status = 'polished'
-    else if (ch.proofreadContent) status = 'proofread'
+    else if (['proofread', 'polishing', 'polished'].includes(ch.status)) status = 'proofread'
     else if (ch.content) status = 'draft'
     else if (ch.outline.objective || ch.outline.endingHook) status = 'outline'
 
-    const content = ch.polishedContent || ch.proofreadContent || ch.content
+    const content = ch.polishedContent || ch.content
     const tokenCount = estimateTokens(content)
 
     return {

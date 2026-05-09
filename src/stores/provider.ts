@@ -22,6 +22,7 @@ const EMBEDDING_MODEL_STORAGE_KEY = 'story-generator.embedding-model-binding.v1'
 const MODEL_CONTEXT_STORAGE_KEY = 'story-generator.model-context-overrides.v1'
 const TOOL_WORKFLOW_SETTINGS_STORAGE_KEY = 'story-generator.tool-workflow-settings.v1'
 const DEFAULT_MAX_TOOL_CALL_ROUNDS = 16
+export type IssueSeverityThreshold = 'low' | 'medium' | 'high'
 
 const roleDefaults: Record<AgentType, 'expert' | 'standard'> = {
   outline: 'expert',
@@ -211,10 +212,15 @@ function normalizeMaxToolCallRounds(value: unknown) {
   return Math.max(1, Math.min(Math.trunc(rounds), 64))
 }
 
+function normalizeIssueSeverityThreshold(value: unknown): IssueSeverityThreshold {
+  return value === 'medium' || value === 'high' ? value : 'low'
+}
+
 function loadToolWorkflowSettings() {
-  const raw = readStorage<{ maxToolCallRounds?: number | string }>(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, {})
+  const raw = readStorage<{ maxToolCallRounds?: number | string; minIssueSeverity?: string }>(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, {})
   return {
     maxToolCallRounds: normalizeMaxToolCallRounds(raw.maxToolCallRounds),
+    minIssueSeverity: normalizeIssueSeverityThreshold(raw.minIssueSeverity),
   }
 }
 
@@ -835,6 +841,13 @@ export const useProviderStore = defineStore('provider', () => {
     }
   }
 
+  function setMinIssueSeverity(severity: IssueSeverityThreshold) {
+    toolWorkflowSettings.value = {
+      ...toolWorkflowSettings.value,
+      minIssueSeverity: normalizeIssueSeverityThreshold(severity),
+    }
+  }
+
   function inferContextTokensForModel(providerType: ProviderType, modelId: string): number | null {
     // Re-use the fallback tables from catalog
     const openaiTable: Record<string, number> = {
@@ -912,5 +925,6 @@ export const useProviderStore = defineStore('provider', () => {
     setModelContextTokens,
     clearModelContextTokens,
     setMaxToolCallRounds,
+    setMinIssueSeverity,
   }
 })

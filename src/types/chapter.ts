@@ -39,14 +39,23 @@ export interface ChapterProofreadingIssue {
   segmentTokenTotal?: number
 }
 
+export interface ChapterContentVersion {
+  id: ID
+  label: string
+  content: string
+  proofreadingIssues?: ChapterProofreadingIssue[]
+  createdAt: string
+}
+
 export interface Chapter extends Timestamps {
   id: ID
   index: number
   title: string
   outline: ChapterOutline
   content: string
-  proofreadContent: string
   proofreadingIssues: ChapterProofreadingIssue[]
+  proofreadingIssuesStale?: boolean
+  contentVersions: ChapterContentVersion[]
   polishedContent: string
   status: ChapterStatus
   summary: string

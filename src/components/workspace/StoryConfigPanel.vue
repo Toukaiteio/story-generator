@@ -12,6 +12,7 @@ import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import type { StoryLength, WritingFormat } from '@/types/project'
 
 const projectStore = useProjectStore()
 const providerStore = useProviderStore()
@@ -29,8 +30,8 @@ const form = reactive({
   targetReader: '',
   language: 'English',
   styleId: 'default',
-  writingFormat: 'plaintext' as const,
-  length: 'medium',
+  writingFormat: 'plaintext' as WritingFormat,
+  length: 'medium' as StoryLength,
   customRequirements: '',
 })
 
@@ -103,7 +104,7 @@ const styleOptions = computed(() => [
   ...writingStyleStore.styles.map(s => ({ label: s.name, value: s.id })),
 ])
 
-const lengthValues = new Set(lengthOptions.map(option => option.value))
+const lengthValues = new Set<StoryLength>(lengthOptions.map(option => option.value as StoryLength))
 const resolvedGenre = computed(() =>
   form.genre === 'custom'
     ? form.customGenre.trim()
@@ -120,6 +121,10 @@ function splitListInput(value: string) {
 function normalizeTextValue(value: unknown) {
   if (typeof value !== 'string') return ''
   return value.trim()
+}
+
+function isStoryLength(value: string): value is StoryLength {
+  return lengthValues.has(value as StoryLength)
 }
 
 function setGenreValue(value: unknown) {
@@ -174,7 +179,7 @@ function applyConfigPatch(payload: Record<string, any>) {
   if (nextGenre) setGenreValue(nextGenre)
   if (nextTargetReader) form.targetReader = nextTargetReader
   if (nextLanguage) form.language = nextLanguage
-  if (nextLength && lengthValues.has(nextLength)) form.length = nextLength
+  if (nextLength && isStoryLength(nextLength)) form.length = nextLength
   if (nextCustomRequirements) form.customRequirements = nextCustomRequirements
 
   if (payload.constraints && typeof payload.constraints === 'object') {

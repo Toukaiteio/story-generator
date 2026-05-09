@@ -10,7 +10,8 @@ import BaseTag from '@/components/ui/BaseTag.vue'
 import VibeAssistant from '@/components/workspace/VibeAssistant.vue'
 import EditingAssistant from '@/components/workspace/EditingAssistant.vue'
 import ProofreadingAssistant from '@/components/workspace/ProofreadingAssistant.vue'
-import { Save, Eye, EyeOff, FileText, Type, CheckCircle2, Sparkles, Clock, RotateCcw, Code2, BookOpen } from 'lucide-vue-next'
+import { Save, Eye, EyeOff, FileText, Type, Sparkles, Clock, RotateCcw, Code2, BookOpen } from 'lucide-vue-next'
+import type { Chapter, ChapterContentVersion } from '@/types/chapter'
 
 const props = defineProps<{
   chapterId: string
@@ -34,6 +35,33 @@ const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 const contentPreviewRef = ref<HTMLElement | null>(null)
 const selectedProofreadingIssue = ref<any | null>(null)
 
+function createContentVersion(label: string, versionContent: string, issues?: any[]): ChapterContentVersion {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    label,
+    content: versionContent,
+    proofreadingIssues: issues?.length ? issues.map(issue => ({ ...issue })) : undefined,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function buildChapterWithDraftUpdate(ch: Chapter, nextContent: string) {
+  const hasIssueSnapshot = Boolean(ch.proofreadingIssues?.length && ch.content !== nextContent)
+  return {
+    ...ch,
+    title: title.value,
+    content: nextContent,
+    contentVersions: hasIssueSnapshot
+      ? [
+          createContentVersion('Before draft edit - proofreading issues valid', ch.content, ch.proofreadingIssues),
+          ...(ch.contentVersions || []),
+        ]
+      : (ch.contentVersions || []),
+    proofreadingIssuesStale: hasIssueSnapshot ? true : ch.proofreadingIssuesStale,
+    status: hasIssueSnapshot ? 'draft' as const : ch.status,
+  }
+}
+
 watch(chapter, (ch) => {
   if (ch) {
     title.value = ch.title || ''
@@ -50,8 +78,11 @@ async function save() {
     chapterNumber: chapter.value.index + 1,
   })
   content.value = nextContent
+  const willStaleIssues = Boolean(chapter.value.proofreadingIssues?.length && chapter.value.content !== nextContent)
   const chapters = project.value.chapters.map(ch =>
-    ch.id === props.chapterId ? { ...ch, title: title.value, content: nextContent } : ch
+    ch.id === props.chapterId
+      ? buildChapterWithDraftUpdate(ch, nextContent)
+      : ch
   )
   const saved = await projectStore.updateProject(project.value.id, {
     chapters,
@@ -60,20 +91,45 @@ async function save() {
     toast.error('Failed to save chapter')
     return
   }
-  toast.success('Chapter saved')
+  toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
 }
 
-async function restoreVersion(versionContent: string) {
+async function restoreVersion(version: { content: string; proofreadingIssues?: any[] }) {
   if (!chapter.value || !project.value) return
-  content.value = versionContent
+  content.value = version.content
   const chapters = project.value.chapters.map(ch =>
-    ch.id === props.chapterId ? { ...ch, content: versionContent } : ch
+    ch.id === props.chapterId
+      ? {
+          ...ch,
+          content: version.content,
+          proofreadingIssues: version.proofreadingIssues ? version.proofreadingIssues.map(issue => ({ ...issue })) : ch.proofreadingIssues,
+          proofreadingIssuesStale: false,
+          status: version.proofreadingIssues?.length ? 'proofread' as const : 'draft' as const,
+        }
+      : ch
   )
   const saved = await projectStore.updateProject(project.value.id, { chapters })
   if (saved) {
     showVersions.value = false
     toast.success('Version restored to editor')
   }
+}
+
+async function deleteVersion(versionId: string) {
+  if (!chapter.value || !project.value) return
+  const chapters = project.value.chapters.map(ch =>
+    ch.id === props.chapterId
+      ? { ...ch, contentVersions: (ch.contentVersions || []).filter(version => version.id !== versionId) }
+      : ch
+  )
+  const saved = await projectStore.updateProject(project.value.id, { chapters })
+  if (saved) toast.success('Version deleted')
+}
+
+async function restoreLatestIssueSnapshot() {
+  const version = chapter.value?.contentVersions?.find(item => item.proofreadingIssues?.length)
+  if (!version) return
+  await restoreVersion(version)
 }
 
 const statusVariant = computed(() => {
@@ -161,7 +217,6 @@ function findIssueMatch(issue: any): TextMatch | null {
 
   const sources = [
     content.value,
-    chapter.value?.proofreadContent ?? '',
     chapter.value?.polishedContent ?? '',
     chapter.value?.content ?? '',
   ].filter(Boolean)
@@ -188,7 +243,6 @@ function getIssueSegmentIndex(issue: any) {
 function getContentSources() {
   return [
     content.value,
-    chapter.value?.proofreadContent ?? '',
     chapter.value?.polishedContent ?? '',
     chapter.value?.content ?? '',
   ].filter(Boolean)
@@ -236,9 +290,10 @@ const highlightedContentHtml = computed(() => {
     return `${before}<span id="proofreading-chunk-current">${target}</span>${after}`
   }
 
-  const before = escapeHtml(source.slice(0, match.start))
-  const target = escapeHtml(source.slice(match.start, match.end))
-  const after = escapeHtml(source.slice(match.end))
+  const textMatch = match as TextMatch
+  const before = escapeHtml(source.slice(0, textMatch.start))
+  const target = escapeHtml(source.slice(textMatch.start, textMatch.end))
+  const after = escapeHtml(source.slice(textMatch.end))
   return `${before}<mark class="proofreading-highlight" id="proofreading-highlight-current">${target}</mark>${after}`
 })
 
@@ -302,7 +357,7 @@ async function saveProofreadingIssues(issues: any[]) {
       ? {
           ...ch,
           proofreadingIssues: issues,
-          proofreadContent: ch.proofreadContent || content.value,
+          proofreadingIssuesStale: false,
           status: 'proofread' as const,
         }
       : ch
@@ -397,6 +452,21 @@ async function handleProofreadingIssueSelected(issue: any) {
       </div>
     </div>
 
+    <div
+      v-if="chapter.proofreadingIssuesStale"
+      class="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2 text-xs"
+    >
+      <span class="text-warning">Draft changed after proofreading. Existing issues may no longer match this text.</span>
+      <BaseButton
+        v-if="chapter.contentVersions?.some(version => version.proofreadingIssues?.length)"
+        variant="secondary"
+        size="sm"
+        @click="restoreLatestIssueSnapshot"
+      >
+        Restore issue snapshot
+      </BaseButton>
+    </div>
+
     <!-- Main Content Area -->
     <div class="flex-1 min-h-0 flex overflow-hidden bg-surface-0">
       <div class="flex-1 min-w-0 overflow-y-auto custom-scrollbar">
@@ -436,32 +506,13 @@ async function handleProofreadingIssueSelected(issue: any) {
                   <span class="text-xs font-black uppercase tracking-widest text-success">Polished Version</span>
                   <div class="h-px flex-1 bg-surface-4"></div>
                   <span class="text-[10px] font-bold text-text-muted uppercase">{{ (chapter.polishedContent.trim().split(/\s+/).length) }} words</span>
-                  <BaseButton variant="secondary" size="sm" @click="restoreVersion(chapter.polishedContent)" class="ml-4">
+                  <BaseButton variant="secondary" size="sm" @click="restoreVersion({ content: chapter.polishedContent })" class="ml-4">
                     <RotateCcw :size="14" class="mr-1.5" />
                     Restore
                   </BaseButton>
                 </div>
                 <div class="text-text-primary font-serif text-lg leading-relaxed whitespace-pre-wrap px-2">
                   {{ chapter.polishedContent }}
-                </div>
-              </div>
-
-              <!-- Proofread Version -->
-              <div v-if="chapter.proofreadContent" class="group relative">
-                <div class="flex items-center gap-3 mb-6">
-                  <div class="w-8 h-8 rounded-full bg-accent/10 text-accent flex items-center justify-center shrink-0">
-                    <CheckCircle2 :size="16" />
-                  </div>
-                  <span class="text-xs font-black uppercase tracking-widest text-accent">Proofread Version</span>
-                  <div class="h-px flex-1 bg-surface-4"></div>
-                  <span class="text-[10px] font-bold text-text-muted uppercase">{{ (chapter.proofreadContent.trim().split(/\s+/).length) }} words</span>
-                  <BaseButton variant="secondary" size="sm" @click="restoreVersion(chapter.proofreadContent)" class="ml-4">
-                    <RotateCcw :size="14" class="mr-1.5" />
-                    Restore
-                  </BaseButton>
-                </div>
-                <div class="text-text-primary font-serif text-lg leading-relaxed whitespace-pre-wrap px-2">
-                  {{ chapter.proofreadContent }}
                 </div>
               </div>
 
@@ -474,7 +525,7 @@ async function handleProofreadingIssueSelected(issue: any) {
                   <span class="text-xs font-black uppercase tracking-widest text-text-muted">Initial Draft</span>
                   <div class="h-px flex-1 bg-surface-4"></div>
                   <span class="text-[10px] font-bold text-text-muted uppercase">{{ (chapter.content.trim().split(/\s+/).length) }} words</span>
-                  <BaseButton variant="secondary" size="sm" @click="restoreVersion(chapter.content)" class="ml-4">
+                  <BaseButton variant="secondary" size="sm" @click="restoreVersion({ content: chapter.content })" class="ml-4">
                     <RotateCcw :size="14" class="mr-1.5" />
                     Restore
                   </BaseButton>
@@ -484,7 +535,44 @@ async function handleProofreadingIssueSelected(issue: any) {
                 </div>
               </div>
 
-              <div v-if="!chapter.content && !chapter.proofreadContent && !chapter.polishedContent" class="h-[40vh] flex flex-col items-center justify-center text-center">
+              <div v-if="chapter.contentVersions?.length" class="group relative">
+                <div class="flex items-center gap-3 mb-6">
+                  <div class="w-8 h-8 rounded-full bg-surface-3 text-text-muted flex items-center justify-center shrink-0">
+                    <Clock :size="16" />
+                  </div>
+                  <span class="text-xs font-black uppercase tracking-widest text-text-muted">Saved Draft Versions</span>
+                  <div class="h-px flex-1 bg-surface-4"></div>
+                </div>
+                <div class="space-y-4">
+                  <div
+                    v-for="version in chapter.contentVersions"
+                    :key="version.id"
+                    class="rounded-lg border border-surface-4 bg-surface-1 p-4"
+                  >
+                    <div class="mb-3 flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="truncate text-xs font-semibold text-text-primary">{{ version.label }}</p>
+                        <p class="text-[10px] text-text-muted">
+                          {{ new Date(version.createdAt).toLocaleString() }}
+                          <span v-if="version.proofreadingIssues?.length"> · includes proofreading issues</span>
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 gap-2">
+                        <BaseButton variant="secondary" size="sm" @click="restoreVersion(version)">
+                          <RotateCcw :size="14" />
+                          Restore
+                        </BaseButton>
+                        <BaseButton variant="danger" size="sm" @click="deleteVersion(version.id)">
+                          Delete
+                        </BaseButton>
+                      </div>
+                    </div>
+                    <p class="line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">{{ version.content }}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="!chapter.content && !chapter.polishedContent" class="h-[40vh] flex flex-col items-center justify-center text-center">
                 <div class="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 border border-surface-3">
                   <FileText :size="24" class="text-text-muted" />
                 </div>

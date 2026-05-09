@@ -137,7 +137,7 @@ async function handleExport(format: ExportFormat) {
             class="text-sm text-text-primary whitespace-pre-wrap leading-relaxed"
             style="font-family: Georgia, serif; line-height: 1.8;"
           >
-            {{ chapter.polishedContent || chapter.proofreadContent || chapter.content || 'No content yet.' }}
+            {{ chapter.polishedContent || chapter.content || 'No content yet.' }}
           </div>
         </div>
       </div>

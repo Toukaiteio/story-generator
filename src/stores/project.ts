@@ -34,10 +34,16 @@ function migrateProjectStyle(project: any): StoryProject {
     project.relationshipEvents = []
   }
   if (Array.isArray(project.chapters)) {
-    project.chapters = project.chapters.map((chapter: any) => ({
-      ...chapter,
-      proofreadingIssues: Array.isArray(chapter?.proofreadingIssues) ? chapter.proofreadingIssues : [],
-    }))
+    project.chapters = project.chapters.map((chapter: any) => {
+      const content = typeof chapter?.content === 'string' ? chapter.content : ''
+      return {
+        ...chapter,
+        content,
+        proofreadingIssues: Array.isArray(chapter?.proofreadingIssues) ? chapter.proofreadingIssues : [],
+        proofreadingIssuesStale: Boolean(chapter?.proofreadingIssuesStale),
+        contentVersions: Array.isArray(chapter?.contentVersions) ? chapter.contentVersions : [],
+      }
+    })
   }
   return project as StoryProject
 }

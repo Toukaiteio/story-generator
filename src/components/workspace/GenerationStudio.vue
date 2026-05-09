@@ -2,10 +2,11 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { generateId } from '@/lib/id'
 import { useProjectStore } from '@/stores/project'
-import { useGenerationStore } from '@/stores/generation'
+import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
 import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import type { Character } from '@/types/character'
 import type { Chapter } from '@/types/chapter'
 import type { GenerationStage } from '@/types/project'
@@ -87,7 +88,6 @@ const vibeContext = computed(() => {
       index: selectedChapter.value.index,
       title: selectedChapter.value.title,
       content: selectedChapter.value.content,
-      proofreadContent: selectedChapter.value.proofreadContent,
       polishedContent: selectedChapter.value.polishedContent,
       outline: selectedChapter.value.outline,
     }
@@ -100,6 +100,7 @@ const vibeContext = computed(() => {
 
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 const proofreadingAssistant = ref<any>(null)
+const chapterTextarea = ref<HTMLTextAreaElement | null>(null)
 const chapterProofreadingIssues = ref<Record<string, any[]>>({})
 const isQuickSubmittingPolish = ref(false)
 
@@ -135,14 +136,75 @@ async function handleProofreadingIssuesFound(issues: any[]) {
   const chapter = chaptersDraft.value.find(item => item.id === selectedChapterId.value)
   if (chapter) {
     chapter.proofreadingIssues = issues
-    chapter.proofreadContent = chapter.proofreadContent || chapter.content
     chapter.status = 'proofread'
   }
 }
 
-async function handleQuickSubmitPolish() {
+function normalizeIssueSearchText(value: string) {
+  return value.toLowerCase().replace(/\s+/g, '')
+}
+
+function findIssueRangeInText(issue: any, text: string) {
+  const excerpt = String(issue?.excerpt ?? '').trim()
+  if (excerpt) {
+    const exactIndex = text.toLowerCase().indexOf(excerpt.toLowerCase())
+    if (exactIndex >= 0) return { start: exactIndex, end: exactIndex + excerpt.length }
+
+    const normalizedExcerpt = normalizeIssueSearchText(excerpt)
+    if (normalizedExcerpt) {
+      let normalized = ''
+      const map: number[] = []
+      for (let offset = 0; offset < text.length;) {
+        const char = Array.from(text.slice(offset))[0]
+        if (!/\s/.test(char)) {
+          normalized += char.toLowerCase()
+          map.push(offset)
+        }
+        offset += char.length
+      }
+      const normalizedIndex = normalized.indexOf(normalizedExcerpt)
+      if (normalizedIndex >= 0) {
+        const start = map[normalizedIndex]
+        const endStart = map[normalizedIndex + normalizedExcerpt.length - 1]
+        return { start, end: endStart + Array.from(text.slice(endStart))[0].length }
+      }
+    }
+  }
+
+  const segmentIndex = Number.isInteger(issue?.segmentIndex)
+    ? Number(issue.segmentIndex)
+    : Number(String(issue?.id ?? '').match(/(?:^|-)part-(\d+)(?:-|$)/)?.[1] ?? 0) - 1
+  if (segmentIndex >= 0) {
+    const segment = buildProofreadingSegments(text)[segmentIndex]
+    if (segment) return { start: segment.charStart, end: segment.charEnd }
+  }
+
+  return null
+}
+
+async function handleWorkflowIssueSelected(issue: any) {
+  if (!selectedChapter.value) return
+  const text = selectedChapterText.value
+  const range = findIssueRangeInText(issue, text)
+  await nextTick()
+  const textarea = chapterTextarea.value
+  if (!textarea || !range) {
+    toast.warning('Could not locate this issue in the current chapter text.')
+    return
+  }
+
+  textarea.focus()
+  textarea.setSelectionRange(range.start, range.end)
+
+  const before = text.slice(0, range.start)
+  const line = before.split(/\r?\n/).length
+  const totalLines = Math.max(1, text.split(/\r?\n/).length)
+  textarea.scrollTop = Math.max(0, (line / totalLines) * textarea.scrollHeight - textarea.clientHeight / 2)
+}
+
+async function handleQuickSubmitPolish(issue?: ChapterAuditIssue) {
   if (isQuickSubmittingPolish.value || genStore.isGenerating) return
-  await polishCurrentChapter()
+  await polishCurrentChapter(issue)
 }
 
 async function proofreadCurrentChapter() {
@@ -192,14 +254,21 @@ async function proofreadAllChapters() {
   }
 }
 
-async function polishCurrentChapter() {
+async function polishCurrentChapter(targetIssue?: ChapterAuditIssue) {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   isQuickSubmittingPolish.value = true
   try {
     const chapter = chaptersDraft.value.find(item => item.id === selectedChapterId.value)
-    const issues = chapter?.proofreadingIssues || chapterProofreadingIssues.value[selectedChapterId.value] || []
+    const chapterIssues = chapter?.proofreadingIssues ?? chapterProofreadingIssues.value[selectedChapterId.value] ?? []
+    const issues = targetIssue
+      ? chapterIssues.map(issue => issue.id === targetIssue.id
+        ? { ...issue, ignored: false, polishStatus: issue.polishStatus === 'ignored' ? 'pending' : issue.polishStatus, forcePolish: true }
+        : { ...issue, skipPolishRun: true }
+      )
+      : chapterIssues
     // Polish with context of proofreading issues found
-    genStore.progressMessage = `Polishing chapter with ${issues.length} issue${issues.length !== 1 ? 's' : ''}...`
+    const activeIssueCount = targetIssue ? 1 : issues.filter(issue => !issue.ignored && issue.polishStatus !== 'ignored' && issue.polishStatus !== 'fixed').length
+    genStore.progressMessage = `Polishing chapter with ${activeIssueCount} issue${activeIssueCount !== 1 ? 's' : ''}...`
 
     await genStore.polishChapter(project.value.id, selectedChapterId.value, issues)
     syncFromProject()
@@ -242,7 +311,11 @@ function cloneChapters(value: Chapter[]) {
         infoReveals: [...chapter.outline.infoReveals],
       },
       characterStateUpdates: { ...chapter.characterStateUpdates },
-      proofreadingIssues: [...(chapter.proofreadingIssues || [])],
+      proofreadingIssues: (chapter.proofreadingIssues || []).map(issue => ({ ...issue })),
+      contentVersions: (chapter.contentVersions || []).map(version => ({
+        ...version,
+        proofreadingIssues: version.proofreadingIssues?.map(issue => ({ ...issue })),
+      })),
     }))
 }
 
@@ -280,8 +353,9 @@ function createEmptyChapter(index: number): Chapter {
       endingHook: '',
     },
     content: '',
-    proofreadContent: '',
     proofreadingIssues: [],
+    proofreadingIssuesStale: false,
+    contentVersions: [],
     polishedContent: '',
     status: 'outline',
     summary: '',
@@ -308,8 +382,8 @@ const selectedChapter = computed(() =>
 
 const selectedChapterText = computed(() => {
   if (!selectedChapter.value) return ''
-  if (activeStage.value === 'proofreading') return selectedChapter.value.proofreadContent || selectedChapter.value.content
-  if (activeStage.value === 'polishing') return selectedChapter.value.polishedContent || selectedChapter.value.proofreadContent || selectedChapter.value.content
+  if (activeStage.value === 'proofreading') return selectedChapter.value.content
+  if (activeStage.value === 'polishing') return selectedChapter.value.polishedContent || selectedChapter.value.content
   return selectedChapter.value.content
 })
 
@@ -318,7 +392,7 @@ const editorPlaceholder = computed(() => {
     return 'Start drafting your chapter prose here... Use the Vibe AI on the right to help with descriptions or dialogue.'
   }
   if (activeStage.value === 'proofreading') {
-    return 'Review and correct the proofread version. Click "Run Proofread" to start the AI analysis.'
+    return 'Review the draft used for proofreading. Editing this text marks existing issues as potentially stale.'
   }
   if (activeStage.value === 'polishing') {
     return 'Final polish and rhythm adjustments. Click "Polish Prose" to enhance the narrative flow.'
@@ -332,7 +406,7 @@ const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
     planning: (outlineDraft.value.trim() && charactersDraft.value.length) ? 'done' : 'todo',
     'chapter-outline': chapters.length > 0 && chapters.every(ch => ch.outline.objective.trim() || ch.outline.endingHook.trim()) ? 'done' : 'todo',
     writing: chapters.length > 0 && chapters.every(ch => ch.content.trim()) ? 'done' : 'todo',
-    proofreading: chapters.length > 0 && chapters.every(ch => ch.proofreadContent.trim()) ? 'done' : 'todo',
+    proofreading: chapters.length > 0 && chapters.every(ch => ['proofread', 'polishing', 'polished'].includes(ch.status)) ? 'done' : 'todo',
     polishing: chapters.length > 0 && chapters.every(ch => ch.polishedContent.trim()) ? 'done' : 'todo',
   }
 })
@@ -476,7 +550,7 @@ function handleDeleteChapter(id: string) {
   if (!chapter) return
   chapterToDeleteId.value = id
   if (activeStage.value === 'chapter-outline') {
-    const hasContent = chapter.content?.trim() || chapter.proofreadContent?.trim() || chapter.polishedContent?.trim()
+    const hasContent = chapter.content?.trim() || chapter.polishedContent?.trim()
     if (hasContent) showDoubleDeleteConfirm.value = true
     else showDeleteConfirm.value = true
   } else {
@@ -490,8 +564,9 @@ function performClearChapter() {
   if (chapter) {
     if (activeStage.value === 'writing') chapter.content = ''
     else if (activeStage.value === 'proofreading') {
-      chapter.proofreadContent = ''
       chapter.proofreadingIssues = []
+      chapter.proofreadingIssuesStale = false
+      if (chapter.status === 'proofread') chapter.status = 'draft'
       delete chapterProofreadingIssues.value[chapter.id]
     }
     else if (activeStage.value === 'polishing') chapter.polishedContent = ''
@@ -528,17 +603,51 @@ function ensureChapterCount(count: number) {
   }
 }
 
+function createContentVersion(label: string, versionContent: string, issues?: any[]) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    label,
+    content: versionContent,
+    proofreadingIssues: issues?.length ? issues.map(issue => ({ ...issue })) : undefined,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function markProofreadingIssuesStaleForEdit(chapter: Chapter, nextText: string) {
+  if (!chapter.proofreadingIssues?.length || chapter.content === nextText || chapter.proofreadingIssuesStale) return
+  chapter.contentVersions = [
+    createContentVersion('Before draft edit - proofreading issues valid', chapter.content, chapter.proofreadingIssues),
+    ...(chapter.contentVersions || []),
+  ]
+  chapter.proofreadingIssuesStale = true
+  toast.warning('Draft changed after proofreading. Existing issues may no longer match; a restore snapshot was saved.')
+}
+
+function restoreLatestIssueSnapshotForSelected() {
+  if (!selectedChapter.value) return
+  const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
+  const version = chapter?.contentVersions?.find(item => item.proofreadingIssues?.length)
+  if (!chapter || !version) return
+  chapter.content = version.content
+  chapter.proofreadingIssues = version.proofreadingIssues?.map(issue => ({ ...issue })) || []
+  chapter.proofreadingIssuesStale = false
+  chapter.status = chapter.proofreadingIssues.length ? 'proofread' : 'draft'
+  toast.success('Proofreading snapshot restored')
+}
+
 function updateCurrentChapterText(text: string) {
   if (!selectedChapter.value) return
   const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
   if (!chapter) return
   if (activeStage.value === 'proofreading') {
-    chapter.proofreadContent = text
-    chapter.status = 'proofread'
+    markProofreadingIssuesStaleForEdit(chapter, text)
+    chapter.content = text
+    chapter.status = 'draft'
   } else if (activeStage.value === 'polishing') {
     chapter.polishedContent = text
     chapter.status = 'polished'
   } else {
+    markProofreadingIssuesStaleForEdit(chapter, text)
     chapter.content = text
     chapter.status = 'draft'
   }
@@ -795,10 +904,25 @@ function updateCurrentChapterText(text: string) {
                     <span>Clear Stage</span>
                   </BaseButton>
                 </div>
+                <div
+                  v-if="selectedChapter.proofreadingIssuesStale"
+                  class="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2 text-xs"
+                >
+                  <span class="text-warning">Draft changed after proofreading. Existing issues may no longer match.</span>
+                  <BaseButton
+                    v-if="selectedChapter.contentVersions?.some(version => version.proofreadingIssues?.length)"
+                    variant="secondary"
+                    size="sm"
+                    @click="restoreLatestIssueSnapshotForSelected"
+                  >
+                    Restore issue snapshot
+                  </BaseButton>
+                </div>
                 <!-- Main Editor Area -->
                 <div class="flex-1 overflow-y-auto px-8 custom-scrollbar bg-surface-0/50">
                   <div class="max-w-4xl mx-auto min-h-full flex flex-col border-l border-r border-surface-4 bg-surface-0 px-10 py-10 shadow-sm">
                     <textarea
+                      ref="chapterTextarea"
                       :value="selectedChapterText"
                       class="w-full flex-1 bg-transparent text-text-primary resize-none outline-none font-serif text-lg leading-relaxed placeholder:text-text-muted/30 selection:bg-accent/20"
                       :placeholder="editorPlaceholder"
@@ -823,7 +947,7 @@ function updateCurrentChapterText(text: string) {
           :chapter-id="selectedChapter.id"
           :chapter-title="selectedChapter.title"
           :chapter-number="selectedChapter.index + 1"
-          :content="selectedChapter.proofreadContent || selectedChapter.content"
+          :content="selectedChapter.content"
           :chapter-outline="selectedChapter.outline"
           :characters="characterContext"
           :relationships="relationshipContext"
@@ -834,6 +958,7 @@ function updateCurrentChapterText(text: string) {
           :is-polishing="isQuickSubmittingPolish || (genStore.isGenerating && genStore.currentStage === 'polishing')"
           @fix="handleProofreadingFix"
           @issuesFound="handleProofreadingIssuesFound"
+          @issueSelected="handleWorkflowIssueSelected"
           @quickSubmitPolish="handleQuickSubmitPolish"
         />
         <VibeAssistant

@@ -19,6 +19,9 @@ declare global {
     app: {
       getPath: (name: 'documents' | 'downloads' | 'desktop' | 'userData') => Promise<string | null>
     }
+    shell: {
+      reveal: (path: string) => Promise<boolean>
+    }
     project: {
       list: () => Promise<any[]>
       load: (id: string, directoryPath?: string) => Promise<any | null>
