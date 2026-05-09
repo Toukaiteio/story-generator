@@ -101,6 +101,7 @@ const vibeContext = computed(() => {
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 const proofreadingAssistant = ref<any>(null)
 const chapterProofreadingIssues = ref<Record<string, any[]>>({})
+const isQuickSubmittingPolish = ref(false)
 
 function handleVibeApply(content: string) {
   if (activeStage.value === 'planning') {
@@ -137,15 +138,10 @@ async function handleProofreadingIssuesFound(issues: any[]) {
     chapter.proofreadContent = chapter.proofreadContent || chapter.content
     chapter.status = 'proofread'
   }
-
-  await saveChapters()
-
-  if (issues.length > 0) {
-    toast.info(`Found ${issues.length} issue(s)`)
-  }
 }
 
 async function handleQuickSubmitPolish() {
+  if (isQuickSubmittingPolish.value || genStore.isGenerating) return
   await polishCurrentChapter()
 }
 
@@ -198,6 +194,7 @@ async function proofreadAllChapters() {
 
 async function polishCurrentChapter() {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
+  isQuickSubmittingPolish.value = true
   try {
     const chapter = chaptersDraft.value.find(item => item.id === selectedChapterId.value)
     const issues = chapter?.proofreadingIssues || chapterProofreadingIssues.value[selectedChapterId.value] || []
@@ -209,6 +206,8 @@ async function polishCurrentChapter() {
     toast.success('Chapter polished')
   } catch (error: any) {
     toast.error(error?.message || 'Polishing failed')
+  } finally {
+    isQuickSubmittingPolish.value = false
   }
 }
 
@@ -831,6 +830,8 @@ function updateCurrentChapterText(text: string) {
           :story-outline="project?.outline ?? ''"
           :language="project?.language ?? 'English'"
           :writing-format="project?.writingFormat ?? 'plaintext'"
+          :initial-issues="selectedChapter.proofreadingIssues || []"
+          :is-polishing="isQuickSubmittingPolish || (genStore.isGenerating && genStore.currentStage === 'polishing')"
           @fix="handleProofreadingFix"
           @issuesFound="handleProofreadingIssuesFound"
           @quickSubmitPolish="handleQuickSubmitPolish"

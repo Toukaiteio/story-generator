@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
+import { estimateTokens } from '@/services/knowledge/chunker'
 import { FileText, Users, BookOpen, PenTool } from 'lucide-vue-next'
 
 const projectStore = useProjectStore()
@@ -17,9 +18,9 @@ const stats = computed<StatItem[]>(() => {
   const p = project.value
   if (!p) return []
 
-  const totalWords = p.chapters.reduce((sum, ch) => {
+  const totalTokens = p.chapters.reduce((sum, ch) => {
     const content = ch.polishedContent || ch.proofreadContent || ch.content
-    return sum + countWords(content)
+    return sum + estimateTokens(content)
   }, 0)
 
   const completedChapters = p.chapters.filter(ch =>
@@ -40,10 +41,10 @@ const stats = computed<StatItem[]>(() => {
       detail: `${p.characters.filter(c => c.role === 'protagonist').length} protagonist`,
     },
     {
-      label: 'Words',
-      value: formatNumber(totalWords),
+      label: 'Tokens',
+      value: formatNumber(totalTokens),
       icon: PenTool,
-      detail: p.length === 'short' ? '~5k target' : p.length === 'medium' ? '~20k target' : '~50k target',
+      detail: 'CJK-aware estimate',
     },
     {
       label: 'Knowledge',
@@ -53,11 +54,6 @@ const stats = computed<StatItem[]>(() => {
     },
   ]
 })
-
-function countWords(text: string): number {
-  if (!text) return 0
-  return text.trim().split(/\s+/).filter(Boolean).length
-}
 
 function formatNumber(num: number): string {
   if (num >= 1000) {

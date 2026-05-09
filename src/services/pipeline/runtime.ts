@@ -37,23 +37,33 @@ export function getModelForStage(
   providerStore: ReturnType<typeof useProviderStore>,
   stage: PipelineStage
 ) {
+  const role = stage === 'planning'
+    ? 'outline'
+    : stage === 'chapter-outline'
+      ? 'chapterPlanner'
+      : stage === 'writing'
+        ? 'writer'
+        : stage === 'proofreading'
+          ? 'proofreader'
+          : 'polisher'
+
   if (stage === 'planning') {
-    return providerStore.getAgentModelBinding('outline') ?? providerStore.getDefaultModelRefForRole('outline')
+    return providerStore.requireAgentModelRef(role)
   }
 
   if (stage === 'chapter-outline') {
-    return providerStore.getAgentModelBinding('chapterPlanner') ?? providerStore.getDefaultModelRefForRole('chapterPlanner')
+    return providerStore.requireAgentModelRef(role)
   }
 
   if (stage === 'writing') {
-    return providerStore.getAgentModelBinding('writer') ?? providerStore.getDefaultModelRefForRole('writer')
+    return providerStore.requireAgentModelRef(role)
   }
 
   if (stage === 'proofreading') {
-    return providerStore.getAgentModelBinding('proofreader') ?? providerStore.getDefaultModelRefForRole('proofreader')
+    return providerStore.requireAgentModelRef(role)
   }
 
-  return providerStore.getAgentModelBinding('polisher') ?? providerStore.getDefaultModelRefForRole('polisher')
+  return providerStore.requireAgentModelRef(role)
 }
 
 export function getContextTokens(

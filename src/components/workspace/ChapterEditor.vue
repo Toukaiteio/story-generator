@@ -4,6 +4,7 @@ import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
 import { detectMarkdown, markdownToHtml } from '@/services/markdown'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import VibeAssistant from '@/components/workspace/VibeAssistant.vue'
@@ -30,6 +31,8 @@ const showVersions = ref(false)
 const viewMode = ref<'edit' | 'preview'>('edit')
 const assistantTab = ref<'vibe' | 'editing' | 'proofreading'>('vibe')
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
+const contentPreviewRef = ref<HTMLElement | null>(null)
+const selectedProofreadingIssue = ref<any | null>(null)
 
 watch(chapter, (ch) => {
   if (ch) {
@@ -93,7 +96,158 @@ const wordCount = computed(() => {
 
 const isMarkdownContent = computed(() => project.value?.writingFormat === 'markdown')
 
-const renderedContent = computed(() => markdownToHtml(content.value))
+interface TextMatch {
+  source: string
+  start: number
+  end: number
+}
+
+interface ChunkMatch {
+  source: string
+  start: number
+  end: number
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function normalizeSearchChar(char: string) {
+  return /\s/.test(char) ? '' : char.toLowerCase()
+}
+
+function buildNormalizedIndex(text: string) {
+  let normalized = ''
+  const map: number[] = []
+  for (let offset = 0; offset < text.length;) {
+    const char = Array.from(text.slice(offset))[0]
+    const next = normalizeSearchChar(char)
+    if (next) {
+      normalized += next
+      map.push(offset)
+    }
+    offset += char.length
+  }
+  return { normalized, map }
+}
+
+function findTextMatch(source: string, excerpt: string): TextMatch | null {
+  const exactIndex = source.toLowerCase().indexOf(excerpt.toLowerCase())
+  if (exactIndex >= 0) {
+    return { source, start: exactIndex, end: exactIndex + excerpt.length }
+  }
+
+  const normalizedSource = buildNormalizedIndex(source)
+  const normalizedExcerpt = buildNormalizedIndex(excerpt).normalized
+  if (!normalizedExcerpt) return null
+
+  const normalizedIndex = normalizedSource.normalized.indexOf(normalizedExcerpt)
+  if (normalizedIndex < 0) return null
+
+  const start = normalizedSource.map[normalizedIndex]
+  const endStart = normalizedSource.map[normalizedIndex + normalizedExcerpt.length - 1]
+  const end = endStart + Array.from(source.slice(endStart))[0].length
+  return { source, start, end }
+}
+
+function findIssueMatch(issue: any): TextMatch | null {
+  const excerpt = String(issue?.excerpt ?? '').trim()
+  if (!excerpt) return null
+
+  const sources = [
+    content.value,
+    chapter.value?.proofreadContent ?? '',
+    chapter.value?.polishedContent ?? '',
+    chapter.value?.content ?? '',
+  ].filter(Boolean)
+
+  for (const source of sources) {
+    const match = findTextMatch(source, excerpt)
+    if (match) return match
+  }
+
+  return null
+}
+
+function getIssueSegmentIndex(issue: any) {
+  if (Number.isInteger(issue?.segmentIndex)) {
+    return Number(issue.segmentIndex)
+  }
+
+  const idMatch = String(issue?.id ?? '').match(/(?:^|-)part-(\d+)(?:-|$)/)
+  if (!idMatch) return -1
+
+  return Number(idMatch[1]) - 1
+}
+
+function getContentSources() {
+  return [
+    content.value,
+    chapter.value?.proofreadContent ?? '',
+    chapter.value?.polishedContent ?? '',
+    chapter.value?.content ?? '',
+  ].filter(Boolean)
+}
+
+function findIssueChunkMatch(issue: any): ChunkMatch | null {
+  const segmentIndex = getIssueSegmentIndex(issue)
+  if (segmentIndex < 0) return null
+
+  const segmentCharStart = Number(issue?.segmentCharStart)
+  const segmentCharEnd = Number(issue?.segmentCharEnd)
+  const sources = getContentSources()
+
+  for (const source of sources) {
+    if (
+      Number.isFinite(segmentCharStart)
+      && Number.isFinite(segmentCharEnd)
+      && segmentCharStart >= 0
+      && segmentCharEnd > segmentCharStart
+      && segmentCharEnd <= source.length
+    ) {
+      return { source, start: segmentCharStart, end: segmentCharEnd }
+    }
+
+    const segment = buildProofreadingSegments(source)[segmentIndex]
+    if (segment) {
+      return { source, start: segment.charStart, end: segment.charEnd }
+    }
+  }
+
+  return null
+}
+
+const highlightedContentHtml = computed(() => {
+  const issue = selectedProofreadingIssue.value
+  const match = issue ? findIssueMatch(issue) : null
+  const chunk = issue && !match ? findIssueChunkMatch(issue) : null
+  const source = match?.source ?? chunk?.source ?? content.value ?? ''
+  if (!match && !chunk) return escapeHtml(source)
+
+  if (chunk) {
+    const before = escapeHtml(source.slice(0, chunk.start))
+    const target = escapeHtml(source.slice(chunk.start, chunk.end))
+    const after = escapeHtml(source.slice(chunk.end))
+    return `${before}<span id="proofreading-chunk-current">${target}</span>${after}`
+  }
+
+  const before = escapeHtml(source.slice(0, match.start))
+  const target = escapeHtml(source.slice(match.start, match.end))
+  const after = escapeHtml(source.slice(match.end))
+  return `${before}<mark class="proofreading-highlight" id="proofreading-highlight-current">${target}</mark>${after}`
+})
+
+const renderedContent = computed(() => {
+  if (selectedProofreadingIssue.value) {
+    return highlightedContentHtml.value
+  }
+  return markdownToHtml(content.value)
+})
 
 const vibeContext = computed(() => ({
   writingFormat: isMarkdownContent.value ? 'markdown' : 'plaintext',
@@ -157,6 +311,25 @@ async function saveProofreadingIssues(issues: any[]) {
   if (!saved) {
     toast.error('Failed to save proofreading issues')
   }
+}
+
+async function handleProofreadingIssueSelected(issue: any) {
+  selectedProofreadingIssue.value = issue
+  viewMode.value = 'preview'
+  await nextTick()
+  const target = contentPreviewRef.value?.querySelector('#proofreading-highlight-current')
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+
+  const chunkTarget = contentPreviewRef.value?.querySelector('#proofreading-chunk-current')
+  if (chunkTarget) {
+    chunkTarget.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+
+  toast.warning('Could not locate this excerpt in the current chapter text. It may come from an older proofreading run.')
 }
 </script>
 
@@ -239,6 +412,7 @@ async function saveProofreadingIssues(issues: any[]) {
 
             <article
               v-else
+              ref="contentPreviewRef"
               class="markdown-preview min-h-[60vh] text-text-primary"
               v-html="renderedContent || '<p class=&quot;text-text-muted&quot;>No content to preview.</p>'"
             />
@@ -387,8 +561,10 @@ async function saveProofreadingIssues(issues: any[]) {
           :story-outline="project?.outline ?? ''"
           :language="project?.language ?? 'English'"
           :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
+          :initial-issues="chapter.proofreadingIssues || []"
           @fix="sendToVibe"
           @issuesFound="saveProofreadingIssues"
+          @issueSelected="handleProofreadingIssueSelected"
         />
       </aside>
     </div>
@@ -421,6 +597,14 @@ async function saveProofreadingIssues(issues: any[]) {
 
 .markdown-preview :deep(p) {
   margin: 0 0 1.1em;
+}
+
+.markdown-preview :deep(.proofreading-highlight) {
+  background: rgba(245, 158, 11, 0.35);
+  color: inherit;
+  border-radius: 0.2rem;
+  padding: 0.05rem 0.12rem;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.45);
 }
 
 .markdown-preview :deep(blockquote) {

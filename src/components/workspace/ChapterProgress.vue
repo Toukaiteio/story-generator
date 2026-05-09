@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
+import { estimateTokens } from '@/services/knowledge/chunker'
 import { CheckCircle2, Circle, Clock, PenTool } from 'lucide-vue-next'
 
 const projectStore = useProjectStore()
@@ -13,7 +14,7 @@ interface ChapterStatus {
   index: number
   title: string
   status: 'empty' | 'outline' | 'draft' | 'proofread' | 'polished'
-  wordCount: number
+  tokenCount: number
 }
 
 const chapters = computed<ChapterStatus[]>(() => {
@@ -28,14 +29,14 @@ const chapters = computed<ChapterStatus[]>(() => {
     else if (ch.outline.objective || ch.outline.endingHook) status = 'outline'
 
     const content = ch.polishedContent || ch.proofreadContent || ch.content
-    const wordCount = content ? content.trim().split(/\s+/).filter(Boolean).length : 0
+    const tokenCount = estimateTokens(content)
 
     return {
       id: ch.id,
       index: ch.index,
       title: ch.title,
       status,
-      wordCount,
+      tokenCount,
     }
   })
 })
@@ -93,8 +94,8 @@ function statusColor(status: ChapterStatus['status']) {
         <span class="text-xs text-text-primary truncate flex-1">
           Ch{{ chapter.index + 1 }}: {{ chapter.title }}
         </span>
-        <span v-if="chapter.wordCount" class="text-2xs text-text-muted">
-          {{ chapter.wordCount }}w
+        <span v-if="chapter.tokenCount" class="text-2xs text-text-muted">
+          {{ chapter.tokenCount }} tok
         </span>
       </button>
     </div>

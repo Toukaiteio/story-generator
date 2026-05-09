@@ -26,6 +26,17 @@ export interface ChapterProofreadingIssue {
   excerpt: string
   explanation: string
   suggestedFix: string
+  ignored?: boolean
+  adjustment?: string
+  polishStatus?: 'pending' | 'fixed' | 'ignored' | 'failed'
+  polishResult?: string
+  segmentIndex?: number
+  segmentTotal?: number
+  segmentCharStart?: number
+  segmentCharEnd?: number
+  segmentTokenStart?: number
+  segmentTokenEnd?: number
+  segmentTokenTotal?: number
 }
 
 export interface Chapter extends Timestamps {

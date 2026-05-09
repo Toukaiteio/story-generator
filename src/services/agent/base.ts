@@ -4,7 +4,9 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { providerManager } from '@/services/provider'
 import { fitToContext } from '@/services/context'
+import { useProviderStore } from '@/stores/provider'
 import type { FunctionCallingResponse } from '@/services/provider/types'
+import { requestToolContinuation } from './toolContinuation'
 
 export interface AgentResult {
   content: string
@@ -92,6 +94,10 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
    */
   protected getToolProgressKey(_context: Record<string, any>): string | null {
     return null
+  }
+
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return []
   }
 
   /**
@@ -232,8 +238,19 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
     const maxStalledToolRounds = 3
     const streamToolProgress = this.shouldStreamToolProgress(context)
     let lastStreamedToolContent = ''
+    let round = 0
+    const providerStore = useProviderStore()
+    const maxToolRounds = providerStore.toolWorkflowSettings.maxToolCallRounds
 
     while (true) {
+      const finalToolNames = this.getFinalToolNames(context)
+      if (finalToolNames.length && round === maxToolRounds - 1) {
+        currentMessages.push({
+          role: 'user',
+          content: `You have reached the final tool round. Do not call lookup tools again. Call one of these final reporting/finalization tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
+        })
+      }
+
       let result: FunctionCallingResponse
 
       if (onToken) {
@@ -291,7 +308,35 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       }
 
       if (result.tool_calls.length === 0) {
-        // No more tool calls, we're done
+        const finalToolNames = this.getFinalToolNames(context)
+        if (finalToolNames.length) {
+          currentMessages.push({
+            role: 'assistant',
+            content: result.content || null,
+            reasoning_content: result.reasoning_content ?? null,
+          })
+          currentMessages.push({
+            role: 'user',
+            content: `Your previous response was invalid because it did not call a required final tool. Do not answer in text. Call one of these tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
+          })
+
+          round += 1
+          if (round >= maxToolRounds) {
+            const shouldContinue = await requestToolContinuation({
+              workflow: `${this.name}: ${finalToolNames.join(' / ')}`,
+              rounds: maxToolRounds,
+              finalToolNames,
+            })
+
+            if (!shouldContinue) {
+              throw new Error(`${this.name} tool workflow stopped after ${maxToolRounds} rounds before calling ${finalToolNames.join(' or ')}.`)
+            }
+
+            round = 0
+          }
+          continue
+        }
+
         break
       }
 
@@ -374,6 +419,28 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       // If we got a final content and no more tool calls, stop
       if (result.finish_reason === 'stop') {
         break
+      }
+
+      round += 1
+      if (round >= maxToolRounds) {
+        const finalToolNames = this.getFinalToolNames(context)
+        const shouldContinue = await requestToolContinuation({
+          workflow: `${this.name}${finalToolNames.length ? `: ${finalToolNames.join(' / ')}` : ''}`,
+          rounds: maxToolRounds,
+          finalToolNames,
+        })
+
+        if (!shouldContinue) {
+          throw new Error(`${this.name} tool workflow stopped after ${maxToolRounds} rounds${finalToolNames.length ? ` before calling ${finalToolNames.join(' or ')}` : ''}.`)
+        }
+
+        round = 0
+        currentMessages.push({
+          role: 'user',
+          content: finalToolNames.length
+            ? `Continue the tool workflow. Tool round counter has been reset. Prefer reporting/finalizing with ${finalToolNames.join(' or ')} as soon as you have enough information; only use more lookup tools if necessary.`
+            : 'Continue the tool workflow. Tool round counter has been reset. Complete the task as soon as possible; only use more tools if necessary.',
+        })
       }
     }
 

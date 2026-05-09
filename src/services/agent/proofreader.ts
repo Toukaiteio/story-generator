@@ -68,6 +68,7 @@ export class ProofreaderExpert extends BaseAgent {
     if (toolCall.name === 'report_proofreading_issues') {
       const newIssues = Array.isArray(toolCall.arguments.issues) ? toolCall.arguments.issues : []
       context._issues = [...(context._issues || []), ...newIssues]
+      context._proofreadingReported = true
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({ success: true, count: newIssues.length }),
@@ -81,7 +82,10 @@ export class ProofreaderExpert extends BaseAgent {
   }
 
   protected getSystemPrompt(): string {
-    return `You are an expert proofreader for fiction. Your job is to audit chapter content for errors.
+    return `You are an expert proofreading auditor for fiction. Your job is to inspect chapter content and report issues through tools.
+
+You are not a rewriting agent. Do not return corrected prose, revised chapter text, summaries, markdown reports, bullet lists, JSON text, or explanations in assistant text.
+Your final response must be a tool call to report_proofreading_issues.
 
 Audit criteria:
 - Grammatical errors, typos, and punctuation issues.
@@ -90,24 +94,26 @@ Audit criteria:
 - Narrative pacing and prose style.
 
 Rules:
-1. ALWAYS use report_proofreading_issues tool to report findings - NEVER respond with freeform text.
+1. ALWAYS call report_proofreading_issues to report findings. Assistant text is invalid.
 2. Provide exact excerpts from the text for each issue.
 3. Be specific and actionable in your suggested fixes.
 4. Process each segment independently. Focus only on issues within the given text segment.
 5. If processing a chapter segment (not the full chapter), focus on local consistency and grammar - don't worry about connections to other parts.
 6. Character context is intentionally compact. Use get_character_profile and relationship query tools only for specific characters or relationship facts you need.
-7. If no issues found, call the tool with an empty array.`
+7. If no issues are found, call report_proofreading_issues with {"issues": []}. Do not write an empty array as text.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
     const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat, range } = context
 
     const isChunked = !!range
-    const rangeInfo = range ? `\nProcessing segment: words ${range.start}-${range.end}/${content.split(/\s+/).length} of the chapter.\n` : ''
+    const rangeInfo = range
+      ? `\nProcessing segment: ${range.index + 1}/${range.total}; estimated tokens ${range.tokenStart}-${range.tokenEnd}/${range.tokenTotal} of the chapter.\n`
+      : ''
 
     // For chunked processing, use a simpler prompt to avoid overwhelming output
     if (isChunked) {
-      return `Proofread this chapter segment for grammar, typos, consistency, and pacing issues:
+      return `Audit this chapter segment for grammar, typos, consistency, and pacing issues. Do not rewrite it and do not return prose:
 
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}${rangeInfo}
 Language: ${language || 'English'}
@@ -121,11 +127,11 @@ ${content}
 
 Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
 
-Use report_proofreading_issues to report only concrete issues found in this segment. If no issues, return empty array.`
+Final response requirement: call report_proofreading_issues. If no issues are found, call report_proofreading_issues with {"issues": []}. Do not return text.`
     }
 
     // For single-chunk processing, include full context
-    return `Audit the following chapter for grammar, typos, and consistency issues:
+    return `Audit the following chapter for grammar, typos, and consistency issues. Do not rewrite it and do not return prose:
 
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
 Primary Language: ${language || 'English'}
@@ -146,9 +152,8 @@ ${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Use get_character_profile for character details only when needed. Use relationship query tools for specific relationship checks, preferably with character IDs from the compact directory.
 
-Please:
-1. Identify concrete issues using the report_proofreading_issues tool.
-2. For each issue, provide the exact excerpt, a clear explanation, and a suggested fix.`
+Required final action:
+Call report_proofreading_issues with concrete issues. For each issue, provide the exact excerpt, a clear explanation, and a suggested fix. If no issues are found, call report_proofreading_issues with {"issues": []}.`
   }
 
   parseResponse(response: string, context?: Record<string, any>): any {
@@ -158,22 +163,31 @@ Please:
     }
   }
 
+  protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
+    return context._proofreadingReported === true
+  }
+
+  protected getToolResultContent(context: Record<string, any>): string | null {
+    return context._proofreadingReported === true
+      ? (typeof context.content === 'string' ? context.content : '')
+      : null
+  }
+
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return ['report_proofreading_issues']
+  }
+
   protected validateOutput(response: string, parsed: any, context: Record<string, any>): string[] {
     const issues: string[] = []
-    const isChunked = !!context.range
-
-    // If tool was called, validation passes regardless of results
-    if (response.includes('report_proofreading_issues')) {
+    if (context._proofreadingReported === true) {
       return issues
     }
 
-    // If tool wasn't called, fail with clear message
-    if (response.length > 100) {
-      if (isChunked) {
-        issues.push('Chunked proofreading must use report_proofreading_issues tool. Focus only on this segment and report concrete issues found.')
-      } else {
-        issues.push('Proofreading response must use report_proofreading_issues tool. Provide structured findings, not free-form text.')
-      }
+    const isChunked = !!context.range
+    if (isChunked) {
+      issues.push('Chunked proofreading must use report_proofreading_issues tool. Focus only on this segment and report concrete issues found.')
+    } else {
+      issues.push('Proofreading response must use report_proofreading_issues tool. Provide structured findings, not free-form text.')
     }
 
     return issues
@@ -184,10 +198,10 @@ Please:
     const isChunked = !!range
 
     if (isChunked) {
-      const rangeInfo = range ? `words ${range.start}-${range.end}` : ''
-      return `You failed to use the report_proofreading_issues tool. CRITICAL: You must use only the tool, no freeform text.
+      const rangeInfo = range ? `segment ${range.index + 1}/${range.total}` : ''
+      return `Your previous response was invalid because it did not call report_proofreading_issues. CRITICAL: You must use only the tool, no assistant text.
 
-Proofread this segment (${rangeInfo}) for grammar, typos, and consistency issues:
+Audit this segment (${rangeInfo}) for grammar, typos, and consistency issues. Do not rewrite it:
 
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
 Language: ${language || 'English'}
@@ -196,16 +210,16 @@ Format: ${writingFormat || 'plaintext'}
 Text segment:
 ${content}
 
-Action: Call report_proofreading_issues with concrete issues found. If no issues, return empty array.`
+Action: Call report_proofreading_issues with concrete issues found. If no issues are found, call report_proofreading_issues with {"issues": []}.`
     }
 
-    return `You failed to use the report_proofreading_issues tool. CRITICAL: You must use only the tool, no freeform text.
+    return `Your previous response was invalid because it did not call report_proofreading_issues. CRITICAL: You must use only the tool, no assistant text.
 
-Audit chapter ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle} for grammar, typos, consistency, and pacing issues.
+Audit chapter ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle} for grammar, typos, consistency, and pacing issues. Do not rewrite it.
 
 Text (${countWords(content)} words):
 ${content}
 
-Action: Call report_proofreading_issues with each issue you find. If no issues, return empty array.`
+Action: Call report_proofreading_issues with each issue you find. If no issues are found, call report_proofreading_issues with {"issues": []}.`
   }
 }

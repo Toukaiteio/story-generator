@@ -138,6 +138,7 @@ const roleOptions: Array<{ id: AgentType; label: string; icon: any; description:
   { id: 'storyPlanner', label: 'Story Planner Agent', icon: Bot, description: 'Combined planning fallback for outline and cast generation' },
   { id: 'chapterPlanner', label: 'Chapter Planner Agent', icon: BookOpen, description: 'Tool-driven chapter-by-chapter planning' },
   { id: 'writer', label: 'Writer Agent', icon: PenTool, description: 'Chapter drafting and scene writing' },
+  { id: 'editingAI', label: 'Editing AI', icon: Pencil, description: 'Chapter audit and issue repair coordination' },
   { id: 'relationshipTracker', label: 'Relationship Tracker', icon: Network, description: 'Extract chapter-by-chapter relationship changes' },
   { id: 'proofreader', label: 'Proofreader Agent', icon: RefreshCw, description: 'Consistency and grammar review' },
   { id: 'polisher', label: 'Polisher Agent', icon: Zap, description: 'Language enhancement and final polish' },

@@ -8,6 +8,7 @@ import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './
 import { generateId } from '@/lib/id'
 import { extractRelationshipEventsForChapter, runStoryPlanningWorkflow } from './planning'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 
 export function formatChapterPlanContext(chapters: Chapter[]) {
   if (!chapters.length) return ''
@@ -323,24 +324,27 @@ export async function proofreadChapter(
     previousSummary: buildPreviousSummary(project, chapterIndex),
   })
 
-  const proofreadContext: Record<string, any> = {
-    content: chapter.content,
-    chapterTitle: chapter.title,
-    chapterNumber,
-    chapterOutline: chapter.outline,
-    characters: buildCharacterContextForTask(project.characters, 'proofreading'),
-    previousSummary: buildPreviousSummary(project, chapterIndex),
-    language: project.language,
-    style: project.style,
-    project,
-    writingFormat: project.writingFormat,
-    knowledgeContext,
+  const segments = buildProofreadingSegments(chapter.content)
+  for (const segment of segments) {
+    const proofreadContext: Record<string, any> = {
+      content: segment.content,
+      chapterTitle: chapter.title,
+      chapterNumber,
+      chapterOutline: chapter.outline,
+      characters: buildCharacterContextForTask(project.characters, 'proofreading'),
+      previousSummary: buildPreviousSummary(project, chapterIndex),
+      language: project.language,
+      style: project.style,
+      project,
+      writingFormat: project.writingFormat,
+      knowledgeContext,
+      range: segment,
+    }
+    await proofreaderAgent.execute(proofreadContext, onToken)
   }
-  const result = await proofreaderAgent.execute(proofreadContext, onToken)
+
   const proofreadContent = sanitizeGeneratedChapterContent(
-    typeof proofreadContext._proofreadContent === 'string' && proofreadContext._proofreadContent.trim()
-      ? proofreadContext._proofreadContent
-      : result.content,
+    chapter.content,
     {
       writingFormat: project.writingFormat,
       writingStyle: project.style,
@@ -368,31 +372,57 @@ export async function polishChapter(
   const chapterNumber = chapter.index + 1
 
   const contentToPolish = chapter.proofreadContent || chapter.content
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    chapterTitle: chapter.title,
-    content: contentToPolish,
-  })
-  const polishContext: Record<string, any> = {
-    content: contentToPolish,
-    chapterTitle: chapter.title,
-    chapterNumber,
-    characters: buildCharacterContextForTask(project.characters, 'polishing'),
-    language: project.language,
-    style: project.style,
-    project,
-    writingFormat: project.writingFormat,
-    knowledgeContext,
-    proofreadingIssues: proofreadingIssues || [],
+  const issues = (proofreadingIssues || chapter.proofreadingIssues || []).map(issue => ({
+    ...issue,
+    polishStatus: issue.ignored ? 'ignored' : issue.polishStatus,
+    polishResult: issue.ignored ? 'Ignored by user.' : issue.polishResult,
+  }))
+  const activeIssues = issues.filter(issue => !issue.ignored)
+  const segments = buildProofreadingSegments(contentToPolish)
+  const polishedSegments: string[] = []
+  const issueResults = new Map<string, { status: 'fixed' | 'ignored' | 'failed'; result: string }>()
+
+  for (const issue of issues) {
+    if (issue.ignored) {
+      issueResults.set(issue.id, { status: 'ignored', result: issue.polishResult || 'Ignored by user.' })
+    }
   }
-  const result = await polisherAgent.execute(polishContext, onToken)
-  const polishedContent = sanitizeGeneratedChapterContent(
-    typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
+
+  for (const segment of segments) {
+    const segmentIssues = activeIssues.filter(issue => {
+      if (typeof issue.segmentIndex === 'number') return issue.segmentIndex === segment.index
+      const excerpt = String(issue.excerpt ?? '').trim()
+      return excerpt ? segment.content.includes(excerpt) : segment.index === 0
+    })
+    const polishContext: Record<string, any> = {
+      content: segment.content,
+      chapterTitle: chapter.title,
+      chapterNumber,
+      characters: buildCharacterContextForTask(project.characters, 'polishing'),
+      language: project.language,
+      style: project.style,
+      project,
+      writingFormat: project.writingFormat,
+      proofreadingIssues: segmentIssues,
+      range: segment,
+    }
+    const result = await polisherAgent.execute(polishContext, onToken)
+    const polishedSegment = typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
       ? polishContext._polishedContent
-      : result.content,
+      : result.content
+    polishedSegments.push(polishedSegment)
+    const reported = Array.isArray(result.data?.issueResults) ? result.data.issueResults : []
+    for (const item of reported) {
+      if (!item?.issueId) continue
+      issueResults.set(item.issueId, {
+        status: item.status === 'ignored' || item.status === 'failed' ? item.status : 'fixed',
+        result: String(item.result ?? '').trim(),
+      })
+    }
+  }
+
+  const polishedContent = sanitizeGeneratedChapterContent(
+    polishedSegments.join('\n\n'),
     {
       writingFormat: project.writingFormat,
       writingStyle: project.style,
@@ -400,9 +430,25 @@ export async function polishChapter(
       chapterNumber,
     }
   )
+  const nextIssues = issues.map(issue => {
+    const result = issueResults.get(issue.id)
+    if (!result) {
+      return {
+        ...issue,
+        polishStatus: issue.ignored ? 'ignored' as const : 'pending' as const,
+        polishResult: issue.ignored ? (issue.polishResult || 'Ignored by user.') : issue.polishResult,
+      }
+    }
+    return {
+      ...issue,
+      polishStatus: result.status,
+      polishResult: result.result,
+    }
+  })
 
   return {
     ...chapter,
+    proofreadingIssues: nextIssues,
     polishedContent,
     status: 'polished' as const,
   }
@@ -418,7 +464,6 @@ export async function run(
   const {
     writerAgent,
     proofreaderAgent,
-    polisherAgent,
     relationshipTrackerAgent,
   } = runtime
 
@@ -626,26 +671,28 @@ export async function run(
           content: chapter.content,
           previousSummary: buildPreviousSummary(updatedProject, i),
         })
-        const proofreadContext: Record<string, any> = {
-          content: chapter.content,
-          chapterTitle: chapter.title,
-          chapterNumber,
-          chapterOutline: chapter.outline,
-          characters: charContext,
-          previousSummary: buildPreviousSummary(updatedProject, i),
-          language: project.language,
-          style: project.style,
-          project: updatedProject,
-          writingFormat: updatedProject.writingFormat,
-          knowledgeContext,
+        const segments = buildProofreadingSegments(chapter.content)
+        for (const segment of segments) {
+          if (isCancelled()) break
+          callbacks.onProgress(`Proofreading chapter ${chapterNumber} (Part ${segment.index + 1}/${segment.total})...`)
+          await proofreaderAgent.execute({
+            content: segment.content,
+            chapterTitle: chapter.title,
+            chapterNumber,
+            chapterOutline: chapter.outline,
+            characters: charContext,
+            previousSummary: buildPreviousSummary(updatedProject, i),
+            language: project.language,
+            style: project.style,
+            project: updatedProject,
+            writingFormat: updatedProject.writingFormat,
+            knowledgeContext,
+            range: segment,
+          }, callbacks.onToken)
         }
 
-        const result = await proofreaderAgent.execute(proofreadContext, callbacks.onToken)
-
         updatedProject.chapters[i].proofreadContent = sanitizeGeneratedChapterContent(
-          typeof proofreadContext._proofreadContent === 'string' && proofreadContext._proofreadContent.trim()
-            ? proofreadContext._proofreadContent
-            : result.content,
+          chapter.content,
           {
             writingFormat: updatedProject.writingFormat,
             writingStyle: updatedProject.style,
@@ -688,41 +735,7 @@ export async function run(
       callbacks.onProgress(`Polishing chapter ${chapterNumber}...`)
 
       try {
-        const contentToPolish = chapter.proofreadContent || chapter.content
-        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-          theme: updatedProject.theme,
-          genre: updatedProject.genre,
-          targetReader: updatedProject.targetReader,
-          language: updatedProject.language,
-          chapterTitle: chapter.title,
-          content: contentToPolish,
-        })
-        const polishContext: Record<string, any> = {
-          content: contentToPolish,
-          chapterTitle: chapter.title,
-          chapterNumber,
-          characters: buildCharacterContextForTask(updatedProject.characters, 'polishing'),
-          language: project.language,
-          style: project.style,
-          project: updatedProject,
-          writingFormat: updatedProject.writingFormat,
-          knowledgeContext,
-        }
-
-        const result = await polisherAgent.execute(polishContext, callbacks.onToken)
-
-        updatedProject.chapters[i].polishedContent = sanitizeGeneratedChapterContent(
-          typeof polishContext._polishedContent === 'string' && polishContext._polishedContent.trim()
-            ? polishContext._polishedContent
-            : result.content,
-          {
-            writingFormat: updatedProject.writingFormat,
-            writingStyle: updatedProject.style,
-            chapterTitle: chapter.title,
-            chapterNumber,
-          }
-        )
-        updatedProject.chapters[i].status = 'polished'
+        updatedProject.chapters[i] = await polishChapter(updatedProject, i, callbacks.onToken, chapter.proofreadingIssues)
         callbacks.onChapterComplete(i)
         save()
       } catch (e: any) {

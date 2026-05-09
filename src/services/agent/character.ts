@@ -374,4 +374,8 @@ Continue or redo the character creation using tools. Use create_character exactl
       : 0
     return `${totalCharacters}:${Boolean(context._charactersFinalized)}`
   }
+
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return ['finalize_characters']
+  }
 }

@@ -1,6 +1,6 @@
 import type { ID, Timestamps } from './common'
 
-export type AgentType = 'outline' | 'detailer' | 'character' | 'storyPlanner' | 'chapterTitlePlanner' | 'chapterPlanner' | 'writer' | 'proofreader' | 'polisher' | 'relationshipTracker'
+export type AgentType = 'outline' | 'detailer' | 'character' | 'storyPlanner' | 'chapterTitlePlanner' | 'chapterPlanner' | 'writer' | 'editingAI' | 'proofreader' | 'polisher' | 'relationshipTracker'
 export type AgentRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface AgentDefinition {

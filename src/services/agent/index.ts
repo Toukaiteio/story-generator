@@ -5,6 +5,7 @@ import { StoryPlannerExpert } from './storyPlanner'
 import { ChapterTitlePlannerExpert } from './chapterTitlePlanner'
 import { ChapterPlannerExpert } from './chapterPlanner'
 import { WriterExpert } from './writer'
+import { EditingAIExpert } from './editingAI'
 import { ProofreaderExpert } from './proofreader'
 import { PolisherExpert } from './polisher'
 import { RelationshipTrackerExpert } from './relationshipTracker'
@@ -21,6 +22,7 @@ export const agents = {
   chapterTitlePlanner: new ChapterTitlePlannerExpert(),
   chapterPlanner: new ChapterPlannerExpert(),
   writer: new WriterExpert(),
+  editingAI: new EditingAIExpert(),
   proofreader: new ProofreaderExpert(),
   polisher: new PolisherExpert(),
   relationshipTracker: new RelationshipTrackerExpert(),

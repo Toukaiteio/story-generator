@@ -147,6 +147,18 @@ Use the create_chapter_outline tool to define the conflict, keyEvents, character
     return issues
   }
 
+  protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
+    return Boolean(context._chapterOutlineData)
+  }
+
+  protected getToolResultContent(context: Record<string, any>): string | null {
+    return context._chapterOutlineData ? JSON.stringify(context._chapterOutlineData) : null
+  }
+
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return ['create_chapter_outline']
+  }
+
   async execute(context: Record<string, any>, onToken?: (token: string) => void): Promise<AgentResult> {
     if (!this.model) throw new Error(`${this.name} has no model assigned`)
 

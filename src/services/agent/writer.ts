@@ -124,6 +124,10 @@ export class WriterExpert extends BaseAgent {
     return `chapter-draft:${context._chapterDraftChunks.length}:${context._chapterComplete ? 'done' : 'pending'}`
   }
 
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return ['write_chapter']
+  }
+
   protected getSystemPrompt(): string {
     return `You are an expert fiction writer. Your job is to write compelling chapter content that:
 - Maintains consistent voice and style throughout

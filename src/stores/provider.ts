@@ -31,6 +31,7 @@ const roleDefaults: Record<AgentType, 'expert' | 'standard'> = {
   chapterPlanner: 'expert',
   chapterTitlePlanner: 'expert',
   writer: 'expert',
+  editingAI: 'expert',
   proofreader: 'standard',
   polisher: 'standard',
   relationshipTracker: 'standard',
@@ -151,6 +152,7 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
     chapterTitlePlanner: null,
     'story-planner': null,
     writer: null,
+    editingAI: null,
     proofreader: null,
     polisher: null,
     relationshipTracker: null,
@@ -172,6 +174,7 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
       ? decodeProviderModelRef(raw.chapterTitlePlanner)
       : (raw.chapterTitlePlanner as any) ?? null,
     writer: typeof raw.writer === 'string' ? decodeProviderModelRef(raw.writer) : raw.writer,
+    editingAI: typeof raw.editingAI === 'string' ? decodeProviderModelRef(raw.editingAI) : raw.editingAI ?? null,
     proofreader: typeof raw.proofreader === 'string' ? decodeProviderModelRef(raw.proofreader) : raw.proofreader,
     polisher: typeof raw.polisher === 'string' ? decodeProviderModelRef(raw.polisher) : raw.polisher,
     relationshipTracker: typeof raw.relationshipTracker === 'string'
@@ -759,6 +762,23 @@ export const useProviderStore = defineStore('provider', () => {
     return pickModelRefForRole(providers.value, role)
   }
 
+  function requireAgentModelRef(role: AgentType) {
+    const binding = getAgentModelBinding(role)
+    if (binding) {
+      const match = getModelByRef(binding)
+      if (!match) {
+        throw new Error(`Configured model for ${role} is unavailable: ${binding.providerId}/${binding.modelId}. Refresh the provider model list or select another model.`)
+      }
+      return binding
+    }
+
+    const fallback = getDefaultModelRefForRole(role)
+    if (!fallback) {
+      throw new Error(`No model available for ${role}. Please configure a provider first.`)
+    }
+    return fallback
+  }
+
   function resolveModelRef(value: string | ProviderModelRef | null | undefined) {
     if (!value) return null
     if (typeof value === 'string') return decodeProviderModelRef(value)
@@ -886,6 +906,7 @@ export const useProviderStore = defineStore('provider', () => {
     previewModelList,
     addCustomModel,
     getDefaultModelRefForRole,
+    requireAgentModelRef,
     resolveModelRef,
     isRefreshingProvider,
     setModelContextTokens,

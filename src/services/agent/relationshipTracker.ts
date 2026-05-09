@@ -237,4 +237,12 @@ Then call finalize_relationship_events.`
   parseResponse(response: string): any {
     return { content: response }
   }
+
+  protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
+    return context._relationshipEventsFinalized === true
+  }
+
+  protected getFinalToolNames(_context: Record<string, any>): string[] {
+    return ['finalize_relationship_events']
+  }
 }
