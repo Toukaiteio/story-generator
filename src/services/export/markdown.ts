@@ -22,7 +22,7 @@ export function exportToMarkdown(project: StoryProject): string {
     lines.push(project.style)
     lines.push('')
   }
-  lines.push(`- **Length:** ${project.length}`)
+  lines.push(`- **Chapters:** ${project.chapterCount}`)
   lines.push('')
 
   if (project.outline) {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
+import { useProviderStore } from '@/stores/provider'
 import { useToast } from '@/composables/useToast'
 import { translatePhrase } from '@/i18n'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -36,6 +37,7 @@ const emit = defineEmits<{
 }>()
 
 const genStore = useGenerationStore()
+const providerStore = useProviderStore()
 const toast = useToast()
 
 function tr(value: string) {
@@ -69,6 +71,17 @@ const severityVariant = computed(() => (severity: ChapterAuditIssue['severity'])
   if (severity === 'medium') return 'warning'
   return 'default'
 })
+
+const severityRank: Record<ChapterAuditIssue['severity'], number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+}
+
+function isBelowPolishThreshold(issue: ChapterAuditIssue) {
+  if (isIssueIgnored(issue) || isIssueFixed(issue)) return false
+  return severityRank[issue.severity] < severityRank[providerStore.toolWorkflowSettings.minIssueSeverity]
+}
 
 function isIssueIgnored(issue: ChapterAuditIssue) {
   return !!issue.ignored || issue.polishStatus === 'ignored'
@@ -142,7 +155,7 @@ function buildProofreadContextPrompt() {
     `Compact Character Directory:\n${props.characters || 'None provided.'}`,
     `Relationship Lookup:\n${props.relationships || 'Use relationship query tools when available.'}`,
     'Use relationship/character tools for specific facts instead of assuming full context is in this prompt.',
-    'The chapter text will be submitted in small sequential segments. Process only the segment included in each request.',
+    'The chapter text will be submitted in bounded segments. Process only the current segment text while using this context for consistency checks.',
   ].join('\n\n')
 }
 
@@ -454,6 +467,13 @@ function toggleIssueGroup(key: string) {
                     {{ tr('FIXED') }}
                   </span>
                   <span v-else-if="issue.polishStatus">/ {{ issue.polishStatus }}</span>
+                  <span
+                    v-if="isBelowPolishThreshold(issue)"
+                    class="rounded-full border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] font-bold text-warning"
+                    :title="tr('Polish All will skip this issue because it is below the minimum severity setting.')"
+                  >
+                    {{ tr('Below polish threshold') }}
+                  </span>
                 </p>
               </div>
               <span
@@ -521,6 +541,13 @@ function toggleIssueGroup(key: string) {
         <span>{{ tr('This issue is ignored and will be skipped by Polish.') }}</span>
       </div>
       <div
+        v-else-if="isBelowPolishThreshold(selectedIssue)"
+        class="mt-3 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-2 text-xs leading-relaxed text-warning"
+      >
+        <AlertTriangle :size="14" class="mt-0.5 shrink-0" />
+        <span>{{ tr('Polish All will skip this issue because it is below the minimum severity setting. Submit this issue directly to force Polish.') }}</span>
+      </div>
+      <div
         v-else-if="isIssueFixed(selectedIssue)"
         class="mt-3 flex items-start gap-2 rounded-md border border-success/20 bg-success/10 px-2 py-2 text-xs leading-relaxed text-text-secondary"
       >
@@ -585,4 +612,3 @@ function toggleIssueGroup(key: string) {
     </div>
   </div>
 </template>
-

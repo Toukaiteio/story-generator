@@ -1,3 +1,4 @@
+import { fitMessagesToContextSmart } from '@/services/context'
 import { providerManager } from '@/services/provider'
 import { handleRelationshipQueryTool } from '@/services/relationship/tools'
 import type { ToolCall, ToolDefinition } from '@/services/provider'
@@ -17,6 +18,7 @@ export interface RelationshipToolWorkflowOptions {
   maxTokens?: number
   temperature?: number
   maxRounds: number
+  contextTokens?: number | null
   finalToolResultContent?: (toolCall: ToolCall) => string
   requestContinuation: (request: ToolWorkflowContinuationRequest) => Promise<boolean>
 }
@@ -63,8 +65,15 @@ export async function chatWithRelationshipToolsInPlace(
       })
     }
 
-    const response = await providerManager.chatWithTools(
+    const outboundMessages = fitMessagesToContextSmart(
       currentMessages,
+      options.contextTokens,
+      options.maxTokens ?? 4096,
+      { threshold: 0.85, preserveRecentGroups: 4 }
+    ).messages
+
+    const response = await providerManager.chatWithTools(
+      outboundMessages,
       modelRef,
       tools,
       options.maxTokens ?? 4096,

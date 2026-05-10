@@ -30,7 +30,7 @@ export class ProofreaderExpert extends BaseAgent {
                   },
                   category: {
                     type: 'string',
-                    enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'],
+                    enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic', 'chapter_plan', 'character', 'relationship', 'continuity', 'factual'],
                   },
                   title: {
                     type: 'string',
@@ -104,12 +104,42 @@ Rules:
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat, range } = context
+    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat, range, auditTarget } = context
 
     const isChunked = !!range
     const rangeInfo = range
       ? `\nProcessing segment: ${range.index + 1}/${range.total}; estimated tokens ${range.tokenStart}-${range.tokenEnd}/${range.tokenTotal} of the chapter.\n`
       : ''
+
+    if (auditTarget === 'chapter-outline') {
+      return `Audit this chapter outline for factual plausibility, internal logic, motivation, continuity, and story-world reasonableness. Do not rewrite it and do not return prose:
+
+Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
+Primary Language: ${language || 'English'}
+Style: ${style || 'Appropriate for genre'}
+
+Chapter Outline to Audit:
+${content}
+
+Overall Story Context:
+${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOutline, null, 2)}
+
+Compact Character Directory:
+${characters || 'No characters'}
+
+${previousSummary ? `Previously Planned Chapters:\n${previousSummary}` : ''}
+${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
+
+Focus on concrete problems only:
+- impossible, unsupported, or implausible facts inside the story world
+- weak or missing causal links between beats
+- character actions that do not match known goals, roles, or relationships
+- timeline, continuity, or setup/payoff contradictions
+- vague beats that cannot guide writing reliably
+
+Required final action:
+Call report_proofreading_issues with concrete outline issues. Use categories such as factual, logic, continuity, character, relationship, chapter_plan, pacing, or consistency. If no concrete issues are found, call report_proofreading_issues with {"issues": []}.`
+    }
 
     // For chunked processing, use a simpler prompt to avoid overwhelming output
     if (isChunked) {

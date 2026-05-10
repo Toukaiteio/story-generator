@@ -11,10 +11,12 @@ import { setToolContinuationHandler } from '@/services/agent/toolContinuation'
 import { clearAgentTodoList, getTodoListTool, handleTodoListToolCall, isTodoListTool, type AgentTodoListState } from '@/services/agent/todolist'
 import { countWords } from '@/services/agent/validation'
 import { buildProofreadingSegments, buildSegmentedProofreadingPrompts } from '@/services/proofreading/chunking'
-import { generationStageOrder, getNextGenerationAction, resolveChapterIndexById, resolveNextChapterIndex } from '@/services/generation/flow'
+import { generationStageOrder, getNextGenerationAction, isChapterPlanComplete, resolveChapterIndexById, resolveNextChapterIndex } from '@/services/generation/flow'
 import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSystemPrompt, getProofreadingTools, getChapterRegion, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
 import { chatWithRelationshipTools, chatWithRelationshipToolsInPlace, getToolCall } from '@/services/generation/toolWorkflow'
+import { fitMessagesToContextSmart, fitToContext } from '@/services/context'
 import type { GenerationStage, StoryProject } from '@/types/project'
+import type { ChapterOutline } from '@/types/chapter'
 import type { AgentType } from '@/types/agent'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
@@ -149,13 +151,13 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function generateCharacters(projectId: string) {
+  async function generateCharacters(projectId: string, options: { preferredCount?: number; characterRequirements?: string } = {}) {
     resetRunState(projectId)
     const project = validateProject(projectId)
     try {
       currentStage.value = 'planning'
       progressMessage.value = 'Generating characters...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateCharacters(project)
+      const generated = await (pipeline ?? new StoryPipeline()).generateCharacters(project, options)
       await applyProjectUpdate(projectId, {
         characters: generated,
         generationStage: 'chapter-outline',
@@ -222,6 +224,122 @@ export const useGenerationStore = defineStore('generation', () => {
       return generated
     } catch (error: any) {
       addError('chapter-outline', error?.message || 'Chapter plan generation failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function generateAdditionalChapterPlan(projectId: string) {
+    resetRunState(projectId)
+    const project = validateProject(projectId)
+    try {
+      currentStage.value = 'chapter-outline'
+      progressMessage.value = 'Planning additional chapter outline...'
+      const generated = await (pipeline ?? new StoryPipeline()).generateAdditionalChapterPlan(
+        project,
+        appendStreamToken,
+        message => { progressMessage.value = message },
+        error => { addError('chapter-outline', error) },
+        async updates => { await applyProjectUpdate(projectId, updates) }
+      )
+      await applyProjectUpdate(projectId, {
+        chapters: generated,
+        generationStage: project.generationStage === 'idle' || project.generationStage === 'planning'
+          ? 'chapter-outline'
+          : project.generationStage,
+      })
+      markCompleted('chapter-outline')
+      currentStage.value = 'chapter-outline'
+      return generated
+    } catch (error: any) {
+      addError('chapter-outline', error?.message || 'Additional chapter plan generation failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function completeCurrentChapterPlan(projectId: string, chapterId?: string) {
+    resetRunState(projectId)
+    const project = validateProject(projectId)
+    const action = getNextGenerationAction(project)
+    const targetChapterIndex = chapterId
+      ? resolveChapterIndexById(project, chapterId)
+      : action.stage === 'chapter-outline' && typeof action.chapterIndex === 'number'
+        ? action.chapterIndex
+        : -1
+
+    if (targetChapterIndex < 0) {
+      throw new Error('No incomplete chapter plan found')
+    }
+
+    const targetChapter = project.chapters[targetChapterIndex]
+    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
+
+    try {
+      currentStage.value = 'chapter-outline'
+      currentChapterIndex.value = targetChapterIndex
+      progressMessage.value = `Completing chapter ${targetChapter.index + 1} outline...`
+      const generated = await (pipeline ?? new StoryPipeline()).completeChapterPlan(
+        project,
+        targetChapterIndex,
+        appendStreamToken,
+        message => { progressMessage.value = message },
+        error => { addError('chapter-outline', error) },
+        async updates => { await applyProjectUpdate(projectId, updates) }
+      )
+      const allPlansComplete = generated.length > 0 && generated.every(isChapterPlanComplete)
+      await applyProjectUpdate(projectId, {
+        chapters: generated,
+        generationStage: allPlansComplete ? 'writing' : 'chapter-outline',
+      })
+      if (allPlansComplete) markCompletedThrough('chapter-outline')
+      else markCompleted('chapter-outline')
+      currentStage.value = allPlansComplete ? 'writing' : 'chapter-outline'
+      currentChapterIndex.value = null
+      return generated
+    } catch (error: any) {
+      addError('chapter-outline', error?.message || 'Chapter plan completion failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
+  async function reviewAndRewriteChapterPlan(projectId: string, chapterId: string) {
+    resetRunState(projectId)
+    const project = validateProject(projectId)
+    const targetChapterIndex = resolveChapterIndexById(project, chapterId)
+    if (targetChapterIndex < 0) {
+      throw new Error('No chapter selected for outline review')
+    }
+
+    const targetChapter = project.chapters[targetChapterIndex]
+    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
+
+    try {
+      currentStage.value = 'chapter-outline'
+      currentChapterIndex.value = targetChapterIndex
+      progressMessage.value = `Reviewing chapter ${targetChapter.index + 1} outline...`
+      const result = await (pipeline ?? new StoryPipeline()).reviewAndRewriteChapterPlan(
+        project,
+        targetChapterIndex,
+        appendStreamToken,
+        message => { progressMessage.value = message },
+        error => { addError('chapter-outline', error) },
+        async updates => { await applyProjectUpdate(projectId, updates) }
+      )
+      await applyProjectUpdate(projectId, {
+        chapters: result.chapters,
+        generationStage: result.chapters.every(isChapterPlanComplete) ? 'writing' : 'chapter-outline',
+      })
+      markCompleted('chapter-outline')
+      currentStage.value = 'chapter-outline'
+      currentChapterIndex.value = null
+      return result
+    } catch (error: any) {
+      addError('chapter-outline', error?.message || 'Chapter outline review failed')
       throw error
     } finally {
       finishRun()
@@ -550,7 +668,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const initialAction = getNextAction(project)
     if (initialAction.stage !== 'done') {
       currentStage.value = initialAction.stage
-      currentChapterIndex.value = 'chapterIndex' in initialAction ? initialAction.chapterIndex : null
+      currentChapterIndex.value = 'chapterIndex' in initialAction && typeof initialAction.chapterIndex === 'number' ? initialAction.chapterIndex : null
     }
     try {
       const currentPipeline = pipeline ?? new StoryPipeline()
@@ -607,6 +725,9 @@ export const useGenerationStore = defineStore('generation', () => {
       case 'planning':
         return generateStoryPlan(projectId)
       case 'chapter-outline':
+        if (typeof action.chapterIndex === 'number') {
+          return completeCurrentChapterPlan(projectId, project.chapters[action.chapterIndex]?.id)
+        }
         return generateChapterPlan(projectId)
       case 'writing':
         return generateChapterDraft(projectId)
@@ -681,6 +802,21 @@ export const useGenerationStore = defineStore('generation', () => {
     return providerStore.requireAgentModelRef(role)
   }
 
+  function getModelContextTokens(modelRef: ProviderModelRef): number | null {
+    return providerManager.getModelConfigForRef(modelRef)?.model.contextTokens ?? null
+  }
+
+  function fitMessagesForModel(messages: ChatMessage[], modelRef: ProviderModelRef, maxTokens: number): ChatMessage[] {
+    return fitToContext(messages, getModelContextTokens(modelRef), maxTokens).messages
+  }
+
+  function fitToolMessagesForModel(messages: ChatMessage[], modelRef: ProviderModelRef, maxTokens: number): ChatMessage[] {
+    return fitMessagesToContextSmart(messages, getModelContextTokens(modelRef), maxTokens, {
+      threshold: 0.85,
+      preserveRecentGroups: 4,
+    }).messages
+  }
+
   function getUsableAgentModelRef(role: AgentType, preferred?: ProviderModelRef | null): ProviderModelRef {
     const providerStore = useProviderStore()
     providerManager.setProviders(providerStore.providers)
@@ -703,11 +839,13 @@ export const useGenerationStore = defineStore('generation', () => {
       { role: 'user', content: prompt },
     ]
 
+    const fittedMessages = fitMessagesForModel(messages, modelRef, 2048)
+
     try {
       if (callbacks?.onToken) {
         let streamed = ''
         await providerManager.stream(
-          messages,
+          fittedMessages,
           modelRef,
           {
             onToken: token => {
@@ -727,7 +865,7 @@ export const useGenerationStore = defineStore('generation', () => {
       }
 
       const response = await providerManager.chat(
-        messages,
+        fittedMessages,
         modelRef,
         2048,
         0.7
@@ -933,9 +1071,10 @@ export const useGenerationStore = defineStore('generation', () => {
         }
 
         let streamedContent = ''
+        const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 8192)
         const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
           providerManager.streamWithTools(
-            currentMessages,
+            outboundMessages,
             modelRef,
             tools,
             {
@@ -1260,6 +1399,329 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  async function editChapterOutlineWithTool(
+    prompt: string,
+    options: {
+      currentTitle?: string
+      currentOutline?: ChapterOutline
+      modelRef?: ProviderModelRef | null
+      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string; before?: string; after?: string }) => void
+      onTodoList?: (state: AgentTodoListState) => void
+      onToken?: (token: string) => void
+      onReasoningToken?: (token: string) => void
+      signal?: AbortSignal
+    } = {}
+  ): Promise<{ title: string; outline: ChapterOutline; summary: string; toolName: string }> {
+    const modelRef = getUsableAgentModelRef('editingAI', options.modelRef)
+    const listFields = new Set(['keyEvents', 'characterActions', 'infoReveals'])
+    const scalarFields = new Set(['title', 'objective', 'conflict', 'endingHook'])
+    const currentState = {
+      title: options.currentTitle || 'Untitled',
+      outline: {
+        objective: options.currentOutline?.objective || '',
+        conflict: options.currentOutline?.conflict || '',
+        keyEvents: Array.isArray(options.currentOutline?.keyEvents) ? [...options.currentOutline.keyEvents] : [],
+        characterActions: Array.isArray(options.currentOutline?.characterActions) ? [...options.currentOutline.characterActions] : [],
+        infoReveals: Array.isArray(options.currentOutline?.infoReveals) ? [...options.currentOutline.infoReveals] : [],
+        endingHook: options.currentOutline?.endingHook || '',
+      },
+    }
+
+    const outlineToText = (state = currentState) => [
+      `Title: ${state.title}`,
+      `Objective: ${state.outline.objective}`,
+      `Conflict: ${state.outline.conflict}`,
+      `Key Events:\n${state.outline.keyEvents.map(item => `- ${item}`).join('\n')}`,
+      `Character Actions:\n${state.outline.characterActions.map(item => `- ${item}`).join('\n')}`,
+      `Info Reveals:\n${state.outline.infoReveals.map(item => `- ${item}`).join('\n')}`,
+      `Ending Hook: ${state.outline.endingHook}`,
+    ].join('\n')
+
+    const cloneResult = (summary: string, toolName: string) => ({
+      title: currentState.title,
+      outline: JSON.parse(JSON.stringify(currentState.outline)) as ChapterOutline,
+      summary,
+      toolName,
+    })
+
+    const normalizeList = (value: unknown, fallback: string[] = []) => {
+      if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean)
+      if (typeof value === 'string') {
+        return value
+          .split(/\r?\n|,/)
+          .map(item => item.replace(/^\s*[-*]\s+/, '').trim())
+          .filter(Boolean)
+      }
+      return fallback
+    }
+
+    const tools: ToolDefinition[] = [
+      getTodoListTool(),
+      {
+        name: 'get_chapter_outline',
+        description: 'Read the current chapter outline or one specific outline field before editing it.',
+        parameters: {
+          type: 'object',
+          properties: {
+            field: {
+              type: 'string',
+              enum: ['all', 'title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'],
+              description: 'The outline field to read. Defaults to all.',
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'replace_chapter_outline_field',
+        description: 'Replace one exact chapter outline field. Use this for localized outline edits.',
+        parameters: {
+          type: 'object',
+          properties: {
+            field: {
+              type: 'string',
+              enum: ['title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'],
+            },
+            value: {
+              type: 'string',
+              description: 'Replacement text for scalar fields, or newline-separated list items for list fields.',
+            },
+            items: {
+              type: 'array',
+              description: 'Replacement list items for keyEvents, characterActions, or infoReveals.',
+              items: { type: 'string' },
+            },
+            summary: { type: 'string' },
+          },
+          required: ['field'],
+        },
+      },
+      {
+        name: 'rewrite_chapter_outline',
+        description: 'Replace the complete chapter outline when the request affects multiple planning fields.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            objective: { type: 'string' },
+            conflict: { type: 'string' },
+            keyEvents: { type: 'array', items: { type: 'string' } },
+            characterActions: { type: 'array', items: { type: 'string' } },
+            infoReveals: { type: 'array', items: { type: 'string' } },
+            endingHook: { type: 'string' },
+            summary: { type: 'string' },
+          },
+          required: ['objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'],
+        },
+      },
+    ]
+
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: [
+          'You are Vibe AI inside a chapter outline editor.',
+          'You must use tools for every successful outline edit.',
+          'Use get_chapter_outline before editing if the exact field content matters.',
+          'Prefer replace_chapter_outline_field when the user asks to adjust one field or one list.',
+          'Use rewrite_chapter_outline when multiple fields need coordinated changes.',
+          'Never edit chapter prose. These tools only modify title and outline fields.',
+          'Do not reply with the revised outline in plain text. Complete the edit by calling an outline replacement tool.',
+        ].join('\n'),
+      },
+      { role: 'user', content: prompt },
+    ]
+
+    try {
+      const currentMessages = [...messages]
+      const toolContext: Record<string, any> = {
+        _onTodoListUpdated: options.onTodoList,
+      }
+      const getOpenTodos = () => {
+        const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+        return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
+      }
+      const publishTodoList = async () => {
+        if (typeof options.onTodoList !== 'function') return
+        await options.onTodoList({
+          agent: 'Vibe AI',
+          updatedAt: new Date().toISOString(),
+          items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
+        })
+      }
+
+      let pendingFinalResult: { title: string; outline: ChapterOutline; summary: string; toolName: string } | null = null
+      for (let round = 0; round < 6; round++) {
+        if (pendingFinalResult) {
+          const openTodos = getOpenTodos()
+          if (!openTodos.length) return pendingFinalResult
+          currentMessages.push({
+            role: 'user',
+            content: `The outline edit is prepared, but the todolist is not complete. Mark completed items done before finishing. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
+          })
+        }
+
+        let streamedContent = ''
+        const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 4096)
+        const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
+          providerManager.streamWithTools(
+            outboundMessages,
+            modelRef,
+            tools,
+            {
+              onToken: token => {
+                streamedContent += token
+                options.onToken?.(token)
+              },
+              onReasoningToken: token => options.onReasoningToken?.(token),
+              onToolCall: toolCall => options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
+              onToolResult: () => {},
+              onComplete: resolve,
+              onError: reject,
+            },
+            4096,
+            0.35,
+            undefined,
+            options.signal
+          ).catch(reject)
+        })
+
+        if (streamedContent && response.content == null) response.content = streamedContent
+
+        if (!response.tool_calls.length) {
+          currentMessages.push({ role: 'assistant', content: response.content || null, reasoning_content: response.reasoning_content ?? null })
+          currentMessages.push({ role: 'user', content: 'Use an outline tool to complete the request. Do not return outline text directly.' })
+          continue
+        }
+
+        currentMessages.push({
+          role: 'assistant',
+          content: response.content || null,
+          reasoning_content: response.reasoning_content ?? null,
+          tool_calls: response.tool_calls.map(toolCall => ({
+            id: toolCall.id,
+            type: 'function',
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.arguments),
+            },
+          })),
+        })
+
+        for (const toolCall of response.tool_calls) {
+          options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Running tool.' })
+
+          if (isTodoListTool(toolCall.name)) {
+            const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+            await publishTodoList()
+            options.onToolStatus?.({ name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: result.content })
+            continue
+          }
+
+          if (toolCall.name === 'get_chapter_outline') {
+            const field = String(toolCall.arguments?.field || 'all')
+            const value = field === 'all'
+              ? outlineToText()
+              : field === 'title'
+                ? currentState.title
+                : listFields.has(field)
+                  ? (currentState.outline as any)[field].join('\n')
+                  : scalarFields.has(field)
+                    ? (currentState.outline as any)[field]
+                    : ''
+            const result = value || field === 'all'
+              ? { ok: true, field, content: value }
+              : { ok: false, error: `Unknown outline field: ${field}` }
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: result.ok ? 'success' : 'error',
+              detail: result.ok ? `Read ${field}.` : result.error,
+            })
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+            continue
+          }
+
+          if (toolCall.name === 'replace_chapter_outline_field') {
+            const field = String(toolCall.arguments?.field || '')
+            if (!scalarFields.has(field) && !listFields.has(field)) {
+              const result = { ok: false, error: `Unknown outline field: ${field}` }
+              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+              continue
+            }
+
+            const before = field === 'title'
+              ? currentState.title
+              : listFields.has(field)
+                ? (currentState.outline as any)[field].join('\n')
+                : (currentState.outline as any)[field]
+
+            if (field === 'title') {
+              currentState.title = String(toolCall.arguments?.value ?? '').trim() || currentState.title
+            } else if (listFields.has(field)) {
+              ;(currentState.outline as any)[field] = normalizeList(toolCall.arguments?.items ?? toolCall.arguments?.value, (currentState.outline as any)[field])
+            } else {
+              ;(currentState.outline as any)[field] = String(toolCall.arguments?.value ?? '').trim()
+            }
+
+            const after = field === 'title'
+              ? currentState.title
+              : listFields.has(field)
+                ? (currentState.outline as any)[field].join('\n')
+                : (currentState.outline as any)[field]
+            const result = { ok: true, field, title: currentState.title, outline: currentState.outline }
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: 'success',
+              detail: `Updated ${field}.`,
+              before,
+              after,
+            })
+            pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : `Updated ${field}.`, toolCall.name)
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+            if (!getOpenTodos().length) return pendingFinalResult
+            continue
+          }
+
+          if (toolCall.name === 'rewrite_chapter_outline') {
+            const before = outlineToText()
+            currentState.title = String(toolCall.arguments?.title ?? currentState.title).trim() || currentState.title
+            currentState.outline = {
+              objective: String(toolCall.arguments?.objective ?? '').trim(),
+              conflict: String(toolCall.arguments?.conflict ?? '').trim(),
+              keyEvents: normalizeList(toolCall.arguments?.keyEvents),
+              characterActions: normalizeList(toolCall.arguments?.characterActions),
+              infoReveals: normalizeList(toolCall.arguments?.infoReveals),
+              endingHook: String(toolCall.arguments?.endingHook ?? '').trim(),
+            }
+            const after = outlineToText()
+            const result = { ok: true, title: currentState.title, outline: currentState.outline }
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: 'success',
+              detail: 'Prepared complete outline revision.',
+              before,
+              after,
+            })
+            pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : 'Rewrote chapter outline.', toolCall.name)
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+            if (!getOpenTodos().length) return pendingFinalResult
+            continue
+          }
+
+          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: `Unsupported tool: ${toolCall.name}` }) })
+        }
+      }
+
+      if (pendingFinalResult && !getOpenTodos().length) return pendingFinalResult
+      throw new Error('Vibe AI could not complete the outline edit after retrying.')
+    } catch (error: any) {
+      options.onToolStatus?.({ name: 'rewrite_chapter_outline', status: 'error', detail: error?.message || 'Unknown error' })
+      throw new Error(`Outline edit error: ${error?.message || 'Unknown error'}`)
+    }
+  }
+
   async function auditChapterWithTool(prompt: string, projectId?: string): Promise<ChapterAuditIssue[]> {
     const modelRef = getAgentModelRef('editingAI')
     const project = projectId ? validateProject(projectId) : null
@@ -1277,6 +1739,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const response = await chatWithRelationshipTools(messages, modelRef, tools, {
         project,
         finalToolNames: ['report_chapter_issues'],
+        contextTokens: getModelContextTokens(modelRef),
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
@@ -1305,6 +1768,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const response = await chatWithRelationshipTools(messages, modelRef, tools, {
         project,
         finalToolNames: ['report_proofreading_issues'],
+        contextTokens: getModelContextTokens(modelRef),
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
@@ -1384,22 +1848,10 @@ export const useGenerationStore = defineStore('generation', () => {
   ): Promise<ChapterAuditIssue[]> {
     const segments = buildProofreadingSegments(content)
     const issues: ChapterAuditIssue[] = []
-    const prefix = contextPrompt.trimEnd()
+    const prefix = contextPrompt.trim()
     const modelRef = getUsableAgentModelRef('proofreader', options?.modelRef)
     const project = projectId ? validateProject(projectId) : null
     const tools = getProofreadingTools()
-    const messages: ChatMessage[] = [
-      { role: 'system', content: getProofreadingSystemPrompt() },
-      {
-        role: 'user',
-        content: [
-          prefix,
-          '',
-          'Keep this as the shared proofreading context for the whole chapter. The following messages will submit chapter segments one by one in the same session.',
-          'For each segment, inspect only that segment, use lookup tools when needed, then call report_proofreading_issues.',
-        ].join('\n'),
-      },
-    ]
 
     for (let index = 0; index < segments.length; index++) {
       if (cancelled.value) break
@@ -1410,16 +1862,23 @@ export const useGenerationStore = defineStore('generation', () => {
         segmentTotal: segments.length,
       })
       const segmentPrompt = [
+        prefix,
+        '',
         `Current Chapter Segment ${segment.index + 1}/${segment.total}:`,
         `Estimated token range: ${segment.tokenStart}-${segment.tokenEnd} of ${segment.tokenTotal}.`,
-        'Proofread only this segment. Report exact excerpts from this segment. Do not assume unseen chapter text is present in this request.',
+        'Task: inspect this segment line by line and call report_proofreading_issues. Report grammar, typo, wording, punctuation, consistency, pacing, and logic issues with exact excerpts from this segment. Use an empty issues array only when this segment has no concrete issues.',
         '',
+        'Segment Text:',
         segment.content,
       ].join('\n')
-      messages.push({ role: 'user', content: segmentPrompt })
+      const messages: ChatMessage[] = [
+        { role: 'system', content: getProofreadingSystemPrompt() },
+        { role: 'user', content: segmentPrompt },
+      ]
       const response = await chatWithRelationshipToolsInPlace(messages, modelRef, tools, {
         project,
         finalToolNames: ['report_proofreading_issues'],
+        contextTokens: getModelContextTokens(modelRef),
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
@@ -1445,7 +1904,6 @@ export const useGenerationStore = defineStore('generation', () => {
         segmentTokenTotal: segment.tokenTotal,
       }))
       issues.push(...segmentIssues)
-      messages.splice(2, messages.length - 2)
       await options?.onSegmentComplete?.({
         segmentIndex: index,
         segmentTotal: segments.length,
@@ -1493,6 +1951,9 @@ export const useGenerationStore = defineStore('generation', () => {
     generateCharacters,
     generateStoryPlan,
     generateChapterPlan,
+    generateAdditionalChapterPlan,
+    completeCurrentChapterPlan,
+    reviewAndRewriteChapterPlan,
     generateChapterDraft,
     generateAllChapterDrafts,
     proofreadChapter,
@@ -1506,6 +1967,7 @@ export const useGenerationStore = defineStore('generation', () => {
     finishManualTask,
     chatWithAssistant,
     editChapterWithTool,
+    editChapterOutlineWithTool,
     auditChapterWithTool,
     proofreadChapterWithTool,
     proofreadChapterWithToolChunked,

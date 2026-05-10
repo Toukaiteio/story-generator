@@ -7,6 +7,9 @@ const props = withDefaults(defineProps<{
   label?: string
   placeholder?: string
   type?: 'text' | 'password' | 'number' | 'email'
+  min?: string | number
+  max?: string | number
+  step?: string | number
   error?: string
   disabled?: boolean
   icon?: any
@@ -42,6 +45,9 @@ const containerClass = computed(() => [
       <component :is="icon" v-if="icon" :size="16" class="text-text-muted mr-2 shrink-0" />
       <input
         :type="type"
+        :min="min"
+        :max="max"
+        :step="step"
         :value="modelValue"
         :placeholder="translatedPlaceholder"
         :disabled="disabled"

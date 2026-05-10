@@ -1,15 +1,16 @@
 import type { StoryProject } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import { extractJsonPayload } from '@/services/agent/validation'
-import { buildCharacterContextForTask, buildPreviousSummary } from './context'
+import { buildCharacterContextForTask, buildPreviousSummary, buildProjectRelationshipContext } from './context'
 import { appendRelationshipEventsForChapter } from '@/services/relationship'
-import { buildKnowledgeContextForProject, estimateChapterCount, prepareRuntime } from './runtime'
+import { buildKnowledgeContextForProject, resolveChapterCount, prepareRuntime } from './runtime'
 import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './types'
 import { generateId } from '@/lib/id'
 import { extractRelationshipEventsForChapter, runStoryPlanningWorkflow } from './planning'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import { useProviderStore } from '@/stores/provider'
+import { isChapterPlanComplete } from '@/services/generation/flow'
 
 const ISSUE_SEVERITY_RANK: Record<string, number> = {
   low: 0,
@@ -49,9 +50,7 @@ function hasStoryPlan(project: StoryProject) {
 }
 
 function hasChapterPlan(project: StoryProject) {
-  return project.chapters.length > 0 && project.chapters.every(chapter =>
-    chapter.outline.objective.trim() || chapter.outline.endingHook.trim()
-  )
+  return project.chapters.length > 0 && project.chapters.every(isChapterPlanComplete)
 }
 
 function hasAllDrafts(project: StoryProject) {
@@ -84,6 +83,40 @@ function buildChapterPlanEntryMap(entries: ChapterPlanEntry[]) {
     map.set(entry.chapterNumber, entry)
   }
   return map
+}
+
+function formatChapterPlanEntryContext(entries: ChapterPlanEntry[], limit = 12) {
+  if (!entries.length) return ''
+  const recent = entries.slice(-limit)
+  const omitted = entries.length - recent.length
+  return [
+    omitted > 0 ? `[${omitted} earlier planned chapters omitted from this local context. Use the overall story outline for global continuity.]` : '',
+    ...recent.map(entry => [
+      `Chapter ${entry.chapterNumber}: ${entry.title}`,
+      entry.objective ? `Objective: ${entry.objective}` : '',
+      entry.conflict ? `Conflict: ${entry.conflict}` : '',
+      entry.keyEvents?.length ? `Key Events: ${entry.keyEvents.join(' | ')}` : '',
+      entry.characterActions?.length ? `Character Actions: ${entry.characterActions.join(' | ')}` : '',
+      entry.infoReveals?.length ? `Info Reveals: ${entry.infoReveals.join(' | ')}` : '',
+      entry.endingHook ? `Ending Hook: ${entry.endingHook}` : '',
+    ].filter(Boolean).join('\n')),
+  ].filter(Boolean).join('\n\n')
+}
+
+function applyPlanEntryToChapter(chapter: Chapter, entry: ChapterPlanEntry): Chapter {
+  return {
+    ...chapter,
+    title: entry.title?.trim() || chapter.title,
+    outline: {
+      objective: entry.objective?.trim() || chapter.outline.objective,
+      conflict: entry.conflict?.trim() || chapter.outline.conflict,
+      keyEvents: Array.isArray(entry.keyEvents) ? entry.keyEvents.map(item => String(item).trim()).filter(Boolean) : chapter.outline.keyEvents,
+      characterActions: Array.isArray(entry.characterActions) ? entry.characterActions.map(item => String(item).trim()).filter(Boolean) : chapter.outline.characterActions,
+      infoReveals: Array.isArray(entry.infoReveals) ? entry.infoReveals.map(item => String(item).trim()).filter(Boolean) : chapter.outline.infoReveals,
+      endingHook: entry.endingHook?.trim() || chapter.outline.endingHook,
+    },
+    updatedAt: new Date().toISOString(),
+  }
 }
 
 export function buildChaptersFromPlanEntries(
@@ -145,6 +178,8 @@ export async function runChapterPlanningWorkflow(
 
   onProgress?.('Estimating chapter count and planning titles...')
   onToken?.('\n\n[Planning] Chapter Title Planning\n')
+  const chapterCount = resolveChapterCount(project.chapterCount)
+  const titleBatchSize = 50
 
   const knowledgeContext = await buildKnowledgeContextForProject(project, {
     theme: project.theme,
@@ -156,30 +191,57 @@ export async function runChapterPlanningWorkflow(
     outline: project.outline,
   })
 
-  const titleContext: Record<string, any> = {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    length: project.length,
-    storyOutline: project.outline,
-    knowledgeContext,
-  }
-
-  let titlesData
+  const titleEntries: ChapterPlanEntry[] = []
   try {
-    const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
-    titlesData = titleContext._chapterTitlesData || JSON.parse(extractJsonPayload(titleResult.content))
+    for (let start = 1; start <= chapterCount; start += titleBatchSize) {
+      if (isCancelled()) break
+      const end = Math.min(chapterCount, start + titleBatchSize - 1)
+      onProgress?.(`Planning chapter titles ${start}-${end} of ${chapterCount}...`)
+      const titleContext: Record<string, any> = {
+        theme: project.theme,
+        genre: project.genre,
+        targetReader: project.targetReader,
+        language: project.language,
+        chapterCount,
+        batchChapterCount: end - start + 1,
+        startChapterNumber: start,
+        endChapterNumber: end,
+        storyOutline: project.outline,
+        knowledgeContext,
+      }
+      const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
+      const titlesData = titleContext._chapterTitlesData || JSON.parse(extractJsonPayload(titleResult.content))
+      if (Array.isArray(titlesData?.chapters)) {
+        titleEntries.push(...titlesData.chapters)
+      }
+    }
   } catch (e: any) {
     const msg = `Title planning failed: ${e.message}`
     onError?.(msg)
     throw new Error(msg)
   }
 
-  const chapterCount = titlesData?.chapterCount || estimateChapterCount(project.length)
-  const titles = titlesData?.chapters || []
+  const titles = Array.from({ length: chapterCount }, (_, index) => {
+    const entry = titleEntries[index] ?? null
+    return {
+      chapterNumber: index + 1,
+      title: typeof entry?.title === 'string' && entry.title.trim()
+        ? entry.title.trim()
+        : `Chapter ${index + 1}`,
+      objective: typeof entry?.objective === 'string' && entry.objective.trim()
+        ? entry.objective.trim()
+        : `Advance the story through chapter ${index + 1}.`,
+      conflict: typeof entry?.conflict === 'string' ? entry.conflict : '',
+      keyEvents: Array.isArray(entry?.keyEvents) ? entry.keyEvents : [],
+      characterActions: Array.isArray(entry?.characterActions) ? entry.characterActions : [],
+      infoReveals: Array.isArray(entry?.infoReveals) ? entry.infoReveals : [],
+      endingHook: typeof entry?.endingHook === 'string' ? entry.endingHook : '',
+    }
+  })
 
   const plannedEntries: ChapterPlanEntry[] = []
+  const currentChapters = buildChaptersFromPlanEntries(titles, chapterCount, project.chapters)
+  await onIntermediateSave?.({ chapters: currentChapters })
 
   for (let i = 0; i < titles.length; i++) {
     if (isCancelled()) break
@@ -196,18 +258,13 @@ export async function runChapterPlanningWorkflow(
       style: project.style,
       storyOutline: project.outline,
       characters: buildCharacterContextForTask(project.characters, 'outlining'),
-      existingChapters: formatChapterPlanContext(
-        buildChaptersFromPlanEntries(plannedEntries, plannedEntries.length, project.chapters)
-      ),
+      existingChapters: formatChapterPlanEntryContext(plannedEntries),
       knowledgeContext,
       targetChapter: titleEntry,
       chapterCount,
       _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
-        const currentChapters = buildChaptersFromPlanEntries(
-          [...plannedEntries, outlineData],
-          chapterCount,
-          project.chapters
-        )
+        const chapterIndex = Math.max(0, Math.min(currentChapters.length - 1, outlineData.chapterNumber - 1))
+        currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
         await onIntermediateSave?.({ chapters: currentChapters })
       },
     }
@@ -216,8 +273,8 @@ export async function runChapterPlanningWorkflow(
       const outlineResult = await chapterPlannerAgent.execute(outlineContext, onToken)
       const outlineData = outlineContext._chapterOutlineData || JSON.parse(extractJsonPayload(outlineResult.content))
       plannedEntries.push(outlineData)
-
-      const currentChapters = buildChaptersFromPlanEntries(plannedEntries, chapterCount, project.chapters)
+      const chapterIndex = Math.max(0, Math.min(currentChapters.length - 1, outlineData.chapterNumber - 1))
+      currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
       await onIntermediateSave?.({ chapters: currentChapters })
     } catch (e: any) {
       const msg = `Outline planning failed for Chapter ${titleEntry.chapterNumber}: ${e.message}`
@@ -226,7 +283,7 @@ export async function runChapterPlanningWorkflow(
     }
   }
 
-  return buildChaptersFromPlanEntries(plannedEntries, chapterCount, project.chapters)
+  return currentChapters
 }
 
 export async function generateChapterPlan(
@@ -238,6 +295,370 @@ export async function generateChapterPlan(
   isCancelled: () => boolean = () => false
 ): Promise<Chapter[]> {
   return runChapterPlanningWorkflow(project, onToken, onProgress, onError, onIntermediateSave, isCancelled)
+}
+
+export async function generateAdditionalChapterPlan(
+  project: StoryProject,
+  onToken?: (token: string) => void,
+  onProgress?: (message: string) => void,
+  onError?: (error: string) => void,
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+): Promise<Chapter[]> {
+  const runtime = prepareRuntime()
+  const { chapterTitlePlannerAgent, chapterPlannerAgent } = runtime
+  const nextChapterNumber = project.chapters.length + 1
+  const chapterCount = Math.max(project.chapterConfig?.maxChapters ?? project.chapterCount ?? nextChapterNumber, nextChapterNumber)
+
+  onProgress?.(`Planning title for Chapter ${nextChapterNumber}...`)
+  onToken?.(`\n\n[Planning] Chapter ${nextChapterNumber} Title\n`)
+
+  const knowledgeContext = await buildKnowledgeContextForProject(project, {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    customRequirements: project.customRequirements,
+    outline: project.outline,
+  })
+
+  let titleEntry: ChapterPlanEntry
+  try {
+    const titleContext: Record<string, any> = {
+      mode: 'nextChapter',
+      theme: project.theme,
+      genre: project.genre,
+      targetReader: project.targetReader,
+      language: project.language,
+      chapterCount,
+      maxChapters: project.chapterConfig?.maxChapters ?? chapterCount,
+      nextChapterNumber,
+      storyOutline: project.outline,
+      existingChapters: formatChapterPlanContext(project.chapters),
+      knowledgeContext,
+    }
+    const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
+    titleEntry = titleContext._nextChapterTitleData || JSON.parse(extractJsonPayload(titleResult.content))
+  } catch (e: any) {
+    const msg = `Next chapter title planning failed: ${e.message}`
+    onError?.(msg)
+    throw new Error(msg)
+  }
+
+  const currentChapters = [...project.chapters]
+  const now = new Date().toISOString()
+  const draftChapter: Chapter = {
+    id: generateId(),
+    index: nextChapterNumber - 1,
+    title: titleEntry.title?.trim() || `Chapter ${nextChapterNumber}`,
+    outline: {
+      objective: titleEntry.objective?.trim() || `Advance the story through chapter ${nextChapterNumber}.`,
+      conflict: '',
+      keyEvents: [],
+      characterActions: [],
+      infoReveals: [],
+      endingHook: '',
+    },
+    content: '',
+    proofreadingIssues: [],
+    proofreadingIssuesStale: false,
+    contentVersions: [],
+    polishedContent: '',
+    status: 'outline',
+    summary: '',
+    characterStateUpdates: {},
+    createdAt: now,
+    updatedAt: now,
+  }
+  currentChapters.push(draftChapter)
+  await onIntermediateSave?.({ chapters: currentChapters })
+
+  onProgress?.(`Planning outline for Chapter ${nextChapterNumber}: ${draftChapter.title}...`)
+  onToken?.(`\n\n[Planning] Chapter ${nextChapterNumber} Outline\n`)
+
+  const outlineContext: Record<string, any> = {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    storyOutline: project.outline,
+    characters: buildCharacterContextForTask(project.characters, 'outlining'),
+    existingChapters: formatChapterPlanContext(project.chapters),
+    knowledgeContext,
+    targetChapter: titleEntry,
+    chapterCount,
+    _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
+      currentChapters[currentChapters.length - 1] = applyPlanEntryToChapter(currentChapters[currentChapters.length - 1], outlineData)
+      await onIntermediateSave?.({ chapters: currentChapters })
+    },
+  }
+
+  try {
+    const outlineResult = await chapterPlannerAgent.execute(outlineContext, onToken)
+    const outlineData = outlineContext._chapterOutlineData || JSON.parse(extractJsonPayload(outlineResult.content))
+    currentChapters[currentChapters.length - 1] = applyPlanEntryToChapter(currentChapters[currentChapters.length - 1], outlineData)
+    await onIntermediateSave?.({ chapters: currentChapters })
+  } catch (e: any) {
+    const msg = `Outline planning failed for Chapter ${nextChapterNumber}: ${e.message}`
+    onError?.(msg)
+    throw new Error(msg)
+  }
+
+  return currentChapters
+}
+
+
+function formatCurrentChapterPlanContext(chapter: Chapter) {
+  return [
+    `Chapter ${chapter.index + 1}: ${chapter.title}`,
+    chapter.outline.objective.trim() ? `Objective: ${chapter.outline.objective.trim()}` : '',
+    chapter.outline.conflict.trim() ? `Conflict: ${chapter.outline.conflict.trim()}` : '',
+    chapter.outline.keyEvents.length ? `Key Events: ${chapter.outline.keyEvents.join(' | ')}` : '',
+    chapter.outline.characterActions.length ? `Character Actions: ${chapter.outline.characterActions.join(' | ')}` : '',
+    chapter.outline.infoReveals.length ? `Info Reveals: ${chapter.outline.infoReveals.join(' | ')}` : '',
+    chapter.outline.endingHook.trim() ? `Ending Hook: ${chapter.outline.endingHook.trim()}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function chapterToPlanEntry(chapter: Chapter): ChapterPlanEntry {
+  return {
+    chapterNumber: chapter.index + 1,
+    title: chapter.title?.trim() || `Chapter ${chapter.index + 1}`,
+    objective: chapter.outline.objective?.trim() || `Advance the story through chapter ${chapter.index + 1}.`,
+    conflict: chapter.outline.conflict,
+    keyEvents: chapter.outline.keyEvents,
+    characterActions: chapter.outline.characterActions,
+    infoReveals: chapter.outline.infoReveals,
+    endingHook: chapter.outline.endingHook,
+  }
+}
+
+function formatOutlineAuditIssues(issues: any[]) {
+  if (!issues.length) return 'No qualifying audit issues.'
+  return issues.map((issue, index) => [
+    `${index + 1}. ${String(issue.title ?? 'Outline issue').trim()}`,
+    `Severity: ${issue.severity ?? 'medium'}`,
+    `Category: ${issue.category ?? 'logic'}`,
+    issue.excerpt ? `Outline excerpt: ${issue.excerpt}` : '',
+    `Problem: ${String(issue.explanation ?? '').trim()}`,
+    `Required fix: ${String(issue.suggestedFix ?? '').trim()}`,
+  ].filter(Boolean).join('\n')).join('\n\n')
+}
+
+function isGenericChapterTitle(chapter: Chapter) {
+  const title = chapter.title?.trim() || ''
+  return !title || new RegExp(`^chapter\\s*${chapter.index + 1}$`, 'i').test(title)
+}
+
+export async function completeChapterPlan(
+  project: StoryProject,
+  chapterIndex: number,
+  onToken?: (token: string) => void,
+  onProgress?: (message: string) => void,
+  onError?: (error: string) => void,
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+): Promise<Chapter[]> {
+  const { chapterTitlePlannerAgent, chapterPlannerAgent } = prepareRuntime()
+  const chapter = project.chapters[chapterIndex]
+  if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
+
+  const chapterCount = Math.max(project.chapterConfig?.maxChapters ?? project.chapterCount ?? project.chapters.length, project.chapters.length)
+  onProgress?.(`Completing outline for Chapter ${chapter.index + 1}: ${chapter.title}...`)
+  onToken?.(`\n\n[Planning] Complete Chapter ${chapter.index + 1} Outline\n`)
+
+  const knowledgeContext = await buildKnowledgeContextForProject(project, {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    customRequirements: project.customRequirements,
+    outline: project.outline,
+    chapterTitle: chapter.title,
+    chapterOutline: JSON.stringify(chapter.outline),
+  })
+
+  const currentChapters = [...project.chapters]
+  const previousChapters = project.chapters.filter(item => item.index < chapter.index)
+  let targetChapter = chapterToPlanEntry(chapter)
+
+  if (isGenericChapterTitle(chapter) || !chapter.outline.objective?.trim()) {
+    onProgress?.(`Planning title for Chapter ${chapter.index + 1}...`)
+    const titleContext: Record<string, any> = {
+      mode: 'nextChapter',
+      theme: project.theme,
+      genre: project.genre,
+      targetReader: project.targetReader,
+      language: project.language,
+      chapterCount,
+      maxChapters: project.chapterConfig?.maxChapters ?? chapterCount,
+      nextChapterNumber: chapter.index + 1,
+      storyOutline: project.outline,
+      existingChapters: formatChapterPlanContext(previousChapters),
+      knowledgeContext,
+    }
+
+    try {
+      const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
+      const titleData = titleContext._nextChapterTitleData || JSON.parse(extractJsonPayload(titleResult.content))
+      targetChapter = {
+        ...targetChapter,
+        title: titleData.title?.trim() || targetChapter.title,
+        objective: titleData.objective?.trim() || targetChapter.objective,
+      }
+      currentChapters[chapterIndex] = {
+        ...currentChapters[chapterIndex],
+        title: targetChapter.title,
+        outline: {
+          ...currentChapters[chapterIndex].outline,
+          objective: targetChapter.objective,
+        },
+        updatedAt: new Date().toISOString(),
+      }
+      await onIntermediateSave?.({ chapters: currentChapters })
+    } catch (e: any) {
+      const msg = `Title planning failed for Chapter ${chapter.index + 1}: ${e.message}`
+      onError?.(msg)
+      throw new Error(msg)
+    }
+  }
+
+  const currentChapterForContext = currentChapters[chapterIndex]
+  const outlineContext: Record<string, any> = {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    storyOutline: project.outline,
+    characters: buildCharacterContextForTask(project.characters, 'outlining'),
+    existingChapters: formatChapterPlanContext(previousChapters),
+    currentChapterPlan: formatCurrentChapterPlanContext(currentChapterForContext),
+    knowledgeContext,
+    targetChapter,
+    chapterCount,
+    _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
+      currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
+      await onIntermediateSave?.({ chapters: currentChapters })
+    },
+  }
+
+  try {
+    const outlineResult = await chapterPlannerAgent.execute(outlineContext, onToken)
+    const outlineData = outlineContext._chapterOutlineData || JSON.parse(extractJsonPayload(outlineResult.content))
+    currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
+    await onIntermediateSave?.({ chapters: currentChapters })
+    return currentChapters
+  } catch (e: any) {
+    const msg = `Outline planning failed for Chapter ${chapter.index + 1}: ${e.message}`
+    onError?.(msg)
+    throw new Error(msg)
+  }
+}
+
+export async function reviewAndRewriteChapterPlan(
+  project: StoryProject,
+  chapterIndex: number,
+  onToken?: (token: string) => void,
+  onProgress?: (message: string) => void,
+  onError?: (error: string) => void,
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+): Promise<{ chapters: Chapter[]; issues: any[] }> {
+  const { proofreaderAgent, chapterPlannerAgent } = prepareRuntime()
+  const chapter = project.chapters[chapterIndex]
+  if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
+
+  const severityThreshold = useProviderStore().toolWorkflowSettings.minIssueSeverity
+  const knowledgeContext = await buildKnowledgeContextForProject(project, {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    customRequirements: project.customRequirements,
+    outline: project.outline,
+    chapterTitle: chapter.title,
+    chapterOutline: JSON.stringify(chapter.outline),
+  })
+
+  onProgress?.(`Reviewing outline for Chapter ${chapter.index + 1}...`)
+  onToken?.(`\n\n[Review] Chapter ${chapter.index + 1} Outline Audit\n`)
+
+  const previousChapters = project.chapters.filter(item => item.index < chapter.index)
+  const auditContext: Record<string, any> = {
+    auditTarget: 'chapter-outline',
+    content: formatCurrentChapterPlanContext(chapter),
+    chapterTitle: chapter.title,
+    chapterNumber: chapter.index + 1,
+    chapterOutline: project.outline,
+    characters: buildCharacterContextForTask(project.characters, 'proofreading'),
+    previousSummary: formatChapterPlanContext(previousChapters.slice(-12)),
+    language: project.language,
+    style: project.style,
+    project: buildProjectRelationshipContext(project),
+    writingFormat: project.writingFormat,
+    knowledgeContext,
+  }
+
+  let qualifyingIssues: any[] = []
+  try {
+    const auditResult = await proofreaderAgent.execute(auditContext, onToken)
+    const issues: any[] = Array.isArray(auditResult.data?.issues) ? auditResult.data.issues : []
+    qualifyingIssues = issues.filter((issue: any) => issueMeetsSeverityThreshold(issue, severityThreshold))
+  } catch (e: any) {
+    const msg = `Outline review failed for Chapter ${chapter.index + 1}: ${e.message}`
+    onError?.(msg)
+    throw new Error(msg)
+  }
+
+  if (!qualifyingIssues.length) {
+    onProgress?.(`No ${severityThreshold}+ outline issues found for Chapter ${chapter.index + 1}.`)
+    return { chapters: project.chapters, issues: [] }
+  }
+
+  onProgress?.(`Rewriting outline for Chapter ${chapter.index + 1} from ${qualifyingIssues.length} review issue(s)...`)
+  onToken?.(`\n\n[Planning] Rewrite Chapter ${chapter.index + 1} Outline From Review\n`)
+
+  const currentChapters = [...project.chapters]
+  const targetChapter = chapterToPlanEntry(chapter)
+  const outlineContext: Record<string, any> = {
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.style,
+    storyOutline: project.outline,
+    characters: buildCharacterContextForTask(project.characters, 'outlining'),
+    existingChapters: formatChapterPlanContext(previousChapters),
+    currentChapterPlan: [
+      formatCurrentChapterPlanContext(chapter),
+      '',
+      `Quick review issues to fix (minimum severity: ${severityThreshold}):`,
+      formatOutlineAuditIssues(qualifyingIssues),
+      '',
+      'Rewrite this chapter outline to preserve the useful intent while fixing every qualifying review issue. Keep the same chapter number, title, and objective unless the issue requires tightening the objective.',
+    ].join('\n'),
+    knowledgeContext,
+    targetChapter,
+    chapterCount: Math.max(project.chapterConfig?.maxChapters ?? project.chapterCount ?? project.chapters.length, project.chapters.length),
+    _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
+      currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
+      await onIntermediateSave?.({ chapters: currentChapters })
+    },
+  }
+
+  try {
+    const outlineResult = await chapterPlannerAgent.execute(outlineContext, onToken)
+    const outlineData = outlineContext._chapterOutlineData || JSON.parse(extractJsonPayload(outlineResult.content))
+    currentChapters[chapterIndex] = applyPlanEntryToChapter(currentChapters[chapterIndex], outlineData)
+    await onIntermediateSave?.({ chapters: currentChapters })
+    return { chapters: currentChapters, issues: qualifyingIssues }
+  } catch (e: any) {
+    const msg = `Outline rewrite failed for Chapter ${chapter.index + 1}: ${e.message}`
+    onError?.(msg)
+    throw new Error(msg)
+  }
 }
 
 export async function generateChapterDraft(
@@ -272,7 +693,7 @@ export async function generateChapterDraft(
     previousSummary: buildPreviousSummary(project, chapterIndex),
     language: project.language,
     style: project.style,
-    project,
+    project: buildProjectRelationshipContext(project),
     writingFormat: project.writingFormat,
     knowledgeContext,
   }
@@ -362,7 +783,7 @@ export async function proofreadChapter(
       previousSummary: buildPreviousSummary(project, chapterIndex),
       language: project.language,
       style: project.style,
-      project,
+      project: buildProjectRelationshipContext(project),
       writingFormat: project.writingFormat,
       knowledgeContext,
       range: segment,
@@ -479,7 +900,7 @@ export async function polishChapter(
       characters: buildCharacterContextForTask(project.characters, 'polishing'),
       language: project.language,
       style: project.style,
-      project,
+      project: buildProjectRelationshipContext(project),
       writingFormat: project.writingFormat,
       proofreadingIssues: [issue],
       range: segment,
@@ -624,7 +1045,7 @@ export async function run(
           previousSummary: buildPreviousSummary(updatedProject, i),
           language: project.language,
           style: project.style,
-          project: updatedProject,
+          project: buildProjectRelationshipContext(updatedProject),
           writingFormat: project.writingFormat,
           knowledgeContext,
         }
@@ -748,7 +1169,7 @@ export async function run(
             previousSummary: buildPreviousSummary(updatedProject, i),
             language: project.language,
             style: project.style,
-            project: updatedProject,
+            project: buildProjectRelationshipContext(updatedProject),
             writingFormat: updatedProject.writingFormat,
             knowledgeContext,
             range: segment,

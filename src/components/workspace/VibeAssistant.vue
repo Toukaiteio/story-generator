@@ -10,6 +10,7 @@ import ToolCallStatus, { type ToolCallStatusItem } from '@/components/ui/ToolCal
 import TodoListStatus from '@/components/ui/TodoListStatus.vue'
 import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
 import type { AgentTodoItem } from '@/services/agent/todolist'
+import type { ChapterOutline } from '@/types/chapter'
 import { AlertTriangle, ArrowUp, LoaderCircle, Square, Sparkles, RotateCcw, User, Check, Copy, Wand2, ChevronDown, Brain } from 'lucide-vue-next'
 
 interface ChatMessage {
@@ -24,13 +25,14 @@ interface ChatMessage {
 const props = withDefaults(defineProps<{
   stage: string
   context?: Record<string, any>
-  mode?: 'assistant' | 'editor-agent'
+  mode?: 'assistant' | 'editor-agent' | 'outline-agent'
 }>(), {
   mode: 'assistant',
 })
 
 const emit = defineEmits<{
   apply: [content: string]
+  applyOutline: [payload: { title: string; outline: ChapterOutline }]
   rewind: [snapshot: unknown]
   close: []
 }>()
@@ -88,7 +90,7 @@ const hasConversationContent = computed(() =>
 )
 
 const shouldShowQuickActions = computed(() =>
-  props.mode === 'editor-agent' && !hasConversationContent.value && !isLoading.value
+  (props.mode === 'editor-agent' || props.mode === 'outline-agent') && !hasConversationContent.value && !isLoading.value
 )
 
 const stagePrompts: Record<string, string> = {
@@ -116,7 +118,21 @@ const quickActions = [
   'Tighten redundant paragraphs while preserving key details',
 ]
 
+const outlineQuickActions = [
+  'Tighten this outline while preserving the chapter intent',
+  'Make the conflict more concrete and actionable',
+  'Improve the causal flow between plot beats',
+  'Strengthen the ending hook without changing the setup',
+]
+
+const activeQuickActions = computed(() =>
+  props.mode === 'outline-agent' ? outlineQuickActions : quickActions
+)
+
 function greetingContent() {
+  if (props.mode === 'outline-agent') {
+    return 'Tell me what to adjust in this chapter outline. I will update the structured planning fields directly.'
+  }
   return props.mode === 'editor-agent'
     ? 'Tell me what to change in this chapter. I will return a revised version you can apply to the editor.'
     : `Hello. I am your ${stageLabels[props.stage]}. How shall we evolve your story today?`
@@ -375,6 +391,25 @@ function scrollToBottom() {
   })
 }
 
+function buildChapterContentContext(content: string | undefined, mode: string): string {
+  const text = content || ''
+  if (!text.trim()) return 'Current Content: Drafting...'
+  const maxInline = mode === 'editor-agent' ? 1200 : 2000
+  if (text.length <= maxInline) return `Current Content:\n${text}`
+
+  const head = text.slice(0, Math.floor(maxInline * 0.6)).trim()
+  const tail = text.slice(-Math.floor(maxInline * 0.4)).trim()
+  const omitted = Math.max(0, text.length - head.length - tail.length)
+  return [
+    `Current Content Summary: ${text.length} characters. Full content is available through editor tools; do not assume omitted middle text.`,
+    'Current Content Excerpt Start:',
+    head,
+    `[... ${omitted} characters omitted ...]`,
+    'Current Content Excerpt End:',
+    tail,
+  ].join('\n')
+}
+
 function buildContextPrompt(): string {
   const ctx = props.context || {}
   const parts: string[] = []
@@ -383,14 +418,23 @@ function buildContextPrompt(): string {
     parts.push(`Writing Style Guide (higher priority than Content Format):\n${ctx.writingStyle}`)
   }
   if (ctx.chapter) {
-    parts.push([
-      'The application has already selected the current chapter. Edit only this chapter; do not choose or request another chapter.',
-      `Chapter: ${ctx.chapter.title}`,
-      ctx.chapter.index !== undefined ? `Current Chapter Number: ${ctx.chapter.index + 1}` : '',
-      ctx.chapter.outline ? `Chapter Outline:\n${JSON.stringify(ctx.chapter.outline, null, 2)}` : '',
-      `Content Format: ${ctx.writingFormat || 'auto'}`,
-      `Current Content:\n${ctx.chapter.content || 'Drafting...'}`,
-    ].filter(Boolean).join('\n'))
+    if (props.mode === 'outline-agent') {
+      parts.push([
+        'The application has already selected the current chapter outline. Edit only this chapter outline; do not choose or request another chapter.',
+        `Chapter: ${ctx.chapter.title}`,
+        ctx.chapter.index !== undefined ? `Current Chapter Number: ${ctx.chapter.index + 1}` : '',
+        ctx.chapter.outline ? `Current Chapter Outline:\n${JSON.stringify(ctx.chapter.outline, null, 2)}` : '',
+      ].filter(Boolean).join('\n'))
+    } else {
+      parts.push([
+        'The application has already selected the current chapter. Edit only this chapter; do not choose or request another chapter.',
+        `Chapter: ${ctx.chapter.title}`,
+        ctx.chapter.index !== undefined ? `Current Chapter Number: ${ctx.chapter.index + 1}` : '',
+        ctx.chapter.outline ? `Chapter Outline:\n${JSON.stringify(ctx.chapter.outline, null, 2)}` : '',
+        `Content Format: ${ctx.writingFormat || 'auto'}`,
+        buildChapterContentContext(ctx.chapter.content, props.mode),
+      ].filter(Boolean).join('\n'))
+    }
   }
   if (ctx.character) parts.push(`Character: ${ctx.character.name} (${ctx.character.role})`)
   return parts.join('\n\n')
@@ -398,10 +442,25 @@ function buildContextPrompt(): string {
 
 function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: string) {
   const ctx = props.context || {}
-  if (props.mode !== 'editor-agent') {
+  if (props.mode === 'assistant') {
     return contextPrompt
       ? `${systemPrompt}\n\nContext:\n${contextPrompt}\n\nUser: ${userMessage}`
       : `${systemPrompt}\n\nUser: ${userMessage}`
+  }
+
+  if (props.mode === 'outline-agent') {
+    return [
+      systemPrompt,
+      'Rules:',
+      '- Apply the user request to the current chapter outline fields only.',
+      '- Preserve the chapter intent, story continuity, characters, and known facts unless the user explicitly asks for a change.',
+      '- Prefer a localized outline field update when the request targets one field.',
+      '- Use a complete outline rewrite only when multiple fields need coordinated changes.',
+      '- Do not edit or generate chapter prose.',
+      '- Do not reply with the revised outline in plain text. Complete the edit by calling the appropriate outline tool only.',
+      contextPrompt ? `Context:\n${contextPrompt}` : '',
+      `User Request:\n${userMessage}`,
+    ].filter(Boolean).join('\n\n')
   }
 
   return [
@@ -485,6 +544,42 @@ async function sendMessage() {
           : response.toolName === 'replace_chapter_section'
             ? 'Applied localized edit to the editor.'
             : 'Applied chapter replacement to the editor.',
+        reasoning: currentReasoning.value,
+      })
+    } else if (props.mode === 'outline-agent') {
+      const currentTitle = typeof props.context?.chapter?.title === 'string'
+        ? props.context.chapter.title
+        : 'Untitled'
+      const currentOutline = props.context?.chapter?.outline as ChapterOutline | undefined
+      const assistantMessageId = addMessage('assistant', '')
+      streamingAssistantId.value = assistantMessageId
+      const response = await genStore.editChapterOutlineWithTool(fullPrompt, {
+        currentTitle,
+        currentOutline,
+        modelRef: selectedModelRef.value,
+        onToolStatus: updateToolStatus,
+        onTodoList: state => {
+          if (cancelledRequestIds.has(requestId)) return
+          todoItems.value = state.items
+          scheduleChatSave()
+        },
+        onToken: () => {},
+        onReasoningToken: token => {
+          if (cancelledRequestIds.has(requestId)) return
+          currentReasoning.value += token
+          updateMessage(assistantMessageId, { reasoning: currentReasoning.value })
+        },
+        signal: abortController.signal,
+      })
+      if (cancelledRequestIds.has(requestId)) return
+      emit('applyOutline', { title: response.title, outline: response.outline })
+      toast.success('Applied to outline')
+      updateMessage(assistantMessageId, {
+        content: response.summary?.trim()
+          ? `Applied outline edit: ${response.summary.trim()}`
+          : response.toolName === 'replace_chapter_outline_field'
+            ? 'Applied outline field update.'
+            : 'Applied chapter outline rewrite.',
         reasoning: currentReasoning.value,
       })
     } else {
@@ -784,7 +879,7 @@ defineExpose({
     >
       <div v-if="shouldShowQuickActions" class="grid grid-cols-1 gap-2 -mt-2">
         <button
-          v-for="action in quickActions"
+          v-for="action in activeQuickActions"
           :key="action"
           class="text-left rounded-lg border border-surface-4 bg-surface-2/60 px-3 py-2 text-xs text-text-secondary hover:border-accent/40 hover:text-text-primary transition-colors"
           :disabled="isLoading"
@@ -902,7 +997,7 @@ defineExpose({
           </button>
 
           <!-- Actions for Assistant Messages -->
-          <div v-if="msg.role === 'assistant' && props.mode !== 'editor-agent'" class="mt-6 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-y-2 group-hover:translate-y-0">
+          <div v-if="msg.role === 'assistant' && props.mode === 'assistant'" class="mt-6 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-y-2 group-hover:translate-y-0">
             <button 
               class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-accent text-white shadow-lg shadow-accent/20 hover:scale-105 active:scale-95 transition-all"
               @click="applyContent(msg.content)"
@@ -951,7 +1046,7 @@ defineExpose({
         <div class="mt-2 flex items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-text-muted">
             <span
-              v-if="mode === 'editor-agent'"
+              v-if="mode === 'editor-agent' || mode === 'outline-agent'"
               class="rounded-md bg-surface-3 px-2 py-1 font-medium text-text-secondary"
             >
               {{ tr('Tool edit mode') }}

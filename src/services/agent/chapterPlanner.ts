@@ -15,7 +15,7 @@ export class ChapterPlannerExpert extends BaseAgent {
     return [
       {
         name: 'create_chapter_outline',
-        description: 'Create the detailed outline for the specified chapter.',
+        description: 'Create the detailed outline for the exact target chapter supplied in the prompt. Do not invent or pass chapterNumber/title/objective; those are provided by the runtime context.',
         parameters: {
           type: 'object',
           properties: {
@@ -59,7 +59,6 @@ export class ChapterPlannerExpert extends BaseAgent {
       if (!Array.isArray(characterActions) || !characterActions.length) issues.push('characterActions must contain at least one entry')
       if (!Array.isArray(infoReveals) || !infoReveals.length) issues.push('infoReveals must contain at least one entry')
       if (!endingHook) issues.push('endingHook is required')
-
       if (issues.length) {
         return {
           tool_call_id: toolCall.id,
@@ -99,7 +98,9 @@ export class ChapterPlannerExpert extends BaseAgent {
     return `You are an expert chapter planner.
 Your job is to create the detailed outline for a single specific chapter based on its given title and objective.
 Use the create_chapter_outline tool to output the outline details.
-Do not output JSON in the text message.`
+This is a single-step structured-output task: call create_chapter_outline directly.
+Do not call update_todolist for this task unless the user explicitly asks for a checklist.
+Do not output JSON, markdown, prose, placeholder chapter labels, or analysis in the assistant text message.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
@@ -114,13 +115,20 @@ Do not output JSON in the text message.`
       characters,
       existingChapters,
       targetChapter,
+      currentChapterPlan,
       chapterCount,
     } = context
+    const referenceMaterial = knowledgeContext ? `\nReference material:\n${knowledgeContext}\n` : ''
 
-    return `Create the detailed outline for Chapter ${targetChapter.chapterNumber} out of ${chapterCount}.
+    return `Create the detailed outline for the exact target chapter below.
 
-Chapter Title: ${targetChapter.title}
-Chapter Objective: ${targetChapter.objective}
+Target chapter:
+- Chapter Number: ${targetChapter.chapterNumber}
+- Total Chapters: ${chapterCount}
+- Chapter Title: ${targetChapter.title}
+- Chapter Objective: ${targetChapter.objective}
+
+The create_chapter_outline tool only accepts the detailed outline fields. Do not include chapterNumber, title, objective, "Unknown", "?", or placeholder labels in the tool arguments.
 
 Story context:
 Theme: ${theme}
@@ -136,9 +144,12 @@ ${characters || 'None'}
 
 Previously Planned Chapters:
 ${existingChapters ? existingChapters : 'This is the first chapter.'}
-${knowledgeContext ? `\nReference material:\n${knowledgeContext}\n` : ''}
 
-Use the create_chapter_outline tool to define the conflict, keyEvents, characterActions, infoReveals, and endingHook for THIS chapter ONLY.`
+Existing partial plan for this chapter:
+${currentChapterPlan || 'No partial plan provided.'}
+${referenceMaterial}
+
+Call create_chapter_outline now to complete or refine the conflict, keyEvents, characterActions, infoReveals, and endingHook for THIS chapter ONLY. Preserve useful existing chapter intent from the partial plan when it is concrete.`
   }
 
   protected validateOutput(response: string, parsed: any, context: Record<string, any>): string[] {
@@ -192,7 +203,7 @@ Use the create_chapter_outline tool to define the conflict, keyEvents, character
         return {
           content: JSON.stringify(context._chapterOutlineData),
           tokenUsage: { prompt: 0, completion: 0 },
-          compressed: false,
+          ...this.getCompressionReport(),
         }
       }
 

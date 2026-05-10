@@ -21,7 +21,7 @@ export interface ChapterAuditIssue {
 
 export type NextGenerationAction =
   | { stage: 'planning' }
-  | { stage: 'chapter-outline' }
+  | { stage: 'chapter-outline'; chapterIndex?: number }
   | { stage: 'writing'; chapterIndex: number }
   | { stage: 'proofreading'; chapterIndex: number }
   | { stage: 'polishing'; chapterIndex: number }

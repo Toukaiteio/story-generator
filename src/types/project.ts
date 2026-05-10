@@ -16,6 +16,10 @@ export type GenerationStage =
   | 'polishing'
   | 'done'
 
+export interface ChapterConfig {
+  maxChapters: number
+}
+
 export interface StoryProject extends Timestamps {
   id: ID
   name: string
@@ -27,7 +31,9 @@ export interface StoryProject extends Timestamps {
   style: string
   styleId: string
   writingFormat: WritingFormat
-  length: StoryLength
+  chapterCount: number
+  chapterConfig: ChapterConfig
+  length?: StoryLength
   constraints: {
     required: string[]
     forbidden: string[]

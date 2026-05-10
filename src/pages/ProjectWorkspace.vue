@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
@@ -25,9 +25,17 @@ const projectStore = useProjectStore()
 const ui = useUiStore()
 const genStore = useGenerationStore()
 const workspaceNodeBeforeFollowing = ref<string | null>(null)
+const hasChapterEditorDrafts = computed(() => Object.keys(ui.chapterEditorDrafts).length > 0)
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasChapterEditorDrafts.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
 
 onMounted(async () => {
   ui.navigateTo('workspace')
+  window.addEventListener('beforeunload', handleBeforeUnload)
   // Ensure projects are loaded before setting active project
   if (projectStore.projects.length === 0) {
     await projectStore.loadProjects()
@@ -38,6 +46,14 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+
+watch(hasChapterEditorDrafts, hasDrafts => {
+  window.electronAPI?.window?.setUnsavedChanges?.(hasDrafts)
+}, { immediate: true })
+
 watch(() => route.params.id, (id) => {
   if (id) projectStore.setActiveProject(id as string)
 })
@@ -47,6 +63,17 @@ const activeNode = computed(() => ui.activeWorkspaceNode)
 const activeChapterId = computed(() => {
   if (!activeNode.value?.startsWith('chapter-')) return null
   return activeNode.value.replace('chapter-', '')
+})
+
+const openedChapterIds = ref<string[]>([])
+
+watch(activeChapterId, chapterId => {
+  if (!chapterId || openedChapterIds.value.includes(chapterId)) return
+  openedChapterIds.value = [...openedChapterIds.value, chapterId]
+}, { immediate: true })
+
+watch(() => projectStore.activeProject?.id, () => {
+  openedChapterIds.value = activeChapterId.value ? [activeChapterId.value] : []
 })
 
 const activeCharacterId = computed(() => {
@@ -137,18 +164,22 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
             </template>
             
             <!-- Other views -->
-            <GenerationStudio v-else-if="activeView === 'generation'" />
+            <GenerationStudio v-if="activeView === 'generation'" />
             <OutlinePanel v-else-if="activeView === 'outline'" />
-            <ChapterEditor
-              v-else-if="activeView === 'chapter' && activeChapterId"
-              :chapter-id="activeChapterId"
-            />
             <CharacterDetail
               v-else-if="activeView === 'character' && activeCharacterId"
               :character-id="activeCharacterId"
             />
             <StoryPreviewPanel v-else-if="activeView === 'preview'" />
-            <StoryConfigPanel v-else />
+            <StoryConfigPanel v-else-if="activeView !== 'chapter' && activeView !== 'config'" />
+
+            <ChapterEditor
+              v-for="chapterId in openedChapterIds"
+              v-show="activeView === 'chapter' && activeChapterId === chapterId"
+              :key="chapterId"
+              :chapter-id="chapterId"
+              :active="activeView === 'chapter' && activeChapterId === chapterId"
+            />
           </div>
         </template>
       </PanelGroup>

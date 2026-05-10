@@ -1,7 +1,7 @@
 import type { StoryProject } from '@/types/project'
 import type { PipelineCallbacks, PipelineRunOptions } from './types'
 import { generateOutline as generateOutlineWorkflow, generateCharacters as generateCharactersWorkflow, generateStoryPlan as generateStoryPlanWorkflow } from './planning'
-import { generateChapterPlan as generateChapterPlanWorkflow, generateChapterDraft as generateChapterDraftWorkflow, proofreadChapter as proofreadChapterWorkflow, polishChapter as polishChapterWorkflow, run as runWorkflow } from './chapter'
+import { completeChapterPlan as completeChapterPlanWorkflow, generateAdditionalChapterPlan as generateAdditionalChapterPlanWorkflow, generateChapterPlan as generateChapterPlanWorkflow, generateChapterDraft as generateChapterDraftWorkflow, proofreadChapter as proofreadChapterWorkflow, polishChapter as polishChapterWorkflow, reviewAndRewriteChapterPlan as reviewAndRewriteChapterPlanWorkflow, run as runWorkflow } from './chapter'
 
 export type { PipelineCallbacks, PipelineRunOptions } from './types'
 
@@ -16,8 +16,8 @@ export class StoryPipeline {
     return generateOutlineWorkflow(project)
   }
 
-  async generateCharacters(project: StoryProject) {
-    return generateCharactersWorkflow(project)
+  async generateCharacters(project: StoryProject, options?: { preferredCount?: number; characterRequirements?: string }) {
+    return generateCharactersWorkflow(project, options)
   }
 
   async generateStoryPlan(
@@ -38,6 +38,38 @@ export class StoryPipeline {
     onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
   ) {
     return generateChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave, () => this.cancelled)
+  }
+
+  async generateAdditionalChapterPlan(
+    project: StoryProject,
+    onToken?: (token: string) => void,
+    onProgress?: (message: string) => void,
+    onError?: (error: string) => void,
+    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+  ) {
+    return generateAdditionalChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave)
+  }
+
+  async completeChapterPlan(
+    project: StoryProject,
+    chapterIndex: number,
+    onToken?: (token: string) => void,
+    onProgress?: (message: string) => void,
+    onError?: (error: string) => void,
+    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+  ) {
+    return completeChapterPlanWorkflow(project, chapterIndex, onToken, onProgress, onError, onIntermediateSave)
+  }
+
+  async reviewAndRewriteChapterPlan(
+    project: StoryProject,
+    chapterIndex: number,
+    onToken?: (token: string) => void,
+    onProgress?: (message: string) => void,
+    onError?: (error: string) => void,
+    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
+  ) {
+    return reviewAndRewriteChapterPlanWorkflow(project, chapterIndex, onToken, onProgress, onError, onIntermediateSave)
   }
 
   async generateChapterDraft(

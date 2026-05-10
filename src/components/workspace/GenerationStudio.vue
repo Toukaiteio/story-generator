@@ -7,6 +7,7 @@ import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
+import { hasAnyChapterPlanInfo, isChapterPlanComplete } from '@/services/generation/flow'
 import type { Character } from '@/types/character'
 import type { Chapter } from '@/types/chapter'
 import type { GenerationStage } from '@/types/project'
@@ -15,6 +16,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
+import BaseDialog from '@/components/ui/BaseDialog.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import VibeAssistant from './VibeAssistant.vue'
@@ -62,6 +64,10 @@ const showDeleteConfirm = ref(false)
 const showDoubleDeleteConfirm = ref(false)
 const chapterToDeleteId = ref<string | null>(null)
 const showClearConfirm = ref(false)
+const showGenerateBeyondLimitConfirm = ref(false)
+const showGenerateCharactersDialog = ref(false)
+const characterGenerationRequirements = ref('')
+const characterGenerationCount = ref(5)
 
 const characterContext = computed(() => {
   if (!project.value?.characters.length) return ''
@@ -123,6 +129,21 @@ function handleVibeApply(content: string) {
         })
         : content)
     }
+  }
+}
+
+function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outline'] }) {
+  if (!selectedChapter.value) return
+  const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
+  if (!chapter) return
+  chapter.title = payload.title || chapter.title
+  chapter.outline = {
+    objective: payload.outline.objective || '',
+    conflict: payload.outline.conflict || '',
+    keyEvents: Array.isArray(payload.outline.keyEvents) ? payload.outline.keyEvents : [],
+    characterActions: Array.isArray(payload.outline.characterActions) ? payload.outline.characterActions : [],
+    infoReveals: Array.isArray(payload.outline.infoReveals) ? payload.outline.infoReveals : [],
+    endingHook: payload.outline.endingHook || '',
   }
 }
 
@@ -469,7 +490,7 @@ const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
   const chapters = chaptersDraft.value
   return {
     planning: (outlineDraft.value.trim() && charactersDraft.value.length) ? 'done' : 'todo',
-    'chapter-outline': chapters.length > 0 && chapters.every(ch => ch.outline.objective.trim() || ch.outline.endingHook.trim()) ? 'done' : 'todo',
+    'chapter-outline': chapters.length > 0 && chapters.every(isChapterPlanComplete) ? 'done' : 'todo',
     writing: chapters.length > 0 && chapters.every(ch => ch.content.trim()) ? 'done' : 'todo',
     proofreading: chapters.length > 0 && chapters.every(ch => ['proofread', 'polishing', 'polished'].includes(ch.status)) ? 'done' : 'todo',
     polishing: chapters.length > 0 && chapters.every(ch => ch.content.trim() && ch.status === 'polished') ? 'done' : 'todo',
@@ -478,9 +499,62 @@ const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
 
 const nextAction = computed(() => project.value ? genStore.getNextAction(project.value) : { stage: 'done' as const })
 const nextActionChapterNumber = computed(() => {
-  if (!project.value || !('chapterIndex' in nextAction.value)) return null
-  return (project.value.chapters[nextAction.value.chapterIndex]?.index ?? nextAction.value.chapterIndex) + 1
+  const chapterIndex = 'chapterIndex' in nextAction.value ? nextAction.value.chapterIndex : undefined
+  if (!project.value || typeof chapterIndex !== 'number') return null
+  return (project.value.chapters[chapterIndex]?.index ?? chapterIndex) + 1
 })
+
+const selectedChapterPlanComplete = computed(() =>
+  selectedChapter.value ? isChapterPlanComplete(selectedChapter.value) : false
+)
+
+function chapterPlanFieldState(chapter: Chapter) {
+  const fields = [
+    chapter.title?.trim(),
+    chapter.outline.objective?.trim(),
+    chapter.outline.conflict?.trim(),
+    chapter.outline.endingHook?.trim(),
+    chapter.outline.keyEvents?.some(item => item.trim()),
+    chapter.outline.characterActions?.some(item => item.trim()),
+    chapter.outline.infoReveals?.some(item => item.trim()),
+  ]
+  const done = fields.filter(Boolean).length
+  return {
+    done,
+    total: fields.length,
+    percent: Math.round((done / fields.length) * 100),
+    complete: done === fields.length,
+  }
+}
+
+const chapterPlanStats = computed(() => {
+  const total = chaptersDraft.value.length
+  const complete = chaptersDraft.value.filter(isChapterPlanComplete).length
+  return {
+    total,
+    complete,
+    incomplete: Math.max(0, total - complete),
+    percent: total ? Math.round((complete / total) * 100) : 0,
+  }
+})
+
+const selectedChapterPlanState = computed(() =>
+  selectedChapter.value ? chapterPlanFieldState(selectedChapter.value) : { done: 0, total: 7, percent: 0, complete: false }
+)
+
+const selectedChapterHasPlanInfo = computed(() =>
+  selectedChapter.value ? hasAnyChapterPlanInfo(selectedChapter.value) : false
+)
+
+const shouldGenerateCurrentChapterPlan = computed(() =>
+  Boolean(selectedChapter.value && !selectedChapterPlanComplete.value)
+)
+
+const currentChapterPlanActionLabel = computed(() =>
+  selectedChapterHasPlanInfo.value ? 'Complete Current Chapter' : 'Generate Current Chapter'
+)
+
+const canGenerateCharactersFromOutline = computed(() => Boolean(outlineDraft.value.trim()))
 
 function syncFromProject() {
   if (!project.value) return
@@ -542,14 +616,14 @@ async function savePlanning() {
   toast.success('Story plan saved')
 }
 
-async function saveChapters() {
+async function saveChapters(showToast = true) {
   if (!project.value) return
   const saved = await projectStore.updateProject(project.value.id, { chapters: cloneChapters(chaptersDraft.value) })
   if (!saved) {
     toast.error('Failed to save chapter plan')
     return
   }
-  toast.success('Chapter plan saved')
+  if (showToast) toast.success('Chapter plan saved')
 }
 
 async function generateStoryPlanStage() {
@@ -563,6 +637,28 @@ async function generateStoryPlanStage() {
   }
 }
 
+async function generateCharactersFromOutline() {
+  if (!project.value || genStore.isGenerating || !outlineDraft.value.trim()) return
+  const count = Math.max(1, Math.min(24, Math.trunc(Number(characterGenerationCount.value))))
+  try {
+    await projectStore.updateProject(project.value.id, {
+      outline: outlineDraft.value,
+      characters: cloneCharacters(charactersDraft.value),
+    })
+    const generated = await genStore.generateCharacters(project.value.id, {
+      preferredCount: count,
+      characterRequirements: characterGenerationRequirements.value,
+    })
+    charactersDraft.value = cloneCharacters(generated)
+    selectedCharacterId.value = charactersDraft.value[0]?.id ?? null
+    planningSubTab.value = 'characters'
+    showGenerateCharactersDialog.value = false
+    toast.success('Characters generated')
+  } catch (error: any) {
+    toast.error(error?.message || 'Character generation failed')
+  }
+}
+
 async function generateChapterPlanStage() {
   if (!project.value || genStore.isGenerating) return
   try {
@@ -571,6 +667,95 @@ async function generateChapterPlanStage() {
     toast.success('Chapter plan generated')
   } catch (error: any) {
     toast.error(error?.message || 'Chapter plan generation failed')
+  }
+}
+
+async function runAdditionalChapterPlanGeneration() {
+  if (!project.value || genStore.isGenerating) return
+  const beforeCount = project.value.chapters.length
+  await genStore.generateAdditionalChapterPlan(project.value.id)
+  syncFromProject()
+  const addedChapter = chaptersDraft.value[beforeCount]
+  selectedChapterId.value = addedChapter?.id ?? chaptersDraft.value[chaptersDraft.value.length - 1]?.id ?? selectedChapterId.value
+  toast.success('Additional chapter plan generated')
+}
+
+async function requestGenerateAdditionalChapterPlan() {
+  if (!project.value || genStore.isGenerating) return
+  const current = project.value.chapters.length
+  const max = Math.max(1, Math.min(9999, Math.trunc(Number(project.value.chapterConfig?.maxChapters ?? project.value.chapterCount ?? 1))))
+
+  if (current >= 9999 && current >= max) {
+    toast.warning('Maximum chapter limit reached')
+    return
+  }
+
+  if (current >= max) {
+    showGenerateBeyondLimitConfirm.value = true
+    return
+  }
+
+  try {
+    await runAdditionalChapterPlanGeneration()
+  } catch (error: any) {
+    toast.error(error?.message || 'Failed to generate additional chapter plan')
+  }
+}
+
+async function requestGenerateCurrentChapterPlan() {
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
+  try {
+    await saveChapters(false)
+    await genStore.completeCurrentChapterPlan(project.value.id, selectedChapterId.value)
+    syncFromProject()
+    toast.success(selectedChapterHasPlanInfo.value ? 'Chapter plan completed' : 'Chapter plan generated')
+  } catch (error: any) {
+    toast.error(error?.message || 'Failed to complete chapter plan')
+  }
+}
+
+async function requestSmartChapterPlanGeneration() {
+  if (shouldGenerateCurrentChapterPlan.value) {
+    await requestGenerateCurrentChapterPlan()
+    return
+  }
+  await requestGenerateAdditionalChapterPlan()
+}
+
+async function reviewAndRewriteCurrentChapterPlan() {
+  if (!project.value || !selectedChapterId.value || genStore.isGenerating || !selectedChapterPlanComplete.value) return
+  try {
+    await saveChapters(false)
+    const result = await genStore.reviewAndRewriteChapterPlan(project.value.id, selectedChapterId.value)
+    syncFromProject()
+    toast.success(result.issues.length ? 'Chapter plan reviewed and rewritten' : 'Chapter plan reviewed. No qualifying issues found')
+  } catch (error: any) {
+    toast.error(error?.message || 'Failed to review chapter plan')
+  }
+}
+
+async function confirmGenerateAdditionalChapterPlan() {
+  if (!project.value || genStore.isGenerating) return
+  const max = Math.max(1, Math.min(9999, Math.trunc(Number(project.value.chapterConfig?.maxChapters ?? project.value.chapterCount ?? 1))))
+  if (max >= 9999) {
+    toast.warning('Maximum chapter limit reached')
+    return
+  }
+
+  const saved = await projectStore.updateProject(project.value.id, {
+    chapterConfig: {
+      maxChapters: max + 1,
+    },
+  })
+  if (!saved) {
+    toast.error('Failed to update chapter limit')
+    return
+  }
+
+  try {
+    await runAdditionalChapterPlanGeneration()
+  } catch (error: any) {
+    toast.error(error?.message || 'Failed to generate additional chapter plan')
   }
 }
 
@@ -788,6 +973,9 @@ function updateCurrentChapterText(text: string) {
               <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateStoryPlanStage">
                 <Wand2 :size="14" class="mr-1.5" /><span>{{ ui.text('AI Generate') }}</span>
               </BaseButton>
+              <BaseButton v-if="canGenerateCharactersFromOutline" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="showGenerateCharactersDialog = true">
+                <Users :size="14" class="mr-1.5" /><span>{{ ui.text('Generate Characters') }}</span>
+              </BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="savePlanning">
                 <Save :size="14" class="mr-1.5" /><span>{{ ui.text('Save Plan') }}</span>
               </BaseButton>
@@ -860,7 +1048,7 @@ function updateCurrentChapterText(text: string) {
               </div>
               <div class="p-5 space-y-6">
                 <section><label class="text-[10px] font-bold text-text-muted uppercase block mb-2">{{ ui.text('Theme') }}</label><p class="text-xs italic border-l-2 border-surface-4 pl-3">{{ project.theme }}</p></section>
-                <section><label class="text-[10px] font-bold text-text-muted uppercase block mb-2">{{ ui.text('Genre & Style') }}</label><div class="flex flex-wrap gap-2"><BaseTag variant="default" size="sm">{{ project.genre }}</BaseTag><BaseTag variant="default" size="sm" class="capitalize">{{ project.length }}</BaseTag></div></section>
+                <section><label class="text-[10px] font-bold text-text-muted uppercase block mb-2">{{ ui.text('Genre & Style') }}</label><div class="flex flex-wrap gap-2"><BaseTag variant="default" size="sm">{{ project.genre }}</BaseTag><BaseTag variant="default" size="sm">{{ project.chapterCount }} {{ ui.text('chapters') }}</BaseTag></div></section>
                 <section v-if="project.constraints.required.length">
                   <label class="text-[10px] font-bold text-text-muted uppercase block mb-2">{{ ui.text('Must Include') }}</label>
                   <ul class="space-y-1.5">
@@ -877,49 +1065,140 @@ function updateCurrentChapterText(text: string) {
 
         <!-- Chapter Plan Stage -->
         <section v-else-if="activeStage === 'chapter-outline'" class="h-full flex flex-col overflow-hidden">
-          <div class="h-[45px] shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
-            <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ ui.text('Chapter Beats') }}</h3>
-            <div class="flex items-center gap-2">
+          <div class="shrink-0 border-b border-surface-4 bg-surface-2 px-4 py-3">
+            <div class="flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <BookOpen :size="15" class="text-accent" />
+                  <h3 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ ui.text('Chapter Beats') }}</h3>
+                  <BaseTag variant="default" size="sm">{{ chapterPlanStats.complete }}/{{ chapterPlanStats.total }} {{ ui.text('complete') }}</BaseTag>
+                </div>
+                <div class="mt-2 h-1.5 w-56 overflow-hidden rounded-full bg-surface-4">
+                  <div class="h-full rounded-full bg-accent transition-all" :style="{ width: `${chapterPlanStats.percent}%` }"></div>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center justify-end gap-2">
               <BaseButton variant="ghost" size="sm" class="!h-8" @click="ensureChapterCount(1)"><Plus :size="14" class="mr-1.5" />{{ ui.text('Add Chapter') }}</BaseButton>
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="requestSmartChapterPlanGeneration"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(shouldGenerateCurrentChapterPlan ? currentChapterPlanActionLabel : 'Generate Next Chapter') }}</BaseButton>
+              <BaseButton v-if="selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="reviewAndRewriteCurrentChapterPlan"><CheckCircle2 :size="14" class="mr-1.5" />{{ ui.text('Quick Review & Rewrite') }}</BaseButton>
               <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateChapterPlanStage"><Wand2 :size="14" class="mr-1.5" />{{ ui.text('AI Generate') }}</BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save Chapters') }}</BaseButton>
+              </div>
             </div>
           </div>
           <div class="flex-1 flex overflow-hidden">
-            <div class="w-64 border-r border-surface-4 bg-surface-2 overflow-y-auto p-2 space-y-1 shrink-0">
-              <button v-for="chapter in chaptersDraft" :key="chapter.id" class="w-full text-left rounded-lg px-3 py-3 transition-all border relative" :class="selectedChapterId === chapter.id ? 'border-accent/30 bg-accent-subtle/50 text-accent shadow-sm' : 'border-transparent text-text-secondary hover:bg-surface-3'" @click="selectedChapterId = chapter.id">
-                <div class="text-[10px] font-bold opacity-70 uppercase mb-1">{{ ui.text('Chapter') }} {{ chapter.index + 1 }}</div>
-                <div class="text-xs font-bold truncate">{{ chapter.title || ui.text('Untitled') }}</div>
-              </button>
+            <div class="w-72 shrink-0 border-r border-surface-4 bg-surface-2">
+              <div class="flex h-full flex-col">
+                <div class="shrink-0 border-b border-surface-4 px-3 py-2">
+                  <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ ui.text('Chapters') }}</p>
+                  <p class="mt-0.5 text-[10px] text-text-muted">{{ chapterPlanStats.incomplete }} {{ ui.text('need planning') }}</p>
+                </div>
+                <div class="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                  <button
+                    v-for="chapter in chaptersDraft"
+                    :key="chapter.id"
+                    class="group w-full rounded-lg border px-3 py-2.5 text-left transition-all"
+                    :class="selectedChapterId === chapter.id ? 'border-accent/40 bg-accent-subtle/50 shadow-sm' : 'border-transparent text-text-secondary hover:border-surface-4 hover:bg-surface-3'"
+                    @click="selectedChapterId = chapter.id"
+                  >
+                    <div class="flex items-start gap-2">
+                      <div
+                        class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold"
+                        :class="chapterPlanFieldState(chapter).complete ? 'border-success/30 bg-success/10 text-success' : 'border-surface-4 bg-surface-1 text-text-muted'"
+                      >
+                        {{ chapter.index + 1 }}
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-1.5">
+                          <CheckCircle2 v-if="chapterPlanFieldState(chapter).complete" :size="12" class="shrink-0 text-success" />
+                          <Clock v-else :size="12" class="shrink-0 text-warning" />
+                          <p class="truncate text-xs font-semibold" :class="selectedChapterId === chapter.id ? 'text-text-primary' : 'text-text-secondary'">{{ chapter.title || ui.text('Untitled') }}</p>
+                        </div>
+                        <div class="mt-2 flex items-center gap-2">
+                          <div class="h-1 flex-1 overflow-hidden rounded-full bg-surface-4">
+                            <div
+                              class="h-full rounded-full transition-all"
+                              :class="chapterPlanFieldState(chapter).complete ? 'bg-success' : 'bg-warning'"
+                              :style="{ width: `${chapterPlanFieldState(chapter).percent}%` }"
+                            ></div>
+                          </div>
+                          <span class="text-[10px] font-medium text-text-muted">{{ chapterPlanFieldState(chapter).done }}/{{ chapterPlanFieldState(chapter).total }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
             </div>
             <div class="flex-1 overflow-y-auto bg-surface-0 custom-scrollbar flex flex-col min-w-0">
               <template v-if="selectedChapter">
-                <div class="h-[45px] px-6 border-b border-surface-4 bg-surface-1/50 flex items-center justify-between shrink-0">
-                  <div class="flex items-center gap-3">
-                    <div class="w-6 h-6 rounded bg-surface-2 border border-surface-4 flex items-center justify-center font-bold text-[10px]">{{ selectedChapter.index + 1 }}</div>
-                    <h4 class="text-xs font-bold truncate max-w-[200px]">{{ selectedChapter.title || ui.text('Untitled') }}</h4>
+                <div class="shrink-0 border-b border-surface-4 bg-surface-1/50 px-6 py-4">
+                  <div class="flex items-start justify-between gap-4">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-xs font-bold text-text-primary">{{ selectedChapter.index + 1 }}</div>
+                        <div class="min-w-0">
+                          <h4 class="truncate text-sm font-semibold text-text-primary">{{ selectedChapter.title || ui.text('Untitled') }}</h4>
+                          <p class="mt-0.5 text-[11px] text-text-muted">{{ selectedChapterPlanState.done }}/{{ selectedChapterPlanState.total }} {{ ui.text('planning fields complete') }}</p>
+                        </div>
+                        <BaseTag :variant="selectedChapterPlanComplete ? 'success' : 'warning'" size="sm">{{ ui.text(selectedChapterPlanComplete ? 'Ready' : 'Incomplete') }}</BaseTag>
+                      </div>
+                    </div>
+                    <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
+                      <Trash2 :size="14" />
+                      <span>{{ ui.text('Delete Chapter') }}</span>
+                    </BaseButton>
                   </div>
-                  <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
-                    <Trash2 :size="14" />
-                    <span>{{ ui.text('Delete Chapter') }}</span>
-                  </BaseButton>
+                  <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-4">
+                    <div class="h-full rounded-full bg-accent transition-all" :style="{ width: `${selectedChapterPlanState.percent}%` }"></div>
+                  </div>
                 </div>
-                <div class="p-6 overflow-y-auto flex-1">
-                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div class="space-y-4">
-                      <BaseInput v-model="selectedChapter.title" label="Title" />
-                      <BaseInput v-model="selectedChapter.outline.objective" label="Objective" />
-                      <BaseInput v-model="selectedChapter.outline.conflict" label="Conflict" />
-                      <BaseTextarea v-model="selectedChapter.outline.endingHook" label="Ending Hook" :rows="3" />
-                    </div>
-                    <div class="space-y-4">
-                      <BaseTextarea :model-value="selectedChapter.outline.keyEvents.join('\n')" label="Plot Beats" :rows="4" @update:model-value="selectedChapter.outline.keyEvents = parseList($event)" />
-                      <BaseTextarea :model-value="selectedChapter.outline.characterActions.join('\n')" label="Character Actions" :rows="4" @update:model-value="selectedChapter.outline.characterActions = parseList($event)" />
-                      <BaseTextarea :model-value="selectedChapter.outline.infoReveals.join('\n')" label="Reveals" :rows="4" @update:model-value="selectedChapter.outline.infoReveals = parseList($event)" />
-                    </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                  <div class="mx-auto max-w-5xl space-y-5">
+                    <section class="rounded-lg border border-surface-4 bg-surface-1 p-4">
+                      <div class="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <h5 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ ui.text('Core Direction') }}</h5>
+                          <p class="mt-1 text-[11px] text-text-muted">{{ ui.text('Define what this chapter must accomplish.') }}</p>
+                        </div>
+                        <BaseTag variant="default" size="sm">{{ ui.text('Single line fields') }}</BaseTag>
+                      </div>
+                      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                        <BaseInput v-model="selectedChapter.title" label="Title" />
+                        <BaseInput v-model="selectedChapter.outline.objective" label="Objective" />
+                        <BaseInput v-model="selectedChapter.outline.conflict" label="Conflict" />
+                      </div>
+                    </section>
+
+                    <section class="rounded-lg border border-surface-4 bg-surface-1 p-4">
+                      <div class="mb-4">
+                        <h5 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ ui.text('Chapter Structure') }}</h5>
+                        <p class="mt-1 text-[11px] text-text-muted">{{ ui.text('List concrete beats the writer can follow.') }}</p>
+                      </div>
+                      <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                        <BaseTextarea :model-value="selectedChapter.outline.keyEvents.join('\n')" label="Plot Beats" :rows="8" @update:model-value="selectedChapter.outline.keyEvents = parseList($event)" />
+                        <BaseTextarea :model-value="selectedChapter.outline.characterActions.join('\n')" label="Character Actions" :rows="8" @update:model-value="selectedChapter.outline.characterActions = parseList($event)" />
+                        <BaseTextarea :model-value="selectedChapter.outline.infoReveals.join('\n')" label="Reveals" :rows="8" @update:model-value="selectedChapter.outline.infoReveals = parseList($event)" />
+                      </div>
+                    </section>
+
+                    <section class="rounded-lg border border-surface-4 bg-surface-1 p-4">
+                      <div class="mb-4">
+                        <h5 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ ui.text('Exit Hook') }}</h5>
+                        <p class="mt-1 text-[11px] text-text-muted">{{ ui.text('Set the final turn, question, or emotional handoff.') }}</p>
+                      </div>
+                      <BaseTextarea v-model="selectedChapter.outline.endingHook" label="Ending Hook" :rows="4" />
+                    </section>
                   </div>
                 </div>
               </template>
+              <div v-else class="flex h-full items-center justify-center p-8 text-center">
+                <div>
+                  <BookOpen :size="28" class="mx-auto mb-3 text-text-muted" />
+                  <p class="text-sm font-medium text-text-primary">{{ ui.text('No chapter selected') }}</p>
+                  <p class="mt-1 text-xs text-text-secondary">{{ ui.text('Select or add a chapter to edit its plan.') }}</p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1032,8 +1311,9 @@ function updateCurrentChapterText(text: string) {
           ref="vibeAssistant"
           :stage="activeStage"
           :context="vibeContext"
-          :mode="activeStage === 'writing' || activeStage === 'proofreading' || activeStage === 'polishing' ? 'editor-agent' : 'assistant'"
+          :mode="activeStage === 'chapter-outline' ? 'outline-agent' : activeStage === 'writing' || activeStage === 'proofreading' || activeStage === 'polishing' ? 'editor-agent' : 'assistant'"
           @apply="handleVibeApply"
+          @apply-outline="handleVibeOutlineApply"
           @rewind="rewindVibeWorkspace"
         />
       </div>
@@ -1042,6 +1322,53 @@ function updateCurrentChapterText(text: string) {
     <ConfirmDialog v-model="showClearConfirm" title="Clear Content" message="Clear current stage content?" variant="danger" confirm-text="Clear" @confirm="performClearChapter" />
     <ConfirmDialog v-model="showDeleteConfirm" title="Delete" message="Delete chapter?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
     <ConfirmDialog v-model="showDoubleDeleteConfirm" title="Warning" message="Chapter has content. Delete anyway?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
+    <ConfirmDialog
+      v-model="showGenerateBeyondLimitConfirm"
+      title="Chapter limit reached"
+      message="Continuing beyond the configured chapter limit may reduce generation quality. Increase the chapter limit by 1 and continue?"
+      variant="warning"
+      confirm-text="Continue"
+      @confirm="confirmGenerateAdditionalChapterPlan"
+    />
+    <BaseDialog v-model="showGenerateCharactersDialog" title="Generate Characters" width="520px">
+      <div class="space-y-5">
+        <div>
+          <label class="mb-2 block text-xs font-semibold text-text-secondary">{{ ui.text('Character requirements') }}</label>
+          <textarea
+            v-model="characterGenerationRequirements"
+            class="min-h-28 w-full resize-y rounded-lg border border-surface-4 bg-surface-2 px-3 py-2 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent/50"
+            :placeholder="ui.text('Optional requirements, roles, relationships, or constraints...')"
+          ></textarea>
+        </div>
+        <div class="rounded-lg border border-surface-4 bg-surface-2 p-4">
+          <div class="mb-3 flex items-center justify-between">
+            <label class="text-xs font-semibold text-text-secondary">{{ ui.text('Character count') }}</label>
+            <span class="rounded-md bg-accent/10 px-2 py-1 text-xs font-bold text-accent">{{ characterGenerationCount }}</span>
+          </div>
+          <input
+            v-model.number="characterGenerationCount"
+            type="range"
+            min="1"
+            max="24"
+            step="1"
+            class="w-full accent-accent"
+          />
+          <div class="mt-2 flex justify-between text-[10px] text-text-muted">
+            <span>1</span>
+            <span>24</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <BaseButton variant="ghost" size="sm" @click="showGenerateCharactersDialog = false">{{ ui.text('Cancel') }}</BaseButton>
+          <BaseButton variant="primary" size="sm" :loading="genStore.isGenerating" @click="generateCharactersFromOutline">
+            <Users :size="14" />
+            <span>{{ ui.text('Generate') }}</span>
+          </BaseButton>
+        </div>
+      </template>
+    </BaseDialog>
   </div>
 </template>
 

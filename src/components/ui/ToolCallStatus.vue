@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { AlertTriangle, CheckCircle2, CircleDashed, FileText, ListChecks, Search, Wrench, XCircle } from 'lucide-vue-next'
+import { AlertTriangle, BookOpen, CheckCircle2, CircleDashed, FileText, ListChecks, Search, Wrench, XCircle } from 'lucide-vue-next'
 import { translatePhrase } from '@/i18n'
 
 export interface ToolCallStatusItem {
@@ -62,6 +62,24 @@ const toolMeta = computed(() => {
       label: 'Count chapter words',
       description: 'Checking current chapter length',
       icon: FileText,
+      tone: 'accent',
+    },
+    get_chapter_outline: {
+      label: 'Read chapter outline',
+      description: 'Inspecting structured chapter planning fields',
+      icon: BookOpen,
+      tone: 'accent',
+    },
+    replace_chapter_outline_field: {
+      label: 'Update outline field',
+      description: 'Changing one chapter planning field',
+      icon: BookOpen,
+      tone: 'warning',
+    },
+    rewrite_chapter_outline: {
+      label: 'Rewrite chapter outline',
+      description: 'Preparing a complete structured outline revision',
+      icon: BookOpen,
       tone: 'accent',
     },
   }

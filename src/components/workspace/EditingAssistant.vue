@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
 import { useUiStore } from '@/stores/ui'
+import { useProviderStore } from '@/stores/provider'
 import { useToast } from '@/composables/useToast'
 import { translatePhrase } from '@/i18n'
 import { decodeProviderModelRef } from '@/services/provider/catalog'
@@ -35,6 +36,7 @@ const emit = defineEmits<{
 
 const genStore = useGenerationStore()
 const ui = useUiStore()
+const providerStore = useProviderStore()
 const toast = useToast()
 const tr = translatePhrase
 
@@ -45,7 +47,6 @@ const currentSegment = ref<{ index: number; total: number; completed: number } |
 
 const hasContent = computed(() => props.content.trim().length > 0)
 const selectedIssue = computed(() => issues.value.find(issue => issue.id === selectedIssueId.value) ?? null)
-const openIssues = computed(() => issues.value.filter(issue => !issue.ignored && issue.polishStatus !== 'fixed'))
 const auditProgressPercent = computed(() => {
   if (!currentSegment.value?.total) return 0
   return Math.round((currentSegment.value.completed / currentSegment.value.total) * 100)
@@ -65,6 +66,27 @@ const severityVariant = computed(() => (severity: ChapterAuditIssue['severity'])
   if (severity === 'medium') return 'warning'
   return 'default'
 })
+
+const severityRank: Record<ChapterAuditIssue['severity'], number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+}
+
+function isIssueIgnored(issue: ChapterAuditIssue) {
+  return !!issue.ignored || issue.polishStatus === 'ignored'
+}
+
+function isIssueFixed(issue: ChapterAuditIssue) {
+  return !isIssueIgnored(issue) && issue.polishStatus === 'fixed'
+}
+
+function isBelowPolishThreshold(issue: ChapterAuditIssue) {
+  if (isIssueIgnored(issue) || isIssueFixed(issue)) return false
+  return severityRank[issue.severity] < severityRank[providerStore.toolWorkflowSettings.minIssueSeverity]
+}
+
+const openIssues = computed(() => issues.value.filter(issue => !isIssueIgnored(issue) && !isIssueFixed(issue)))
 
 watch(
   () => [props.content, props.initialIssues] as const,
@@ -87,7 +109,7 @@ function buildAuditPrompt() {
     `Compact Character Directory:\n${props.characters || 'None provided.'}`,
     `Relationship Lookup:\n${props.relationships || 'Use relationship query tools when available.'}`,
     'Use relationship/character tools for specific facts instead of assuming full context is in this prompt.',
-    'The chapter text will be submitted in small sequential segments. Process only the segment included in each request.',
+    'The chapter text will be submitted in bounded segments. Process only the current segment text while using this context for consistency checks.',
   ].join('\n\n')
 }
 
@@ -256,7 +278,16 @@ function selectIssue(issue: ChapterAuditIssue) {
                 <AlertTriangle :size="13" class="text-warning" />
                 <p class="truncate text-xs font-semibold text-text-primary">{{ issue.title }}</p>
               </div>
-              <p class="mt-1 text-[10px] uppercase tracking-wider text-text-muted">{{ issue.category }}</p>
+              <p class="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-wider text-text-muted">
+                <span>{{ issue.category }}</span>
+                <span
+                  v-if="isBelowPolishThreshold(issue)"
+                  class="rounded-full border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[9px] font-bold text-warning"
+                  :title="tr('Polish All will skip this issue because it is below the minimum severity setting.')"
+                >
+                  {{ tr('Below polish threshold') }}
+                </span>
+              </p>
             </div>
             <BaseTag :variant="severityVariant(issue.severity)" size="sm">{{ issue.severity }}</BaseTag>
           </div>
@@ -271,6 +302,13 @@ function selectIssue(issue: ChapterAuditIssue) {
       <p class="text-xs font-semibold text-text-primary">{{ selectedIssue.title }}</p>
       <p class="mt-2 text-xs leading-relaxed text-text-secondary">{{ selectedIssue.explanation }}</p>
       <p class="mt-2 text-xs leading-relaxed text-text-primary">{{ selectedIssue.suggestedFix }}</p>
+      <div
+        v-if="isBelowPolishThreshold(selectedIssue)"
+        class="mt-3 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-2 text-xs leading-relaxed text-warning"
+      >
+        <AlertTriangle :size="14" class="mt-0.5 shrink-0" />
+        <span>{{ tr('Polish All will skip this issue because it is below the minimum severity setting. Submit this issue directly to force Polish.') }}</span>
+      </div>
       <BaseButton class="mt-3 w-full" variant="primary" size="sm" :loading="isPolishing" :disabled="isPolishing" @click="fixIssue(selectedIssue)">
         <Send :size="13" />
         <span>{{ tr('Fix with Polish AI') }}</span>

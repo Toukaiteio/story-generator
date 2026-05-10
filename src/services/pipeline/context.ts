@@ -35,13 +35,19 @@ export function buildCharacterContextForTask(
   return buildCharacterNames(characters)
 }
 
-export function buildPreviousSummary(project: StoryProject, upToChapter: number): string {
+export function buildPreviousSummary(project: StoryProject, upToChapter: number, limit = 12): string {
   const summaries: string[] = []
   const target = project.chapters[upToChapter]
   const targetChapterOrder = target?.index ?? upToChapter
   const previousChapters = project.chapters
     .filter(chapter => chapter.index < targetChapterOrder)
     .sort((a, b) => a.index - b.index)
+    .slice(-limit)
+
+  const omitted = Math.max(0, targetChapterOrder - previousChapters.length)
+  if (omitted > 0) {
+    summaries.push(`[${omitted} earlier chapters omitted from this local context. Use the story outline and relationship tools for global continuity.]`)
+  }
 
   for (const ch of previousChapters) {
     if (ch?.summary) {
@@ -49,4 +55,15 @@ export function buildPreviousSummary(project: StoryProject, upToChapter: number)
     }
   }
   return summaries.join('\n')
+}
+
+export function buildProjectRelationshipContext(project: StoryProject): StoryProject {
+  return {
+    ...project,
+    chapters: project.chapters.map(chapter => ({
+      ...chapter,
+      content: '',
+      polishedContent: '',
+    })),
+  }
 }

@@ -73,7 +73,7 @@ export function getProofreadingTools(): ToolDefinition[] {
                 },
                 category: {
                   type: 'string',
-                  enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'],
+                  enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic', 'chapter_plan', 'character', 'relationship', 'continuity', 'factual'],
                   description: 'The issue category.',
                 },
                 title: {
@@ -116,18 +116,19 @@ export function getEditingAuditSystemPrompt() {
 
 export function getProofreadingSystemPrompt() {
   return [
-    'You are a Proofreading Expert. Your job is to audit a chapter for grammar, typos, consistency, pacing, and logical flow errors through tools.',
+    'You are a Proofreading Expert. Your job is to audit a chapter segment for grammar, typos, consistency, pacing, and logical flow errors through tools.',
     'You are not a rewriting agent. Do not return corrected prose, markdown reports, JSON text, bullet lists, or explanations in assistant text.',
-    'Your final response for each submitted segment must be a tool call to report_proofreading_issues.',
+    'Every response must be a tool call to report_proofreading_issues.',
+    'Inspect the submitted segment line by line. Report concrete local text issues even if they do not require global story context.',
     'Focus on:',
-    '- Grammatical errors, typos, and punctuation issues.',
-    '- Consistency in character names, descriptions, and behaviors.',
-    '- Timeline and logical consistency within the chapter.',
-    '- Narrative pacing and prose style.',
+    '- Grammatical errors, typos, punctuation, duplicated or missing words, and awkward wording.',
+    '- Consistency in character names, descriptions, behaviors, timeline, and chapter plan beats.',
+    '- Logical continuity inside the submitted segment and with the supplied chapter context.',
+    '- Narrative pacing and prose style issues that would noticeably weaken the segment.',
     'The prompt intentionally includes only compact character and relationship context.',
     'Use get_character_profile and relationship query tools for specific facts before reporting character or relationship consistency issues.',
-    'Use report_proofreading_issues to report concrete findings. Assistant text is invalid.',
-    'Do not invent problems. If the current segment is sound, call report_proofreading_issues with {"issues": []}.',
+    'If you find any issue, report it with the shortest exact excerpt from the current segment.',
+    'If and only if the current segment has no concrete issues, call report_proofreading_issues with {"issues": []}.',
   ].join('\n')
 }
 

@@ -8,12 +8,14 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   rows?: number
   autoResize?: boolean
+  maxHeight?: string
   error?: string
   disabled?: boolean
 }>(), {
   modelValue: '',
   rows: 3,
   autoResize: false,
+  maxHeight: '384px',
   disabled: false,
 })
 
@@ -29,8 +31,10 @@ const translatedError = computed(() => props.error ? translatePhrase(props.error
 
 function adjustHeight() {
   if (!props.autoResize || !textareaRef.value) return
+  const maxHeightPx = parseInt(props.maxHeight || '384px')
   textareaRef.value.style.height = 'auto'
-  textareaRef.value.style.height = textareaRef.value.scrollHeight + 'px'
+  const newHeight = textareaRef.value.scrollHeight
+  textareaRef.value.style.height = Math.min(newHeight, maxHeightPx) + 'px'
 }
 
 watch(() => props.modelValue, () => {
@@ -48,11 +52,10 @@ watch(() => props.modelValue, () => {
       :rows="rows"
       :disabled="disabled"
       :class="[
-        'w-full px-3 py-2 rounded-md border text-sm bg-surface-1 text-text-primary placeholder:text-text-muted outline-none transition-all duration-100 resize-none',
+        'w-full px-3 py-2 rounded-md border text-sm bg-surface-1 text-text-primary placeholder:text-text-muted outline-none transition-all duration-100 resize-none overflow-y-auto',
         focused ? 'border-accent ring-1 ring-accent/20' : 'border-surface-4 hover:border-surface-5',
         error ? 'border-danger' : '',
         disabled ? 'opacity-50 cursor-not-allowed' : '',
-        autoResize ? 'overflow-hidden' : '',
       ]"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
       @focus="focused = true"

@@ -14,10 +14,221 @@ import {
   type ProjectExportBuffer,
   PROJECT_EXPORT_SYNC_DELAY_MS,
 } from '@/services/projectExportSync'
-import type { StoryProject, StoryLength, WritingFormat } from '@/types/project'
+import type { ChapterConfig, StoryProject, WritingFormat } from '@/types/project'
+import type { Chapter } from '@/types/chapter'
+import type { Character, CharacterRole } from '@/types/character'
 
 const PROJECT_STORAGE_KEY = 'story-generator.projects.v1'
 const ACTIVE_PROJECT_STORAGE_KEY = 'story-generator.active-project.v1'
+const MAX_CHAPTER_COUNT = 9999
+
+function normalizeChapterCount(value: any, fallbackLength?: any, chapters?: any[]): number {
+  const parsed = Number(value)
+  if (Number.isFinite(parsed)) return Math.max(1, Math.min(MAX_CHAPTER_COUNT, Math.trunc(parsed)))
+  if (Array.isArray(chapters) && chapters.length > 0) {
+    const uniqueIndexes = new Set(chapters.map(chapter => Number(chapter?.index)).filter(Number.isFinite))
+    return Math.min(uniqueIndexes.size || chapters.length, MAX_CHAPTER_COUNT)
+  }
+  if (fallbackLength === 'short') return 4
+  if (fallbackLength === 'long') return 15
+  return 8
+}
+
+function normalizeChapterConfig(value: any, fallbackCount: any, fallbackLength?: any, chapters?: any[]): ChapterConfig {
+  const configuredMax = Number(value?.maxChapters)
+  return {
+    maxChapters: Number.isFinite(configuredMax)
+      ? Math.max(1, Math.min(MAX_CHAPTER_COUNT, Math.trunc(configuredMax)))
+      : normalizeChapterCount(fallbackCount, fallbackLength, chapters),
+  }
+}
+
+function normalizeChapterOutline(value: any): Chapter['outline'] {
+  return {
+    objective: typeof value?.objective === 'string' ? value.objective : '',
+    conflict: typeof value?.conflict === 'string' ? value.conflict : '',
+    keyEvents: Array.isArray(value?.keyEvents) ? value.keyEvents.map((item: any) => String(item).trim()).filter(Boolean) : [],
+    characterActions: Array.isArray(value?.characterActions) ? value.characterActions.map((item: any) => String(item).trim()).filter(Boolean) : [],
+    infoReveals: Array.isArray(value?.infoReveals) ? value.infoReveals.map((item: any) => String(item).trim()).filter(Boolean) : [],
+    endingHook: typeof value?.endingHook === 'string' ? value.endingHook : '',
+  }
+}
+
+function chapterQualityScore(chapter: Chapter) {
+  const outline = chapter.outline
+  const statusRank: Record<string, number> = {
+    outline: 0,
+    writing: 1,
+    draft: 2,
+    proofreading: 3,
+    proofread: 4,
+    polishing: 5,
+    polished: 6,
+  }
+  return [
+    (statusRank[chapter.status] ?? 0) * 1_000_000,
+    chapter.content.trim().length * 100,
+    chapter.summary.trim().length * 10,
+    chapter.title.trim() && !/^chapter\s+\d+$/i.test(chapter.title.trim()) ? 500 : 0,
+    outline.objective.trim() ? 80 : 0,
+    outline.conflict.trim() ? 80 : 0,
+    outline.endingHook.trim() ? 80 : 0,
+    outline.keyEvents.length * 20,
+    outline.characterActions.length * 20,
+    outline.infoReveals.length * 20,
+    new Date(chapter.updatedAt || chapter.createdAt || 0).getTime() / 1_000_000_000,
+  ].reduce((sum, item) => sum + item, 0)
+}
+
+function normalizeChapter(raw: any, fallbackIndex: number, usedIds: Set<string>): Chapter {
+  const now = new Date().toISOString()
+  const parsedIndex = Number(raw?.index)
+  const id = typeof raw?.id === 'string' && raw.id.trim() && !usedIds.has(raw.id)
+    ? raw.id
+    : generateId()
+  usedIds.add(id)
+
+  const polishedContent = typeof raw?.polishedContent === 'string' ? raw.polishedContent : ''
+  const content = polishedContent.trim()
+    ? polishedContent
+    : typeof raw?.content === 'string'
+      ? raw.content
+      : ''
+
+  const status = ['outline', 'writing', 'draft', 'proofreading', 'proofread', 'polishing', 'polished'].includes(raw?.status)
+    ? raw.status
+    : content.trim()
+      ? 'draft'
+      : 'outline'
+
+  return {
+    id,
+    index: Number.isFinite(parsedIndex) ? Math.max(0, Math.trunc(parsedIndex)) : fallbackIndex,
+    title: typeof raw?.title === 'string' && raw.title.trim() ? raw.title.trim() : `Chapter ${fallbackIndex + 1}`,
+    outline: normalizeChapterOutline(raw?.outline),
+    content,
+    proofreadingIssues: Array.isArray(raw?.proofreadingIssues) ? raw.proofreadingIssues : [],
+    proofreadingIssuesStale: Boolean(raw?.proofreadingIssuesStale),
+    contentVersions: Array.isArray(raw?.contentVersions) ? raw.contentVersions : [],
+    polishedContent: '',
+    status,
+    summary: typeof raw?.summary === 'string' ? raw.summary : '',
+    characterStateUpdates: raw?.characterStateUpdates && typeof raw.characterStateUpdates === 'object' ? raw.characterStateUpdates : {},
+    createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : now,
+    updatedAt: typeof raw?.updatedAt === 'string' ? raw.updatedAt : now,
+  }
+}
+
+function normalizeChapters(chapters: any[]): Chapter[] {
+  if (!Array.isArray(chapters) || !chapters.length) return []
+
+  const usedIds = new Set<string>()
+  const normalized = chapters.map((chapter, index) => normalizeChapter(chapter, index, usedIds))
+  const bestByIndex = new Map<number, Chapter>()
+  for (const chapter of normalized) {
+    const current = bestByIndex.get(chapter.index)
+    if (!current || chapterQualityScore(chapter) >= chapterQualityScore(current)) {
+      bestByIndex.set(chapter.index, chapter)
+    }
+  }
+
+  return [...bestByIndex.values()]
+    .sort((a, b) => a.index - b.index)
+    .map((chapter, index) => ({
+      ...chapter,
+      index,
+      title: chapter.title.trim() || `Chapter ${index + 1}`,
+    }))
+}
+
+function normalizeCharacterRole(value: any): CharacterRole {
+  const role = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return role === 'protagonist' || role === 'antagonist' || role === 'minor' ? role : 'supporting'
+}
+
+function normalizeCharacter(raw: any, fallbackIndex: number, usedIds: Set<string>): Character {
+  const now = new Date().toISOString()
+  const id = typeof raw?.id === 'string' && raw.id.trim() && !usedIds.has(raw.id)
+    ? raw.id
+    : generateId()
+  usedIds.add(id)
+
+  return {
+    id,
+    name: typeof raw?.name === 'string' && raw.name.trim() ? raw.name.trim() : `Character ${fallbackIndex + 1}`,
+    role: normalizeCharacterRole(raw?.role),
+    personality: Array.isArray(raw?.personality) ? raw.personality.map((item: any) => String(item).trim()).filter(Boolean) : [],
+    appearance: typeof raw?.appearance === 'string' ? raw.appearance.trim() : '',
+    backstory: typeof raw?.backstory === 'string' ? raw.backstory.trim() : '',
+    motivation: typeof raw?.motivation === 'string' ? raw.motivation.trim() : '',
+    goals: typeof raw?.goals === 'string' ? raw.goals.trim() : '',
+    conflicts: typeof raw?.conflicts === 'string' ? raw.conflicts.trim() : '',
+    currentState: typeof raw?.currentState === 'string' ? raw.currentState.trim() : '',
+    relations: Array.isArray(raw?.relations)
+      ? raw.relations.map((relation: any) => ({
+        targetId: typeof relation?.targetId === 'string' ? relation.targetId : '',
+        relation: typeof relation?.relation === 'string' ? relation.relation.trim() : '',
+        description: typeof relation?.description === 'string' ? relation.description.trim() : '',
+      })).filter((relation: any) => relation.targetId && relation.relation && relation.description)
+      : [],
+    createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : now,
+    updatedAt: typeof raw?.updatedAt === 'string' ? raw.updatedAt : now,
+  }
+}
+
+function characterQualityScore(character: Character) {
+  const roleRank: Record<CharacterRole, number> = {
+    protagonist: 4,
+    antagonist: 3,
+    supporting: 2,
+    minor: 1,
+  }
+  return [
+    roleRank[character.role] * 1000,
+    character.appearance.length,
+    character.backstory.length,
+    character.motivation.length,
+    character.goals.length,
+    character.conflicts.length,
+    character.currentState.length,
+    character.personality.length * 80,
+    character.relations.length * 120,
+    new Date(character.updatedAt || character.createdAt || 0).getTime() / 1_000_000_000,
+  ].reduce((sum, item) => sum + item, 0)
+}
+
+function normalizeCharacters(characters: any[]): Character[] {
+  if (!Array.isArray(characters) || !characters.length) return []
+  const usedIds = new Set<string>()
+  const normalized = characters.map((character, index) => normalizeCharacter(character, index, usedIds))
+  const bestByName = new Map<string, Character>()
+
+  for (const character of normalized) {
+    const key = character.name.trim().toLowerCase()
+    const current = bestByName.get(key)
+    if (!current || characterQualityScore(character) >= characterQualityScore(current)) {
+      bestByName.set(key, character)
+    }
+  }
+
+  const keptIds = new Set([...bestByName.values()].map(character => character.id))
+  return [...bestByName.values()].map(character => ({
+    ...character,
+    relations: character.relations.filter(relation => keptIds.has(relation.targetId) && relation.targetId !== character.id),
+  }))
+}
+
+function hasDuplicateChapterIndexes(chapters: any[]) {
+  const seen = new Set<number>()
+  for (const chapter of chapters) {
+    const parsed = Number(chapter?.index)
+    if (!Number.isFinite(parsed)) continue
+    const index = Math.trunc(parsed)
+    if (seen.has(index)) return true
+    seen.add(index)
+  }
+  return false
+}
 
 function migrateProjectStyle(project: any): StoryProject {
   if (!('styleId' in project)) {
@@ -27,29 +238,24 @@ function migrateProjectStyle(project: any): StoryProject {
   if (!('language' in project) || typeof project.language !== 'string' || !project.language.trim()) {
     project.language = 'English'
   }
+  const rawChapterCount = Array.isArray(project.chapters) ? project.chapters.length : 0
+  const hadDuplicateChapters = Array.isArray(project.chapters) && hasDuplicateChapterIndexes(project.chapters)
+  if (Array.isArray(project.chapters)) {
+    project.chapters = normalizeChapters(project.chapters)
+  }
+  if (hadDuplicateChapters && Number(project.chapterCount) === rawChapterCount) {
+    project.chapterCount = project.chapters.length
+  }
+  project.chapterCount = normalizeChapterCount(project.chapterCount, project.length, project.chapters)
+  project.chapterConfig = normalizeChapterConfig(project.chapterConfig, project.chapterCount, project.length, project.chapters)
   if (!Array.isArray(project.knowledgeBaseIds)) {
     project.knowledgeBaseIds = []
   }
   if (!Array.isArray(project.relationshipEvents)) {
     project.relationshipEvents = []
   }
-  if (Array.isArray(project.chapters)) {
-    project.chapters = project.chapters.map((chapter: any) => {
-      const polishedContent = typeof chapter?.polishedContent === 'string' ? chapter.polishedContent : ''
-      const content = polishedContent.trim()
-        ? polishedContent
-        : typeof chapter?.content === 'string'
-          ? chapter.content
-          : ''
-      return {
-        ...chapter,
-        content,
-        proofreadingIssues: Array.isArray(chapter?.proofreadingIssues) ? chapter.proofreadingIssues : [],
-        proofreadingIssuesStale: Boolean(chapter?.proofreadingIssuesStale),
-        contentVersions: Array.isArray(chapter?.contentVersions) ? chapter.contentVersions : [],
-        polishedContent: '',
-      }
-    })
+  if (Array.isArray(project.characters)) {
+    project.characters = normalizeCharacters(project.characters)
   }
   return project as StoryProject
 }
@@ -85,16 +291,18 @@ function normalizeImportedProject(data: any): StoryProject {
     style: typeof migrated.style === 'string' ? migrated.style : '',
     styleId: typeof migrated.styleId === 'string' && migrated.styleId.trim() ? migrated.styleId : 'default',
     writingFormat: migrated.writingFormat === 'markdown' ? 'markdown' : 'plaintext',
+    chapterCount: normalizeChapterCount(migrated.chapterCount, migrated.length, migrated.chapters),
+    chapterConfig: normalizeChapterConfig(migrated.chapterConfig, migrated.chapterCount, migrated.length, migrated.chapters),
     length: migrated.length === 'short' || migrated.length === 'medium' || migrated.length === 'long'
       ? migrated.length
-      : 'medium',
+      : undefined,
     constraints: {
       required: normalizeStringList(migrated.constraints?.required),
       forbidden: normalizeStringList(migrated.constraints?.forbidden),
     },
     customRequirements: typeof migrated.customRequirements === 'string' ? migrated.customRequirements : '',
     chapters: Array.isArray(migrated.chapters) ? migrated.chapters : [],
-    characters: Array.isArray(migrated.characters) ? migrated.characters : [],
+    characters: Array.isArray(migrated.characters) ? normalizeCharacters(migrated.characters) : [],
     relationshipEvents: Array.isArray(migrated.relationshipEvents) ? migrated.relationshipEvents : [],
     knowledgeBaseIds: normalizeIdList(migrated.knowledgeBaseIds),
     status: migrated.status === 'generating' || migrated.status === 'completed' || migrated.status === 'error'
@@ -303,7 +511,7 @@ export const useProjectStore = defineStore('project', () => {
     style: string
     styleId: string
     writingFormat: WritingFormat
-    length: StoryLength
+    chapterCount: number
     constraints: { required: string[]; forbidden: string[] }
     customRequirements: string
     directoryPath: string
@@ -312,6 +520,8 @@ export const useProjectStore = defineStore('project', () => {
     const project: StoryProject = {
       id: generateId(),
       ...data,
+      chapterCount: normalizeChapterCount(data.chapterCount),
+      chapterConfig: normalizeChapterConfig(null, data.chapterCount),
       chapters: [],
       characters: [],
       relationshipEvents: [],
@@ -348,9 +558,14 @@ export const useProjectStore = defineStore('project', () => {
   async function updateProject(id: string, updates: Partial<StoryProject>) {
     const index = projects.value.findIndex(p => p.id === id)
     if (index === -1) return null
+    const normalizedUpdates = {
+      ...updates,
+      ...(Array.isArray(updates.chapters) ? { chapters: normalizeChapters(updates.chapters) } : {}),
+      ...(Array.isArray(updates.characters) ? { characters: normalizeCharacters(updates.characters) } : {}),
+    }
     projects.value[index] = {
       ...projects.value[index],
-      ...updates,
+      ...normalizedUpdates,
       updatedAt: new Date().toISOString(),
     }
     return saveToDisk(projects.value[index])

@@ -3,7 +3,7 @@ import type { ProviderModelRef } from '@/types/provider'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { providerManager } from '@/services/provider'
-import { fitToContext } from '@/services/context'
+import { fitMessagesToContextSmart, fitToContext } from '@/services/context'
 import { useProviderStore } from '@/stores/provider'
 import type { FunctionCallingResponse } from '@/services/provider/types'
 import { requestToolContinuation } from './toolContinuation'
@@ -116,6 +116,13 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
     if (contextTokens !== undefined) this.contextTokens = contextTokens
   }
 
+  protected getCompressionReport(): Pick<AgentResult, 'compressed' | 'compressionDetails'> {
+    return {
+      compressed: this._lastCompressed,
+      compressionDetails: this._lastCompressionDetails,
+    }
+  }
+
   private prepareMessages(context: Record<string, any>, userPrompt?: string): ChatMessage[] {
     const raw: ChatMessage[] = [
       { role: 'system', content: this.withBaseToolInstructions(this.getSystemPrompt()) },
@@ -154,6 +161,25 @@ Base tool available to every agent:
       seen.add(tool.name)
       return true
     })
+  }
+
+  private fitToolMessagesToContext(messages: ChatMessage[]): ChatMessage[] {
+    const { messages: fittedMessages, compressed, details } = fitMessagesToContextSmart(
+      messages,
+      this.contextTokens,
+      this.maxTokens,
+      { threshold: 0.85, preserveRecentGroups: 4 }
+    )
+
+    if (compressed) {
+      this._lastCompressed = true
+      this._lastCompressionDetails = {
+        compressedCount: (this._lastCompressionDetails?.compressedCount ?? 0) + details.compressedCount,
+        savedTokens: (this._lastCompressionDetails?.savedTokens ?? 0) + details.savedTokens,
+      }
+    }
+
+    return fittedMessages
   }
 
   private ensureBaseToolInstructions(messages: ChatMessage[]) {
@@ -294,13 +320,15 @@ Base tool available to every agent:
 
       let result: FunctionCallingResponse
 
+      const outboundMessages = this.fitToolMessagesToContext(currentMessages)
+
       if (onToken) {
         // Use streaming for real-time feedback
         let roundContent = ''
         const roundToolCalls: ToolCall[] = []
         
         await providerManager.streamWithTools(
-          currentMessages,
+          outboundMessages,
           this.model,
           availableTools,
           {
@@ -335,7 +363,7 @@ Base tool available to every agent:
       } else {
         // Fallback to blocking chat
         result = await providerManager.chatWithTools(
-          currentMessages,
+          outboundMessages,
           this.model,
           availableTools,
           this.maxTokens,
@@ -430,7 +458,7 @@ Base tool available to every agent:
           })
           
           if (onToken && streamToolProgress) {
-            const summary = this.formatToolResultSummary(toolCall, toolResult)
+            const summary = this.formatToolResultSummary(toolCall, toolResult, context)
             onToken(`\n${summary}\n`)
           }
 
@@ -561,7 +589,7 @@ Base tool available to every agent:
   /**
    * Formats a human-readable summary of a tool execution for the stream
    */
-  protected formatToolResultSummary(toolCall: ToolCall, result: ToolResult): string {
+  protected formatToolResultSummary(toolCall: ToolCall, result: ToolResult, context: Record<string, any> = {}): string {
     const status = result.content.includes('error') ? 'failed' : 'completed'
     let summary = `[Tool ${toolCall.name} ${status}]`
     
@@ -575,8 +603,8 @@ Base tool available to every agent:
       const charNames = chars.map((c: any) => c.name).join(', ')
       summary = `### Created ${chars.length} Characters\n\n**Names:** ${charNames}\n\n[Characters saved successfully]`
     } else if (toolCall.name === 'create_chapter_outline') {
-      const chapterNumber = toolCall.arguments.chapterNumber ?? '?'
-      const title = toolCall.arguments.title || 'Untitled'
+      const chapterNumber = context.targetChapter?.chapterNumber ?? toolCall.arguments.chapterNumber ?? ''
+      const title = context.targetChapter?.title || toolCall.arguments.title || 'Untitled'
       summary = `### Saved Chapter ${chapterNumber}: ${title}\n\n[Chapter outline saved successfully]`
     } else if (toolCall.name === 'update_todolist') {
       const items = Array.isArray(toolCall.arguments.items) ? toolCall.arguments.items : []

@@ -33,11 +33,6 @@ const statusVariant = computed(() => {
   return (map[props.project.status] ?? 'default') as 'default' | 'warning' | 'success' | 'danger'
 })
 
-const lengthLabel = computed(() => {
-  const map: Record<string, string> = { short: 'Short', medium: 'Medium', long: 'Long' }
-  return map[props.project.length] ?? props.project.length
-})
-
 const languageLabel = computed(() => props.project.language || 'English')
 const exportBinding = computed(() => props.exportBinding ?? null)
 const tr = translatePhrase
@@ -87,7 +82,7 @@ const dropdownItems = computed(() => [
     <div class="flex items-center gap-2 flex-wrap">
       <BaseTag v-if="project.genre" variant="accent" size="sm">{{ project.genre }}</BaseTag>
       <BaseTag size="sm">{{ languageLabel }}</BaseTag>
-      <BaseTag size="sm">{{ tr(lengthLabel) }}</BaseTag>
+      <BaseTag size="sm">{{ project.chapterCount }} {{ tr('chapters') }}</BaseTag>
       <BaseTag :variant="statusVariant" size="sm">{{ tr(project.status) }}</BaseTag>
       <BaseTag v-if="exportBinding" variant="success" size="sm" :title="exportBinding.filePath">{{ tr('Linked') }}</BaseTag>
       <BaseTag v-if="exportBinding?.lastError" variant="danger" size="sm" :title="exportBinding.lastError">{{ tr('Sync error') }}</BaseTag>

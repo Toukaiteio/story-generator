@@ -20,6 +20,7 @@ import type { Chapter, ChapterContentVersion, ChapterOutline } from '@/types/cha
 
 const props = defineProps<{
   chapterId: string
+  active?: boolean
 }>()
 
 const projectStore = useProjectStore()
@@ -54,6 +55,7 @@ type OutlineEditField = 'objective' | 'conflict' | 'keyEvents' | 'characterActio
 const editingOutlineField = ref<OutlineEditField | null>(null)
 let outlineSaveTimer: ReturnType<typeof setTimeout> | null = null
 let syncingOutline = false
+let syncingChapter = false
 let loadedChapterId = ''
 let lastReportedUnsavedState = false
 
@@ -85,7 +87,9 @@ function buildChapterWithDraftUpdate(ch: Chapter, nextContent: string) {
 }
 
 const isDirty = computed(() => {
-  const ch = chapter.value
+  const ch = loadedChapterId && project.value
+    ? project.value.chapters.find(item => item.id === loadedChapterId) ?? chapter.value
+    : chapter.value
   if (!ch) return false
   return title.value !== (ch.title || '') || content.value !== (ch.content || '')
 })
@@ -121,10 +125,15 @@ function syncOutlineDraft(outline: ChapterOutline) {
 
 function syncChapterDraft(ch: Chapter) {
   const isNewChapter = loadedChapterId !== ch.id
+  const cachedDraft = ui.getChapterEditorDraft(ch.id)
   if (isNewChapter || !isDirty.value) {
-    title.value = ch.title || ''
-    content.value = ch.content || ''
+    syncingChapter = true
+    title.value = cachedDraft?.title ?? ch.title ?? ''
+    content.value = cachedDraft?.content ?? ch.content ?? ''
     loadedChapterId = ch.id
+    nextTick(() => {
+      syncingChapter = false
+    })
   }
   syncOutlineDraft(ch.outline)
   selectedStyleId.value = project.value?.styleId || 'default'
@@ -193,13 +202,15 @@ async function finishOutlineEdit() {
 }
 
 function setWindowUnsavedState(value: boolean) {
-  lastReportedUnsavedState = value
-  window.electronAPI?.window?.setUnsavedChanges?.(value)
-  ui.setWorkspaceNodeUnsaved(`chapter-${props.chapterId}`, value)
+  const hasAnyDraft = Object.keys(ui.chapterEditorDrafts).length > 0
+  lastReportedUnsavedState = value || hasAnyDraft
+  window.electronAPI?.window?.setUnsavedChanges?.(value || hasAnyDraft)
+  const chapterId = loadedChapterId || props.chapterId
+  ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, value)
 }
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!isDirty.value) return
+  if (!isDirty.value && !Object.keys(ui.chapterEditorDrafts).length) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -208,33 +219,80 @@ onBeforeUnmount(() => {
   if (outlineSaveTimer) {
     void saveOutlineNow()
   }
-  window.removeEventListener('keydown', handleSaveShortcut)
-  window.removeEventListener('beforeunload', handleBeforeUnload)
-  if (lastReportedUnsavedState) setWindowUnsavedState(false)
-  else ui.setWorkspaceNodeUnsaved(`chapter-${props.chapterId}`, false)
+  if (isDirty.value) {
+    cacheCurrentDraft()
+  }
+  deactivateEditorListeners()
+  if (!isDirty.value) {
+    const chapterId = loadedChapterId || props.chapterId
+    ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
+    if (lastReportedUnsavedState) window.electronAPI?.window?.setUnsavedChanges?.(false)
+  }
 })
 
-onMounted(() => {
+let editorListenersActive = false
+
+function activateEditorListeners() {
+  if (editorListenersActive) return
+  editorListenersActive = true
   window.addEventListener('keydown', handleSaveShortcut)
   window.addEventListener('beforeunload', handleBeforeUnload)
+}
+
+function deactivateEditorListeners() {
+  if (!editorListenersActive) return
+  editorListenersActive = false
+  window.removeEventListener('keydown', handleSaveShortcut)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+}
+
+onMounted(() => {
+  if (props.active) activateEditorListeners()
 })
+
+watch(() => props.active, active => {
+  if (active) activateEditorListeners()
+  else deactivateEditorListeners()
+}, { immediate: true })
 
 watch(isDirty, dirty => {
   setWindowUnsavedState(dirty)
 }, { immediate: true })
 
-async function save() {
-  if (!chapter.value || !project.value) return
+function cacheCurrentDraft() {
+  if (!loadedChapterId) return
+  const ch = project.value?.chapters.find(item => item.id === loadedChapterId)
+  if (!ch) return
+  if (title.value !== (ch.title || '') || content.value !== (ch.content || '')) {
+    ui.setChapterEditorDraft(loadedChapterId, {
+      title: title.value,
+      content: content.value,
+    })
+  } else {
+    ui.clearChapterEditorDraft(loadedChapterId)
+  }
+}
+
+watch([title, content], () => {
+  if (syncingChapter) return
+  cacheCurrentDraft()
+})
+
+async function save(options: { silent?: boolean } = {}) {
+  if (!project.value) return
+  const chapterId = loadedChapterId || props.chapterId
+  const targetChapter = project.value.chapters.find(ch => ch.id === chapterId)
+  if (!targetChapter) return
   const nextContent = sanitizeGeneratedChapterContent(content.value, {
     writingFormat: project.value.writingFormat,
     writingStyle: project.value.style,
     chapterTitle: title.value,
-    chapterNumber: chapter.value.index + 1,
+    chapterNumber: targetChapter.index + 1,
   })
   content.value = nextContent
-  const willStaleIssues = Boolean(chapter.value.proofreadingIssues?.length && chapter.value.content !== nextContent)
+  const willStaleIssues = Boolean(targetChapter.proofreadingIssues?.length && targetChapter.content !== nextContent)
   const chapters = project.value.chapters.map(ch =>
-    ch.id === props.chapterId
+    ch.id === chapterId
       ? buildChapterWithDraftUpdate(ch, nextContent)
       : ch
   )
@@ -242,10 +300,17 @@ async function save() {
     chapters,
   })
   if (!saved) {
-    toast.error('Failed to save chapter')
+    if (!options.silent) toast.error('Failed to save chapter')
     return
   }
-  toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
+  ui.clearChapterEditorDraft(chapterId)
+  ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
+  const stillHasUnsavedWork = isDirty.value || Object.keys(ui.chapterEditorDrafts).length > 0
+  lastReportedUnsavedState = stillHasUnsavedWork
+  window.electronAPI?.window?.setUnsavedChanges?.(stillHasUnsavedWork)
+  if (!options.silent) {
+    toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
+  }
 }
 
 function handleSaveShortcut(event: KeyboardEvent) {

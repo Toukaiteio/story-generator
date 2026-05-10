@@ -123,7 +123,7 @@ function buildTitlePage(project: StoryProject): string {
   meta.push(`<p><strong>Genre:</strong> ${escapeXml(project.genre)}</p>`)
   meta.push(`<p><strong>Theme:</strong> ${escapeXml(project.theme)}</p>`)
   meta.push(`<p><strong>Target Reader:</strong> ${escapeXml(project.targetReader)}</p>`)
-  meta.push(`<p><strong>Length:</strong> ${escapeXml(project.length)}</p>`)
+  meta.push(`<p><strong>Chapters:</strong> ${escapeXml(String(project.chapterCount))}</p>`)
 
   if (project.summary) {
     meta.push(`<blockquote>${escapeXml(project.summary)}</blockquote>`)

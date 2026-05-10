@@ -33,7 +33,7 @@ const form = reactive({
   language: 'English',
   styleId: 'default',
   writingFormat: 'plaintext' as const,
-  length: 'medium' as string,
+  chapterCount: '8',
   requiredElements: '',
   forbiddenElements: '',
   customRequirements: '',
@@ -73,7 +73,7 @@ async function handleFastFill() {
       genre: form.genre,
       targetReader: form.targetReader,
       language: form.language,
-      length: form.length,
+      chapterCount: normalizedChapterCount(),
       customRequirements: form.customRequirements,
       constraints: {
         required: form.requiredElements.split(',').map(s => s.trim()).filter(Boolean),
@@ -90,7 +90,7 @@ async function handleFastFill() {
     if (parsed.genre) setGenreValue(parsed.genre)
     if (parsed.targetReader) form.targetReader = parsed.targetReader
     if (parsed.language) form.language = parsed.language
-    if (parsed.length) form.length = parsed.length
+    if (parsed.chapterCount) form.chapterCount = String(parsed.chapterCount)
     if (parsed.customRequirements) form.customRequirements = parsed.customRequirements
     if (parsed.constraints?.required) form.requiredElements = parsed.constraints.required.join(', ')
     if (parsed.constraints?.forbidden) form.forbiddenElements = parsed.constraints.forbidden.join(', ')
@@ -141,12 +141,6 @@ function setGenreValue(value: unknown) {
   form.customGenre = trimmed
 }
 
-const lengthOptions = [
-  { label: 'Short (1-5 chapters)', value: 'short' },
-  { label: 'Medium (6-15 chapters)', value: 'medium' },
-  { label: 'Long (16+ chapters)', value: 'long' },
-]
-
 const styleOptions = computed(() => [
   { label: 'Default (No Reference)', value: 'default' },
   ...writingStyleStore.styles.map(s => ({ label: s.name, value: s.id })),
@@ -169,7 +163,7 @@ function handleCreate() {
     style: resolvedStyle,
     styleId: form.styleId,
     writingFormat: form.writingFormat,
-    length: form.length,
+    chapterCount: normalizedChapterCount(),
     constraints: {
       required: form.requiredElements.split(',').map(s => s.trim()).filter(Boolean),
       forbidden: form.forbiddenElements.split(',').map(s => s.trim()).filter(Boolean),
@@ -190,7 +184,7 @@ function resetForm() {
   form.language = 'English'
   form.styleId = 'default'
   form.writingFormat = 'plaintext'
-  form.length = 'medium'
+  form.chapterCount = '8'
   form.requiredElements = ''
   form.forbiddenElements = ''
   form.customRequirements = ''
@@ -203,6 +197,11 @@ watch(() => props.modelValue, (val) => {
 
 const isValid = () => form.name.trim() && form.theme.trim() && form.directoryPath.trim()
 const canFastFill = computed(() => form.name.trim() && form.theme.trim() && !fastFilling.value)
+
+function normalizedChapterCount() {
+  const parsed = Number(form.chapterCount)
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.trunc(parsed))) : 8
+}
 </script>
 
 <template>
@@ -249,10 +248,15 @@ const canFastFill = computed(() => form.name.trim() && form.theme.trim() && !fas
           placeholder="Select genre"
           :options="genreOptions"
         />
-        <BaseSelect
-          v-model="form.length"
-          label="Length"
-          :options="lengthOptions"
+        <BaseInput
+          v-model="form.chapterCount"
+          label="Chapters"
+          type="number"
+          placeholder="8"
+          min="1"
+          max="9999"
+          step="1"
+          :icon="Ruler"
         />
       </div>
 

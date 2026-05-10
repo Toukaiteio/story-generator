@@ -39,10 +39,9 @@ export class DetailerExpert extends BaseAgent {
               type: 'string',
               description: 'The primary language for the story',
             },
-            length: {
-              type: 'string',
-              description: 'The desired story length',
-              enum: ['short', 'medium', 'long'],
+            chapterCount: {
+              type: 'number',
+              description: 'The exact number of chapters the program should generate. Preserve the existing number unless there is a clear story-structure reason to adjust it. Must be 1-9999.',
             },
             customRequirements: {
               type: 'string',
@@ -77,7 +76,7 @@ export class DetailerExpert extends BaseAgent {
               },
             },
           },
-          required: ['name', 'theme', 'genre', 'targetReader', 'language', 'length', 'customRequirements', 'constraints'],
+          required: ['name', 'theme', 'genre', 'targetReader', 'language', 'chapterCount', 'customRequirements', 'constraints'],
         },
       },
     ]
@@ -122,6 +121,7 @@ Improve specificity, remove ambiguity, and make it easier for downstream generat
 Do not blank out any field that already has a meaningful value.
 If genre or other fields are already set and valid, preserve them exactly unless you have a clear improvement.
 The writing style is managed separately. Do not include a style field in your response.
+Chapter count is a program-controlled numeric setting. Preserve it unless a small adjustment clearly improves pacing; never replace it with short/medium/long.
 If you are unsure about a field, keep the current value instead of returning an empty string.
 
 LANGUAGE CONSIDERATION:
@@ -158,14 +158,12 @@ Guidelines:
   protected validateOutput(response: string, parsed: any, context: Record<string, any>): string[] {
     const issues: string[] = []
     const current = context ?? {}
-    const lengthValues = new Set(['short', 'medium', 'long'])
-    const requiredStringFields: Array<'name' | 'theme' | 'genre' | 'targetReader' | 'language' | 'length' | 'customRequirements'> = [
+    const requiredStringFields: Array<'name' | 'theme' | 'genre' | 'targetReader' | 'language' | 'customRequirements'> = [
       'name',
       'theme',
       'genre',
       'targetReader',
       'language',
-      'length',
       'customRequirements',
     ]
 
@@ -196,14 +194,12 @@ Guidelines:
 
   private validateConfig(parsed: any, current: Record<string, any>): string[] {
     const issues: string[] = []
-    const lengthValues = new Set(['short', 'medium', 'long'])
-    const requiredStringFields: Array<'name' | 'theme' | 'genre' | 'targetReader' | 'language' | 'length' | 'customRequirements'> = [
+    const requiredStringFields: Array<'name' | 'theme' | 'genre' | 'targetReader' | 'language' | 'customRequirements'> = [
       'name',
       'theme',
       'genre',
       'targetReader',
       'language',
-      'length',
       'customRequirements',
     ]
 
@@ -221,9 +217,9 @@ Guidelines:
       }
     }
 
-    const nextLength = typeof parsed.length === 'string' ? parsed.length.trim() : ''
-    if (nextLength && !lengthValues.has(nextLength)) {
-      issues.push('Field "length" must be one of: short, medium, long')
+    const nextChapterCount = Number(parsed.chapterCount)
+    if (!Number.isFinite(nextChapterCount) || nextChapterCount < 1 || nextChapterCount > 9999 || Math.trunc(nextChapterCount) !== nextChapterCount) {
+      issues.push('Field "chapterCount" must be an integer from 1 to 9999')
     }
 
     if (!Array.isArray(parsed?.constraints?.required)) {
@@ -261,6 +257,6 @@ ${JSON.stringify(context, null, 2)}
 Previous response:
 ${previousResponse}
 
-Use the refine_configuration tool to provide a corrected configuration. Preserve any valid existing values. Do not blank out genre, language, or other meaningful fields. Do not include a style field.`
+Use the refine_configuration tool to provide a corrected configuration. Preserve any valid existing values. Do not blank out genre, language, chapterCount, or other meaningful fields. Do not include a style field.`
   }
 }

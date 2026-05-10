@@ -18,6 +18,12 @@ interface PersistedUiState {
   editingAiModelRef: string
 }
 
+interface ChapterEditorDraft {
+  title: string
+  content: string
+  updatedAt: string
+}
+
 function isSidebarItem(value: unknown): value is SidebarItem {
   return value === 'projects' || value === 'workspace' || value === 'knowledge' || value === 'providers' || value === 'settings'
 }
@@ -36,6 +42,7 @@ export const useUiStore = defineStore('ui', () => {
   const vibeModelRef = ref<string>(typeof persisted.vibeModelRef === 'string' ? persisted.vibeModelRef : '')
   const editingAiModelRef = ref<string>(typeof persisted.editingAiModelRef === 'string' ? persisted.editingAiModelRef : '')
   const unsavedWorkspaceNodes = ref<Record<string, boolean>>({})
+  const chapterEditorDrafts = ref<Record<string, ChapterEditorDraft>>({})
   const toasts = ref<Toast[]>([])
 
   setI18nLocale(language.value)
@@ -112,6 +119,30 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
 
+  function setChapterEditorDraft(chapterId: string, draft: { title: string; content: string }) {
+    if (!chapterId) return
+    chapterEditorDrafts.value = {
+      ...chapterEditorDrafts.value,
+      [chapterId]: {
+        title: draft.title,
+        content: draft.content,
+        updatedAt: new Date().toISOString(),
+      },
+    }
+    setWorkspaceNodeUnsaved(`chapter-${chapterId}`, true)
+  }
+
+  function getChapterEditorDraft(chapterId: string) {
+    return chapterEditorDrafts.value[chapterId] ?? null
+  }
+
+  function clearChapterEditorDraft(chapterId: string) {
+    if (!chapterId || !chapterEditorDrafts.value[chapterId]) return
+    const next = { ...chapterEditorDrafts.value }
+    delete next[chapterId]
+    chapterEditorDrafts.value = next
+  }
+
   function addToast(toast: Omit<Toast, 'id'>) {
     const id = `toast-${++toastIdCounter}`
     const duration = toast.duration ?? 4000
@@ -148,10 +179,14 @@ export const useUiStore = defineStore('ui', () => {
     vibeModelRef,
     editingAiModelRef,
     unsavedWorkspaceNodes,
+    chapterEditorDrafts,
     toasts,
     navigateTo,
     setWorkspaceNode,
     setWorkspaceNodeUnsaved,
+    setChapterEditorDraft,
+    getChapterEditorDraft,
+    clearChapterEditorDraft,
     setLanguage,
     setDefaultStoragePath,
     setVibeRewindPoints,

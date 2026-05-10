@@ -224,13 +224,7 @@ Do not omit any fields. Do not add meta commentary or code fences outside the to
   }
 
   protected buildOutlinePrompt(context: Record<string, any>): string {
-    const { theme, genre, targetReader, language, style, length, constraints, customRequirements, knowledgeContext } = context
-
-    const lengthGuide: Record<string, string> = {
-      short: 'tight, focused story arc',
-      medium: 'balanced multi-beat story arc',
-      long: 'broader story arc with more turning points, still no chapter breakdown',
-    }
+    const { theme, genre, targetReader, language, style, chapterCount, constraints, customRequirements, knowledgeContext } = context
 
     return `Create a story-planning JSON object with the following specifications:
 
@@ -239,7 +233,7 @@ Do not omit any fields. Do not add meta commentary or code fences outside the to
 **Target Reader:** ${targetReader}
 **Primary Language:** ${language || 'English'}
 ${style ? `**Writing Style Guide:**\n${style}` : '**Writing Style:** Infer an appropriate writing style from the genre, theme, and target reader.'}
-**Length:** ${length} (${lengthGuide[length] || length})
+**Chapter Count:** ${chapterCount || 8} chapters
 ${constraints?.required?.length ? `**Must Include:** ${constraints.required.join(', ')}` : ''}
 ${constraints?.forbidden?.length ? `**Must Not Include:** ${constraints.forbidden.join(', ')}` : ''}
 ${customRequirements ? `**Additional Requirements:** ${customRequirements}` : ''}
@@ -256,7 +250,7 @@ The outline must stay at the story level and summarize:
 - The key character functions and relationships
 - The thematic direction and ending pressure
 
-Do not include chapter headings, chapter-by-chapter breakdowns, scene lists, or long prose in the outline field. Keep the outline concise, roughly 80-220 words.
+Do not include chapter headings, chapter-by-chapter breakdowns, scene lists, or long prose in the outline field. Keep the outline concise, roughly 80-220 words. Use the chapter count only to judge the scope and pacing of the overall arc.
 Write everything in ${language || 'English'}.`
   }
 
@@ -500,7 +494,7 @@ Keep the character concepts intact and do not omit any required fields. The list
     return {
       content: JSON.stringify(combined),
       tokenUsage: { prompt: 0, completion: 0 },
-      compressed: false,
+      ...this.getCompressionReport(),
     }
   }
 
@@ -558,7 +552,7 @@ Keep the character concepts intact and do not omit any required fields. The list
         return {
           content: content || JSON.stringify(parsed, null, 2),
           tokenUsage: { prompt: 0, completion: 0 },
-          compressed: false,
+          ...this.getCompressionReport(),
         }
       }
 
@@ -622,7 +616,7 @@ Keep the character concepts intact and do not omit any required fields. The list
         return {
           content: content || JSON.stringify(parsed, null, 2),
           tokenUsage: { prompt: 0, completion: 0 },
-          compressed: false,
+          ...this.getCompressionReport(),
         }
       }
 

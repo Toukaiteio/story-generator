@@ -23,11 +23,37 @@ export function findNextChapterPosition(
   return nextIndex
 }
 
+export function isChapterPlanComplete(chapter: StoryProject['chapters'][number]) {
+  return Boolean(
+    chapter.title?.trim() &&
+    chapter.outline.objective?.trim() &&
+    chapter.outline.conflict?.trim() &&
+    chapter.outline.keyEvents?.some(item => item.trim()) &&
+    chapter.outline.characterActions?.some(item => item.trim()) &&
+    chapter.outline.infoReveals?.some(item => item.trim()) &&
+    chapter.outline.endingHook?.trim()
+  )
+}
+
+export function hasAnyChapterPlanInfo(chapter: StoryProject['chapters'][number]) {
+  return Boolean(
+    chapter.outline.objective?.trim() ||
+    chapter.outline.conflict?.trim() ||
+    chapter.outline.keyEvents?.some(item => item.trim()) ||
+    chapter.outline.characterActions?.some(item => item.trim()) ||
+    chapter.outline.infoReveals?.some(item => item.trim()) ||
+    chapter.outline.endingHook?.trim()
+  )
+}
+
 export function getNextGenerationAction(project: StoryProject): NextGenerationAction {
   if (!project.outline.trim() || !project.characters.length) return { stage: 'planning' }
-  if (!project.chapters.length || project.chapters.some(ch => !ch.outline.objective || !ch.outline.endingHook)) {
+  if (!project.chapters.length) {
     return { stage: 'chapter-outline' }
   }
+
+  const chapterOutlineIndex = findNextChapterPosition(project.chapters, chapter => !isChapterPlanComplete(chapter))
+  if (chapterOutlineIndex !== -1) return { stage: 'chapter-outline', chapterIndex: chapterOutlineIndex }
 
   const writingIndex = findNextChapterPosition(project.chapters, ch => !ch.content.trim())
   if (writingIndex !== -1) return { stage: 'writing', chapterIndex: writingIndex }

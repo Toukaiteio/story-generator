@@ -3,8 +3,9 @@ import type { Character } from '@/types/character'
 import type { CharacterRelationshipEvent, ExtractedRelationshipEvent } from '@/types/relationship'
 import { getAgent } from '@/services/agent'
 import { extractJsonPayload } from '@/services/agent/validation'
-import { buildCharacterContextForTask } from './context'
+import { buildCharacterContextForTask, buildProjectRelationshipContext } from './context'
 import { buildKnowledgeContextForProject, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
+import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import { generateId } from '@/lib/id'
 import type { PlanningDraft } from './types'
 import type { PlanningRuntime } from './runtime'
@@ -150,13 +151,13 @@ export function parsePlanningDraft(response: string): PlanningDraft {
 
 export function getPreferredCharacterCount(project: StoryProject): number {
   const existingCount = project.characters.length
-  const lengthBasedCount = project.length === 'short'
+  const chapterBasedCount = project.chapterCount <= 4
     ? 4
-    : project.length === 'long'
+    : project.chapterCount >= 15
       ? 6
       : 5
 
-  return Math.max(lengthBasedCount, existingCount, 1)
+  return Math.max(chapterBasedCount, existingCount, 1)
 }
 
 export function shouldCreateCharacters(project: StoryProject, draft: PlanningDraft): boolean {
@@ -201,7 +202,7 @@ export function normalizeCharacterRole(role: any) {
 
 export function parseCharacterArray(items: any[], now: string): Character[] {
   const nameToId = new Map<string, string>()
-  const characters: Character[] = items.slice(0, 6).map((item: any, index: number) => {
+  const characters: Character[] = items.map((item: any, index: number) => {
     const id = generateId()
     const name = typeof item?.name === 'string' && item.name.trim() ? item.name.trim() : `Character ${index + 1}`
     nameToId.set(name.toLowerCase(), id)
@@ -341,20 +342,25 @@ export async function extractRelationshipEventsForChapter(
   if (!chapter?.content?.trim()) return []
   const chapterNumber = chapter.index + 1
 
-  const context: Record<string, any> = {
-    chapterIndex,
-    chapterNumber,
-    chapterTitle: chapter.title,
-    characters: buildCharacterContextForTask(project.characters, 'planning'),
-    chapterContent: chapter.content,
-    project,
-    language: project.language,
-  }
+  const segments = buildProofreadingSegments(chapter.content, 1600)
+  const extracted: ExtractedRelationshipEvent[] = []
+  for (const segment of segments) {
+    const context: Record<string, any> = {
+      chapterIndex,
+      chapterNumber,
+      chapterTitle: chapter.title,
+      characters: buildCharacterContextForTask(project.characters, 'planning'),
+      chapterContent: segment.content,
+      project: buildProjectRelationshipContext(project),
+      language: project.language,
+      range: segment,
+    }
 
-  await relationshipTrackerAgent.execute(context, onToken)
-  const extracted = Array.isArray(context._relationshipEvents)
-    ? context._relationshipEvents as ExtractedRelationshipEvent[]
-    : []
+    await relationshipTrackerAgent.execute(context, onToken)
+    if (Array.isArray(context._relationshipEvents)) {
+      extracted.push(...context._relationshipEvents as ExtractedRelationshipEvent[])
+    }
+  }
 
   return toRelationshipEvents(project, chapterIndex, extracted)
 }
@@ -384,7 +390,7 @@ async function runLegacyStoryPlanningWorkflow(
     targetReader: project.targetReader,
     language: project.language,
     style: project.style,
-    length: project.length,
+    chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     preferredCount: getPreferredCharacterCount(project),
@@ -449,7 +455,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
     targetReader: project.targetReader,
     language: project.language,
     style: project.style,
-    length: project.length,
+    chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     knowledgeContext,
@@ -518,7 +524,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
     targetReader: project.targetReader,
     language: project.language,
     style: project.style,
-    length: project.length,
+    chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     knowledgeContext,
@@ -580,7 +586,7 @@ export async function generateOutline(project: StoryProject) {
     targetReader: project.targetReader,
     language: project.language,
     style: project.style,
-    length: project.length,
+    chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     knowledgeContext,
@@ -588,7 +594,10 @@ export async function generateOutline(project: StoryProject) {
   return outlineResult.content
 }
 
-export async function generateCharacters(project: StoryProject) {
+export async function generateCharacters(
+  project: StoryProject,
+  options: { preferredCount?: number; characterRequirements?: string } = {}
+) {
   const providerStore = prepareProviderRuntime()
   const characterAgent = getAgent('character')
   const characterModel = providerStore.getAgentModelBinding('character') ?? providerStore.getDefaultModelRefForRole('character')
@@ -610,7 +619,10 @@ export async function generateCharacters(project: StoryProject) {
     targetReader: project.targetReader,
     language: project.language,
     existingCharacters: buildCharacterContextForTask(project.characters, 'planning'),
-    preferredCount: getPreferredCharacterCount(project),
+    preferredCount: Number.isFinite(Number(options.preferredCount))
+      ? Math.max(1, Math.min(24, Math.trunc(Number(options.preferredCount))))
+      : getPreferredCharacterCount(project),
+    characterRequirements: typeof options.characterRequirements === 'string' ? options.characterRequirements.trim() : '',
     knowledgeContext,
   }
 

@@ -154,7 +154,7 @@ export function prepareRuntime(): FullRuntime {
   const relationshipTrackerAgent = getAgent('relationshipTracker')
 
   storyPlannerAgent.setModel(planningModel, 3072, 0.6, getContextTokens(providerStore, planningModel))
-  chapterTitlePlannerAgent.setModel(chapterPlannerModel, 2048, 0.7, getContextTokens(providerStore, chapterPlannerModel))
+  chapterTitlePlannerAgent.setModel(chapterPlannerModel, 4096, 0.7, getContextTokens(providerStore, chapterPlannerModel))
   chapterPlannerAgent.setModel(chapterPlannerModel, 3072, 0.6, getContextTokens(providerStore, chapterPlannerModel))
   writerAgent.setModel(writerModel, 4096, 0.8, getContextTokens(providerStore, writerModel))
   proofreaderAgent.setModel(proofreaderModel, 2048, 0.3, getContextTokens(providerStore, proofreaderModel))
@@ -178,11 +178,9 @@ export function prepareRuntime(): FullRuntime {
   }
 }
 
-export function estimateChapterCount(length: string): number {
-  switch (length) {
-    case 'short': return 4
-    case 'medium': return 8
-    case 'long': return 15
-    default: return 8
-  }
+export function resolveChapterCount(value: unknown): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed)
+    ? Math.max(1, Math.min(9999, Math.trunc(parsed)))
+    : 8
 }

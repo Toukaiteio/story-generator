@@ -204,6 +204,7 @@ Character requirements:
       outlineTitle,
       synopsis,
       characterSignals,
+      characterRequirements,
       preferredCount,
     } = context
 
@@ -222,6 +223,7 @@ ${outlineTitle ? `**Outline Title:** ${outlineTitle}\n` : ''}${synopsis ? `**Out
 **Story Outline:**
 ${outline}
 ${characterSignals ? `\n**Character Signals From the Outline Draft:**\n${characterSignals}` : ''}
+${characterRequirements ? `\n**User Character Requirements:**\n${characterRequirements}` : ''}
 ${existingCharacters ? `\n**Existing Characters (do not duplicate):**\n${existingCharacters}` : ''}
 ${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}
 

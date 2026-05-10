@@ -3,6 +3,8 @@ import type { ChatMessage } from '@/types/provider'
 /** Approximate tokens per character for mixed CJK/English content. */
 const CHARS_PER_TOKEN_EN = 4
 const CHARS_PER_TOKEN_CJK = 1.5
+const MESSAGE_OVERHEAD_TOKENS = 4
+const TOOL_FIELD_OVERHEAD_TOKENS = 8
 
 export interface ContextBudget {
   /** Total context window in tokens. */
@@ -17,6 +19,26 @@ export interface CompressionResult {
   messages: ChatMessage[]
   compressedCount: number
   savedTokens: number
+}
+
+export interface SmartCompressionOptions {
+  threshold?: number
+  preserveRecentGroups?: number
+}
+
+export interface SmartCompressionResult extends CompressionResult {
+  originalTokens: number
+  newTokens: number
+  compressedGroups: number
+}
+
+type MessageGroupKind = 'system' | 'single' | 'tool-round'
+
+interface MessageGroup {
+  kind: MessageGroupKind
+  messages: ChatMessage[]
+  tokenEstimate: number
+  compressible: boolean
 }
 
 /**
@@ -45,14 +67,32 @@ export function estimateTokens(text: string): number {
   return Math.ceil(cjk / CHARS_PER_TOKEN_CJK + other / CHARS_PER_TOKEN_EN)
 }
 
+export function estimateMessageTokens(message: ChatMessage): number {
+  let total = MESSAGE_OVERHEAD_TOKENS + estimateTokens(message.content || '')
+
+  if (message.reasoning_content) {
+    total += estimateTokens(message.reasoning_content)
+  }
+
+  if (message.role === 'tool') {
+    total += TOOL_FIELD_OVERHEAD_TOKENS + estimateTokens(message.tool_call_id || '')
+  }
+
+  for (const toolCall of message.tool_calls || []) {
+    total += TOOL_FIELD_OVERHEAD_TOKENS
+    total += estimateTokens(toolCall.id || '')
+    total += estimateTokens(toolCall.function?.name || '')
+    total += estimateTokens(toolCall.function?.arguments || '')
+  }
+
+  return total
+}
+
 /**
  * Estimates total tokens for an array of chat messages.
  */
 export function estimateMessagesTokens(messages: ChatMessage[]): number {
-  // Each message has ~4 tokens of overhead (role, formatting)
-  const overhead = messages.length * 4
-  const content = messages.reduce((sum, m) => sum + estimateTokens(m.content || ''), 0)
-  return overhead + content
+  return messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0)
 }
 
 /**
@@ -67,22 +107,127 @@ export function calculateBudget(contextTokens: number, outputTokens: number): Co
   }
 }
 
+function previewText(value: string | null | undefined, limit = 360): string {
+  const text = (value || '').replace(/\s+/g, ' ').trim()
+  return text.length > limit ? `${text.slice(0, limit)}...` : text
+}
+
+function summarizeToolRound(messages: ChatMessage[]): string {
+  const assistant = messages.find(message => message.role === 'assistant')
+  const toolNames = (assistant?.tool_calls || [])
+    .map(toolCall => toolCall.function.name)
+    .filter(Boolean)
+
+  const parts = [`[Assistant tool round]: ${toolNames.length ? `called ${toolNames.join(', ')}` : 'called tools'}.`]
+
+  for (const toolCall of assistant?.tool_calls || []) {
+    const args = previewText(toolCall.function.arguments, 180)
+    if (args) {
+      parts.push(`[Tool args ${toolCall.function.name}]: ${args}`)
+    }
+  }
+
+  for (const message of messages) {
+    if (message.role !== 'tool') continue
+    const result = previewText(message.content, 220)
+    parts.push(`[Tool result ${message.tool_call_id || 'unknown'}]: ${result}`)
+  }
+
+  return parts.join('\n')
+}
+
 /**
  * Summarizes a set of messages into a single condensed message.
  * Extracts key information from each message and merges them.
  */
 function summarizeMessages(messages: ChatMessage[]): string {
   const parts: string[] = []
-  for (const msg of messages) {
-    const role = msg.role === 'system' ? 'System' : msg.role === 'user' ? 'User' : msg.role === 'tool' ? 'Tool' : 'Assistant'
-    const content = msg.content || ''
-    // Take first 500 chars of each message as a summary
-    const snippet = content.length > 500
-      ? content.slice(0, 500) + '...'
-      : content
-    parts.push(`[${role}]: ${snippet}`)
+  for (let index = 0; index < messages.length; index++) {
+    const msg = messages[index]
+    if (msg.role === 'assistant' && msg.tool_calls?.length) {
+      const groupMessages = [msg]
+      const expectedIds = new Set(msg.tool_calls.map(toolCall => toolCall.id))
+      let cursor = index + 1
+      while (cursor < messages.length && messages[cursor].role === 'tool' && expectedIds.has(messages[cursor].tool_call_id || '')) {
+        groupMessages.push(messages[cursor])
+        cursor++
+      }
+      parts.push(summarizeToolRound(groupMessages))
+      index = cursor - 1
+      continue
+    }
+
+    if (msg.role === 'tool') {
+      parts.push(`[Tool result ${msg.tool_call_id || 'unknown'}]: ${previewText(msg.content, 220)}`)
+      continue
+    }
+
+    const role = msg.role === 'system' ? 'System' : msg.role === 'user' ? 'User' : 'Assistant'
+    const snippets = [previewText(msg.content, 420)]
+    if (msg.reasoning_content) {
+      snippets.push(`[Reasoning]: ${previewText(msg.reasoning_content, 220)}`)
+    }
+    parts.push(`[${role}]: ${snippets.filter(Boolean).join('\n')}`)
   }
   return `[Context compressed — ${messages.length} earlier messages summarized]\n\n${parts.join('\n\n')}`
+}
+
+function groupMessagesForChatCompletions(messages: ChatMessage[]): MessageGroup[] {
+  const groups: MessageGroup[] = []
+  let index = 0
+
+  while (index < messages.length) {
+    const message = messages[index]
+
+    if (index === 0 && message.role === 'system') {
+      groups.push({
+        kind: 'system',
+        messages: [message],
+        tokenEstimate: estimateMessageTokens(message),
+        compressible: false,
+      })
+      index++
+      continue
+    }
+
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      const expectedIds = new Set(message.tool_calls.map(toolCall => toolCall.id))
+      const seenIds = new Set<string>()
+      const groupMessages = [message]
+      let cursor = index + 1
+
+      while (cursor < messages.length && messages[cursor].role === 'tool') {
+        const toolCallId = messages[cursor].tool_call_id || ''
+        if (!expectedIds.has(toolCallId)) break
+        seenIds.add(toolCallId)
+        groupMessages.push(messages[cursor])
+        cursor++
+      }
+
+      groups.push({
+        kind: 'tool-round',
+        messages: groupMessages,
+        tokenEstimate: estimateMessagesTokens(groupMessages),
+        compressible: seenIds.size === expectedIds.size,
+      })
+      index = cursor
+      continue
+    }
+
+    groups.push({
+      kind: 'single',
+      messages: [message],
+      tokenEstimate: estimateMessageTokens(message),
+      compressible: message.role !== 'tool',
+    })
+    index++
+  }
+
+  return groups
+}
+
+function flattenGroups(groups: MessageGroup[]): ChatMessage[] {
+  return groups.flatMap(group => group.messages)
 }
 
 /**
@@ -167,6 +312,125 @@ export function compressMessages(
     compressedCount: compressCount,
     savedTokens,
   }
+}
+
+export function fitMessagesToContextSmart(
+  messages: ChatMessage[],
+  contextTokens: number | null | undefined,
+  maxOutputTokens: number,
+  options: SmartCompressionOptions = {}
+): { messages: ChatMessage[]; compressed: boolean; details: SmartCompressionResult } {
+  const emptyDetails: SmartCompressionResult = {
+    messages,
+    compressedCount: 0,
+    savedTokens: 0,
+    originalTokens: estimateMessagesTokens(messages),
+    newTokens: estimateMessagesTokens(messages),
+    compressedGroups: 0,
+  }
+
+  if (!contextTokens || contextTokens <= 0) {
+    return { messages, compressed: false, details: emptyDetails }
+  }
+
+  const threshold = options.threshold ?? 0.85
+  const preserveRecentGroups = options.preserveRecentGroups ?? 4
+  const budget = calculateBudget(contextTokens, maxOutputTokens)
+  const totalTokens = emptyDetails.originalTokens
+
+  if (totalTokens <= budget.available * threshold) {
+    return { messages, compressed: false, details: emptyDetails }
+  }
+
+  const groups = groupMessagesForChatCompletions(messages)
+  const protectedIndexes = new Set<number>()
+
+  if (groups[0]?.kind === 'system') {
+    protectedIndexes.add(0)
+  }
+
+  const recentStart = Math.max(0, groups.length - preserveRecentGroups)
+  for (let index = recentStart; index < groups.length; index++) {
+    protectedIndexes.add(index)
+  }
+
+  for (let index = groups.length - 1; index >= 0; index--) {
+    if (groups[index].messages.some(message => message.role === 'user')) {
+      protectedIndexes.add(index)
+      break
+    }
+  }
+
+  groups.forEach((group, index) => {
+    if (!group.compressible) protectedIndexes.add(index)
+  })
+
+  let compressThrough = -1
+  let bestMessages = messages
+  let bestTokens = totalTokens
+
+  for (let index = 0; index < groups.length; index++) {
+    if (protectedIndexes.has(index)) continue
+    compressThrough = index
+    const compressed = buildSmartCompressedMessages(groups, protectedIndexes, compressThrough)
+    const compressedTokens = estimateMessagesTokens(compressed)
+    bestMessages = compressed
+    bestTokens = compressedTokens
+    if (compressedTokens <= budget.available * threshold) break
+  }
+
+  if (compressThrough < 0) {
+    return { messages, compressed: false, details: emptyDetails }
+  }
+
+  const compressedGroups = groups.filter((_, index) => index <= compressThrough && !protectedIndexes.has(index)).length
+  const compressedMessageCount = groups
+    .filter((_, index) => index <= compressThrough && !protectedIndexes.has(index))
+    .reduce((sum, group) => sum + group.messages.length, 0)
+  const details: SmartCompressionResult = {
+    messages: bestMessages,
+    compressedCount: compressedMessageCount,
+    savedTokens: totalTokens - bestTokens,
+    originalTokens: totalTokens,
+    newTokens: bestTokens,
+    compressedGroups,
+  }
+
+  return {
+    messages: bestMessages,
+    compressed: compressedGroups > 0,
+    details,
+  }
+}
+
+function buildSmartCompressedMessages(groups: MessageGroup[], protectedIndexes: Set<number>, compressThrough: number): ChatMessage[] {
+  const compressedGroups: MessageGroup[] = []
+  const resultGroups: MessageGroup[] = []
+
+  groups.forEach((group, index) => {
+    if (index <= compressThrough && !protectedIndexes.has(index)) {
+      compressedGroups.push(group)
+      return
+    }
+    resultGroups.push(group)
+  })
+
+  if (compressedGroups.length === 0) {
+    return flattenGroups(resultGroups)
+  }
+
+  const systemGroup = resultGroups[0]?.kind === 'system' ? resultGroups.shift() : null
+  const messagesToSummarize = flattenGroups(compressedGroups)
+  const summaryMessage: ChatMessage = {
+    role: 'user',
+    content: summarizeMessages(messagesToSummarize),
+  }
+
+  return [
+    ...(systemGroup ? systemGroup.messages : []),
+    summaryMessage,
+    ...flattenGroups(resultGroups),
+  ]
 }
 
 /**

@@ -13,7 +13,7 @@ import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import type { StoryLength, WritingFormat } from '@/types/project'
+import type { WritingFormat } from '@/types/project'
 
 const projectStore = useProjectStore()
 const providerStore = useProviderStore()
@@ -33,7 +33,8 @@ const form = reactive({
   language: 'English',
   styleId: 'default',
   writingFormat: 'plaintext' as WritingFormat,
-  length: 'medium' as StoryLength,
+  chapterCount: '8',
+  maxChapters: '8',
   customRequirements: '',
 })
 
@@ -73,7 +74,8 @@ watch(
       form.language = p.language || 'English'
       form.styleId = p.styleId || 'default'
       form.writingFormat = p.writingFormat || 'plaintext'
-      form.length = p.length
+      form.chapterCount = String(p.chapterCount || 8)
+      form.maxChapters = String(p.chapterConfig?.maxChapters || p.chapterCount || 8)
       form.customRequirements = p.customRequirements
       requiredElementsText.value = p.constraints.required.join('\n')
       forbiddenElementsText.value = p.constraints.forbidden.join('\n')
@@ -87,7 +89,8 @@ watch(
     form.targetReader = ''
     form.language = 'English'
     form.styleId = 'default'
-    form.length = 'medium'
+    form.chapterCount = '8'
+    form.maxChapters = '8'
     form.customRequirements = ''
     requiredElementsText.value = ''
     forbiddenElementsText.value = ''
@@ -95,18 +98,11 @@ watch(
   { immediate: true }
 )
 
-const lengthOptions = [
-  { label: 'Short (1-5 chapters)', value: 'short' },
-  { label: 'Medium (6-15 chapters)', value: 'medium' },
-  { label: 'Long (16+ chapters)', value: 'long' },
-]
-
 const styleOptions = computed(() => [
   { label: 'Default (No Reference)', value: 'default' },
   ...writingStyleStore.styles.map(s => ({ label: s.name, value: s.id })),
 ])
 
-const lengthValues = new Set<StoryLength>(lengthOptions.map(option => option.value as StoryLength))
 const resolvedGenre = computed(() =>
   form.genre === 'custom'
     ? form.customGenre.trim()
@@ -125,8 +121,14 @@ function normalizeTextValue(value: unknown) {
   return value.trim()
 }
 
-function isStoryLength(value: string): value is StoryLength {
-  return lengthValues.has(value as StoryLength)
+function normalizedChapterCount() {
+  const parsed = Number(form.chapterCount)
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.trunc(parsed))) : 8
+}
+
+function normalizedMaxChapters() {
+  const parsed = Number(form.maxChapters)
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.trunc(parsed))) : normalizedChapterCount()
 }
 
 function setGenreValue(value: unknown) {
@@ -173,7 +175,8 @@ function applyConfigPatch(payload: Record<string, any>) {
   const nextGenre = normalizeTextValue(payload.genre)
   const nextTargetReader = normalizeTextValue(payload.targetReader)
   const nextLanguage = normalizeTextValue(payload.language)
-  const nextLength = normalizeTextValue(payload.length)
+  const nextChapterCount = Number(payload.chapterCount)
+  const nextMaxChapters = Number(payload.maxChapters ?? payload.chapterConfig?.maxChapters)
   const nextCustomRequirements = normalizeTextValue(payload.customRequirements)
 
   if (nextName) form.name = nextName
@@ -181,7 +184,8 @@ function applyConfigPatch(payload: Record<string, any>) {
   if (nextGenre) setGenreValue(nextGenre)
   if (nextTargetReader) form.targetReader = nextTargetReader
   if (nextLanguage) form.language = nextLanguage
-  if (nextLength && isStoryLength(nextLength)) form.length = nextLength
+  if (Number.isFinite(nextChapterCount)) form.chapterCount = String(Math.max(1, Math.min(9999, Math.trunc(nextChapterCount))))
+  if (Number.isFinite(nextMaxChapters)) form.maxChapters = String(Math.max(1, Math.min(9999, Math.trunc(nextMaxChapters))))
   if (nextCustomRequirements) form.customRequirements = nextCustomRequirements
 
   if (payload.constraints && typeof payload.constraints === 'object') {
@@ -207,7 +211,10 @@ async function save(showToast = true) {
     style: resolvedStyle,
     styleId: form.styleId,
     writingFormat: form.writingFormat,
-    length: form.length as any,
+    chapterCount: normalizedChapterCount(),
+    chapterConfig: {
+      maxChapters: normalizedMaxChapters(),
+    },
     constraints: {
       required: splitListInput(requiredElementsText.value),
       forbidden: splitListInput(forbiddenElementsText.value),
@@ -251,7 +258,8 @@ async function optimizeWithDetailer() {
       genre: resolvedGenre.value,
       targetReader: form.targetReader,
       language: form.language.trim() || 'English',
-      length: form.length,
+      chapterCount: normalizedChapterCount(),
+      maxChapters: normalizedMaxChapters(),
       customRequirements: form.customRequirements,
       constraints: {
         required: splitListInput(requiredElementsText.value),
@@ -309,9 +317,10 @@ async function optimizeWithDetailer() {
           :auto-resize="true"
         />
 
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-3">
           <BaseSelect v-model="form.genre" label="Genre" :options="genreOptions" />
-          <BaseSelect v-model="form.length" label="Length" :options="lengthOptions" />
+          <BaseInput v-model="form.chapterCount" label="Chapters" type="number" placeholder="8" min="1" max="9999" step="1" />
+          <BaseInput v-model="form.maxChapters" label="Max Chapters" type="number" placeholder="8" min="1" max="9999" step="1" />
         </div>
 
         <BaseInput
