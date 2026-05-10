@@ -36,11 +36,13 @@ export function extractJsonPayload(content: string) {
 }
 
 export function countWords(content: string) {
-  return content
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .length
+  const text = content.trim()
+  if (!text) return 0
+
+  const cjkChars = text.match(/[\u3400-\u9fff\uf900-\ufaff]/g)?.length ?? 0
+  const nonCjkText = text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ')
+  const wordTokens = nonCjkText.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*/g)?.length ?? 0
+  return cjkChars + wordTokens
 }
 
 export function countParagraphs(content: string) {

@@ -271,7 +271,7 @@ export function locateRelationshipEvent(
     ?? null
   if (!chapter) return null
 
-  const content = chapter.polishedContent || chapter.content || ''
+  const content = chapter.content || ''
   const evidence = event.evidence?.trim() || event.summary?.trim() || event.description?.trim() || ''
   if (!content.trim()) {
     return {

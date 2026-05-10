@@ -7,6 +7,7 @@ import { fitToContext } from '@/services/context'
 import { useProviderStore } from '@/stores/provider'
 import type { FunctionCallingResponse } from '@/services/provider/types'
 import { requestToolContinuation } from './toolContinuation'
+import { getTodoListTool, handleTodoListToolCall, isTodoListTool } from './todolist'
 
 export interface AgentResult {
   content: string
@@ -117,7 +118,7 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
 
   private prepareMessages(context: Record<string, any>, userPrompt?: string): ChatMessage[] {
     const raw: ChatMessage[] = [
-      { role: 'system', content: this.getSystemPrompt() },
+      { role: 'system', content: this.withBaseToolInstructions(this.getSystemPrompt()) },
       { role: 'user', content: userPrompt ?? this.buildPrompt(context) },
     ]
 
@@ -136,6 +137,34 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
     return messages
   }
 
+  private withBaseToolInstructions(systemPrompt: string) {
+    return `${systemPrompt}
+
+Base tool available to every agent:
+- For complex work with several dependent steps, use update_todolist to create a short checklist before acting and update it as progress is made.
+- Keep only one item in_progress at a time. Mark completed work as done. Use blocked only when a real blocker prevents progress.
+- The todolist is for task control, not user-facing prose; continue using the agent-specific final tool or final response required by the task.
+- When a tool is the delivery channel for generated content or structured output, put that content only in the tool arguments. Do not duplicate the same content in assistant text before or after the tool call.`
+  }
+
+  private getAvailableTools(tools: ToolDefinition[]) {
+    const seen = new Set<string>()
+    return [getTodoListTool(), ...tools].filter(tool => {
+      if (seen.has(tool.name)) return false
+      seen.add(tool.name)
+      return true
+    })
+  }
+
+  private ensureBaseToolInstructions(messages: ChatMessage[]) {
+    return messages.map((message, index) => {
+      if (index !== 0 || message.role !== 'system' || !message.content) return message
+      return message.content.includes('Base tool available to every agent:')
+        ? message
+        : { ...message, content: this.withBaseToolInstructions(message.content) }
+    })
+  }
+
   private _lastCompressed = false
   private _lastCompressionDetails?: { compressedCount: number; savedTokens: number }
 
@@ -144,7 +173,7 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       throw new Error(`${this.name} has no model assigned`)
     }
 
-    const tools = this.getTools()
+    const tools = this.getAvailableTools(this.getTools())
     const retryLimit = this.getValidationRetryLimit()
     let previousResponse = ''
     let lastIssues: string[] = []
@@ -232,22 +261,34 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
 
     const allToolCalls: ToolCall[] = []
     let finalContent = ''
-    const currentMessages: any[] = [...messages]
+    const currentMessages: any[] = [...this.ensureBaseToolInstructions(messages)]
     let lastProgressKey = this.getToolProgressKey(context)
     let stalledToolRounds = 0
     const maxStalledToolRounds = 3
     const streamToolProgress = this.shouldStreamToolProgress(context)
     let lastStreamedToolContent = ''
     let round = 0
+    let totalRounds = 0
+    let consecutiveNoToolRounds = 0
+    let softLimitReached = false
     const providerStore = useProviderStore()
-    const maxToolRounds = providerStore.toolWorkflowSettings.maxToolCallRounds
+    const softToolRoundLimit = providerStore.toolWorkflowSettings.maxToolCallRounds
+    const hardToolRoundLimit = Math.max(softToolRoundLimit * 4, softToolRoundLimit + 24)
+    const maxConsecutiveNoToolRounds = 6
+    const availableTools = this.getAvailableTools(tools)
 
     while (true) {
       const finalToolNames = this.getFinalToolNames(context)
-      if (finalToolNames.length && round === maxToolRounds - 1) {
+      const streamAssistantText = streamToolProgress && finalToolNames.length === 0
+      const forcedFinalTool = finalToolNames.length && consecutiveNoToolRounds >= 2
+        ? finalToolNames[0]
+        : null
+
+      if (finalToolNames.length && !softLimitReached && totalRounds >= softToolRoundLimit - 1) {
+        softLimitReached = true
         currentMessages.push({
           role: 'user',
-          content: `You have reached the final tool round. Do not call lookup tools again. Call one of these final reporting/finalization tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
+          content: `Checkpoint: this tool workflow has used ${totalRounds + 1} rounds. Continue only if the next tool call materially advances the task. If you have enough information, call one of these final reporting/finalization tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
         })
       }
 
@@ -261,11 +302,11 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
         await providerManager.streamWithTools(
           currentMessages,
           this.model,
-          tools,
+          availableTools,
           {
             onToken: (token) => {
               roundContent += token
-              if (streamToolProgress) {
+              if (streamAssistantText) {
                 onToken(token)
               }
             },
@@ -282,7 +323,10 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
             onError: (e) => { throw e },
           },
           this.maxTokens,
-          temperature ?? this.temperature
+          temperature ?? this.temperature,
+          forcedFinalTool
+            ? { toolChoice: { type: 'function', function: { name: forcedFinalTool } } }
+            : undefined
         )
         
         // result is populated by onComplete
@@ -293,9 +337,12 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
         result = await providerManager.chatWithTools(
           currentMessages,
           this.model,
-          tools,
+          availableTools,
           this.maxTokens,
-          temperature ?? this.temperature
+          temperature ?? this.temperature,
+          forcedFinalTool
+            ? { toolChoice: { type: 'function', function: { name: forcedFinalTool } } }
+            : undefined
         )
       }
 
@@ -308,31 +355,43 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       }
 
       if (result.tool_calls.length === 0) {
+        consecutiveNoToolRounds += 1
         const finalToolNames = this.getFinalToolNames(context)
         if (finalToolNames.length) {
-          currentMessages.push({
-            role: 'assistant',
-            content: result.content || null,
-            reasoning_content: result.reasoning_content ?? null,
-          })
+          if (result.content?.trim() || result.reasoning_content?.trim()) {
+            currentMessages.push({
+              role: 'assistant',
+              content: result.content?.trim() ? result.content : null,
+              reasoning_content: result.reasoning_content?.trim() ? result.reasoning_content : null,
+            })
+          }
           currentMessages.push({
             role: 'user',
-            content: `Your previous response was invalid because it did not call a required final tool. Do not answer in text. Call one of these tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
+            content: consecutiveNoToolRounds >= 2
+              ? `Your previous response still did not call a required final tool. The next request will force the tool choice where supported. Call ${finalToolNames[0]} now and put the result in its arguments.`
+              : `Your previous response was invalid because it did not call a required final tool. Do not answer in text. Call one of these tools now: ${finalToolNames.join(', ')}. If there are no findings or nothing to add, call the final tool with an empty result.`,
           })
 
           round += 1
-          if (round >= maxToolRounds) {
+          totalRounds += 1
+          if (consecutiveNoToolRounds >= maxConsecutiveNoToolRounds) {
+            throw new Error(`${this.name} tool workflow stalled: the model did not call ${finalToolNames.join(' or ')} after ${consecutiveNoToolRounds} consecutive correction attempts.`)
+          }
+
+          if (totalRounds >= hardToolRoundLimit) {
             const shouldContinue = await requestToolContinuation({
               workflow: `${this.name}: ${finalToolNames.join(' / ')}`,
-              rounds: maxToolRounds,
+              rounds: totalRounds,
               finalToolNames,
             })
 
             if (!shouldContinue) {
-              throw new Error(`${this.name} tool workflow stopped after ${maxToolRounds} rounds before calling ${finalToolNames.join(' or ')}.`)
+              throw new Error(`${this.name} tool workflow stopped after ${totalRounds} rounds before calling ${finalToolNames.join(' or ')}.`)
             }
 
             round = 0
+            totalRounds = 0
+            softLimitReached = false
           }
           continue
         }
@@ -341,11 +400,12 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       }
 
       allToolCalls.push(...result.tool_calls)
+      consecutiveNoToolRounds = 0
 
       // Add assistant message with tool calls to conversation
       currentMessages.push({
         role: 'assistant',
-        content: result.content || null,
+        content: null,
         reasoning_content: result.reasoning_content ?? null,
         tool_calls: result.tool_calls.map((tc: ToolCall) => ({
           id: tc.id,
@@ -360,7 +420,9 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       // Execute each tool call and add results
       for (const toolCall of result.tool_calls) {
         try {
-          const toolResult = await this.handleToolCall(toolCall, context)
+          const toolResult = isTodoListTool(toolCall.name)
+            ? await handleTodoListToolCall(toolCall, context, this.name)
+            : await this.handleToolCall(toolCall, context)
           currentMessages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -422,19 +484,22 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       }
 
       round += 1
-      if (round >= maxToolRounds) {
+      totalRounds += 1
+      if (totalRounds >= hardToolRoundLimit) {
         const finalToolNames = this.getFinalToolNames(context)
         const shouldContinue = await requestToolContinuation({
           workflow: `${this.name}${finalToolNames.length ? `: ${finalToolNames.join(' / ')}` : ''}`,
-          rounds: maxToolRounds,
+          rounds: totalRounds,
           finalToolNames,
         })
 
         if (!shouldContinue) {
-          throw new Error(`${this.name} tool workflow stopped after ${maxToolRounds} rounds${finalToolNames.length ? ` before calling ${finalToolNames.join(' or ')}` : ''}.`)
+          throw new Error(`${this.name} tool workflow stopped after ${totalRounds} rounds${finalToolNames.length ? ` before calling ${finalToolNames.join(' or ')}` : ''}.`)
         }
 
         round = 0
+        totalRounds = 0
+        softLimitReached = false
         currentMessages.push({
           role: 'user',
           content: finalToolNames.length
@@ -458,7 +523,7 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       throw new Error(`${this.name} has no model assigned`)
     }
 
-    const tools = this.getTools()
+    const tools = this.getAvailableTools(this.getTools())
     const messages = this.prepareMessages(context)
     let fullContent = ''
     let toolCalls: ToolCall[] = []
@@ -513,6 +578,10 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
       const chapterNumber = toolCall.arguments.chapterNumber ?? '?'
       const title = toolCall.arguments.title || 'Untitled'
       summary = `### Saved Chapter ${chapterNumber}: ${title}\n\n[Chapter outline saved successfully]`
+    } else if (toolCall.name === 'update_todolist') {
+      const items = Array.isArray(toolCall.arguments.items) ? toolCall.arguments.items : []
+      const done = items.filter((item: any) => item?.status === 'done').length
+      summary = `[Todo list updated: ${done}/${items.length} complete]`
     } else if (toolCall.name === 'finalize_chapter_plan') {
       summary = '[Chapter plan finalized]'
     } else if (toolCall.name === 'write_chapter') {

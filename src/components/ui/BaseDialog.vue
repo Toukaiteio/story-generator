@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { X } from 'lucide-vue-next'
+import { translatePhrase } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   modelValue: boolean
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   close: []
 }>()
+
+const translatedTitle = computed(() => props.title ? translatePhrase(props.title) : '')
 
 function close() {
   emit('update:modelValue', false)
@@ -62,7 +65,7 @@ onBeforeUnmount(() => {
             aria-modal="true"
           >
             <div v-if="title || closable" class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
-              <h2 v-if="title" class="text-base font-semibold text-text-primary">{{ title }}</h2>
+              <h2 v-if="title" class="text-base font-semibold text-text-primary">{{ translatedTitle }}</h2>
               <div v-else />
               <button
                 v-if="closable"

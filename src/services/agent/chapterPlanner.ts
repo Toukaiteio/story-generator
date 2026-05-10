@@ -79,6 +79,10 @@ export class ChapterPlannerExpert extends BaseAgent {
         endingHook,
       }
 
+      if (typeof context._onChapterOutlineUpdated === 'function') {
+        await context._onChapterOutlineUpdated(context._chapterOutlineData)
+      }
+
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({ success: true }),

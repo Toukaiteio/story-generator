@@ -2,11 +2,9 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { SidebarItem, Toast } from '@/types/common'
 import { readJsonStorage, writeJsonStorage } from '@/lib/storage'
-import en from '@/i18n/en'
-import zh from '@/i18n/zh'
+import { i18n, setI18nLocale, translatePhrase, type AppLocale } from '@/i18n'
 
-const messages = { en, zh }
-type Language = 'en' | 'zh'
+type Language = AppLocale
 
 const UI_STORAGE_KEY = 'story-generator.ui.v1'
 
@@ -15,6 +13,9 @@ interface PersistedUiState {
   activeWorkspaceNode: string | null
   language: Language
   defaultStoragePath: string
+  vibeRewindPoints: number
+  vibeModelRef: string
+  editingAiModelRef: string
 }
 
 function isSidebarItem(value: unknown): value is SidebarItem {
@@ -27,9 +28,18 @@ export const useUiStore = defineStore('ui', () => {
   const activeWorkspaceNode = ref<string | null>(persisted.activeWorkspaceNode ?? null)
   const language = ref<Language>(persisted.language === 'zh' ? 'zh' : 'en')
   const defaultStoragePath = ref<string>(persisted.defaultStoragePath ?? '')
+  const vibeRewindPoints = ref<number>(
+    Number.isFinite(persisted.vibeRewindPoints)
+      ? Math.max(0, Math.min(20, Math.trunc(Number(persisted.vibeRewindPoints))))
+      : 1
+  )
+  const vibeModelRef = ref<string>(typeof persisted.vibeModelRef === 'string' ? persisted.vibeModelRef : '')
+  const editingAiModelRef = ref<string>(typeof persisted.editingAiModelRef === 'string' ? persisted.editingAiModelRef : '')
+  const unsavedWorkspaceNodes = ref<Record<string, boolean>>({})
   const toasts = ref<Toast[]>([])
 
-  // Initialize default path if empty
+  setI18nLocale(language.value)
+
   if (!defaultStoragePath.value && window.electronAPI?.app?.getPath) {
     window.electronAPI.app.getPath('documents').then(path => {
       if (path) {
@@ -47,6 +57,9 @@ export const useUiStore = defineStore('ui', () => {
       activeWorkspaceNode: activeWorkspaceNode.value,
       language: language.value,
       defaultStoragePath: defaultStoragePath.value,
+      vibeRewindPoints: vibeRewindPoints.value,
+      vibeModelRef: vibeModelRef.value,
+      editingAiModelRef: editingAiModelRef.value,
     }
     writeJsonStorage(UI_STORAGE_KEY, nextState)
   }
@@ -55,23 +68,29 @@ export const useUiStore = defineStore('ui', () => {
     defaultStoragePath.value = path
   }
 
-  function setLanguage(lang: Language) {
-    language.value = lang
+  function setVibeRewindPoints(value: number) {
+    vibeRewindPoints.value = Math.max(0, Math.min(20, Math.trunc(Number(value) || 0)))
   }
 
-  function t(path: string): string {
-    const keys = path.split('.')
-    let current: any = messages[language.value]
+  function setVibeModelRef(value: string) {
+    vibeModelRef.value = value
+  }
 
-    for (const key of keys) {
-      if (current && typeof current === 'object' && key in current) {
-        current = current[key]
-      } else {
-        return path
-      }
-    }
+  function setEditingAiModelRef(value: string) {
+    editingAiModelRef.value = value
+  }
 
-    return typeof current === 'string' ? current : path
+  function setLanguage(lang: Language) {
+    language.value = lang
+    setI18nLocale(lang)
+  }
+
+  function t(path: string, params?: Record<string, string | number>): string {
+    return i18n.global.t(path, params ?? {})
+  }
+
+  function text(source: string): string {
+    return translatePhrase(source)
   }
 
   function navigateTo(item: SidebarItem) {
@@ -80,6 +99,17 @@ export const useUiStore = defineStore('ui', () => {
 
   function setWorkspaceNode(node: string | null) {
     activeWorkspaceNode.value = node
+  }
+
+  function setWorkspaceNodeUnsaved(node: string, unsaved: boolean) {
+    if (!node) return
+    if (unsaved) {
+      unsavedWorkspaceNodes.value = { ...unsavedWorkspaceNodes.value, [node]: true }
+    } else if (unsavedWorkspaceNodes.value[node]) {
+      const next = { ...unsavedWorkspaceNodes.value }
+      delete next[node]
+      unsavedWorkspaceNodes.value = next
+    }
   }
 
   function addToast(toast: Omit<Toast, 'id'>) {
@@ -100,20 +130,35 @@ export const useUiStore = defineStore('ui', () => {
   persistState()
   watch(activeSidebarItem, persistState)
   watch(activeWorkspaceNode, persistState)
-  watch(language, persistState)
+  watch(language, (lang) => {
+    setI18nLocale(lang)
+    persistState()
+  })
   watch(defaultStoragePath, persistState)
+  watch(vibeRewindPoints, persistState)
+  watch(vibeModelRef, persistState)
+  watch(editingAiModelRef, persistState)
 
   return {
     activeSidebarItem,
     activeWorkspaceNode,
     language,
     defaultStoragePath,
+    vibeRewindPoints,
+    vibeModelRef,
+    editingAiModelRef,
+    unsavedWorkspaceNodes,
     toasts,
     navigateTo,
     setWorkspaceNode,
+    setWorkspaceNodeUnsaved,
     setLanguage,
     setDefaultStoragePath,
+    setVibeRewindPoints,
+    setVibeModelRef,
+    setEditingAiModelRef,
     t,
+    text,
     addToast,
     removeToast,
   }

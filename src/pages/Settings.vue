@@ -35,6 +35,10 @@ function handleMinIssueSeverityChange(value: any) {
   providerStore.setMinIssueSeverity(value)
 }
 
+function handleVibeRewindPointsChange(value: string) {
+  ui.setVibeRewindPoints(Number(value))
+}
+
 async function handleBrowseStorage() {
   if (!window.electronAPI?.dialog?.openDirectory) return
   const path = await window.electronAPI.dialog.openDirectory({
@@ -63,7 +67,7 @@ async function handleBrowseStorage() {
                 <p class="text-sm text-text-primary">{{ ui.t('settings.theme') }}</p>
                 <p class="text-xs text-text-muted">{{ ui.t('settings.themeDescription') }}</p>
               </div>
-              <BaseTag variant="accent" size="sm">Dark</BaseTag>
+              <BaseTag variant="accent" size="sm">{{ ui.text('Dark') }}</BaseTag>
             </div>
           </div>
         </section>
@@ -86,30 +90,49 @@ async function handleBrowseStorage() {
         <section class="border-t border-surface-4 pt-6">
           <div class="flex items-center gap-2 mb-4">
             <Wrench :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">AI Tool Workflow</h2>
+            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('AI Tool Workflow') }}</h2>
           </div>
           <div class="pl-6">
             <BaseInput
               :model-value="String(providerStore.toolWorkflowSettings.maxToolCallRounds)"
-              label="Maximum tool call rounds"
+              :label="ui.text('Tool workflow soft checkpoint')"
               type="number"
               placeholder="16"
               @update:model-value="handleMaxToolRoundsChange"
             />
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
-              Default is 16. When a model reaches this limit without submitting a final result, the app will ask whether to continue and will auto-continue after 8 seconds.
+              {{ ui.text('Default is 16. This is now a soft checkpoint: the app nudges the agent to finalize, but allows continued progress. It stops only after repeated no-tool responses, stalled progress, or a much higher safety guard.') }}
             </p>
             <div class="mt-4">
               <BaseSelect
                 :model-value="providerStore.toolWorkflowSettings.minIssueSeverity"
-                label="Minimum issue severity to polish"
+                :label="ui.text('Minimum issue severity to polish')"
                 :options="issueSeverityOptions"
                 @update:model-value="handleMinIssueSeverityChange"
               />
               <p class="mt-2 text-xs leading-relaxed text-text-muted">
-                Default is Low. Raising this threshold marks lower-severity issues as ignored during Polish.
+                {{ ui.text('Default is Low. Raising this threshold marks lower-severity issues as ignored during Polish.') }}
               </p>
             </div>
+          </div>
+        </section>
+
+        <section class="border-t border-surface-4 pt-6">
+          <div class="flex items-center gap-2 mb-4">
+            <Wrench :size="16" class="text-accent" />
+            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Vibe AI Safety') }}</h2>
+          </div>
+          <div class="pl-6">
+            <BaseInput
+              :model-value="String(ui.vibeRewindPoints)"
+              :label="ui.text('Workspace rewind points')"
+              type="number"
+              placeholder="1"
+              @update:model-value="handleVibeRewindPointsChange"
+            />
+            <p class="mt-2 text-xs leading-relaxed text-text-muted">
+              {{ ui.text('Default is 1. Before each Vibe AI request, the app saves a small snapshot of the current workspace so you can rewind from that message if the AI makes a bad edit. Older snapshots are replaced when the limit is exceeded. Set 0 to disable rewind snapshots.') }}
+            </p>
           </div>
         </section>
 

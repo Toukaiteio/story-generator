@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
 import { exportProject, exportProjectEpub, type ExportFormat } from '@/services/export'
 import { BookOpen, Download, ChevronDown } from 'lucide-vue-next'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -9,6 +10,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 
 const projectStore = useProjectStore()
 const toast = useToast()
+const tr = translatePhrase
 const project = computed(() => projectStore.activeProject)
 const chapters = computed(() => project.value?.chapters ?? [])
 const showExportMenu = ref(false)
@@ -103,7 +105,7 @@ async function handleExport(format: ExportFormat) {
         <div ref="exportMenuRef" class="relative">
           <BaseButton variant="secondary" size="sm" @click="showExportMenu = !showExportMenu">
             <Download :size="14" />
-            <span>Export</span>
+            <span>{{ tr('Export') }}</span>
             <ChevronDown :size="12" />
           </BaseButton>
           <Transition name="fade">
@@ -131,13 +133,13 @@ async function handleExport(format: ExportFormat) {
             class="text-lg font-semibold text-text-primary mb-4 pb-2 border-b border-surface-4"
             style="font-family: Georgia, serif;"
           >
-            Chapter {{ chapter.index + 1 }}: {{ chapter.title }}
+            {{ tr('Chapter') }} {{ chapter.index + 1 }}: {{ chapter.title }}
           </h2>
           <div
             class="text-sm text-text-primary whitespace-pre-wrap leading-relaxed"
             style="font-family: Georgia, serif; line-height: 1.8;"
           >
-            {{ chapter.polishedContent || chapter.content || 'No content yet.' }}
+            {{ chapter.content || tr('No content yet.') }}
           </div>
         </div>
       </div>
@@ -146,8 +148,8 @@ async function handleExport(format: ExportFormat) {
     <EmptyState
       v-else
       :icon="BookOpen"
-      title="No project loaded"
-      description="Open a project to see the story preview."
+      :title="tr('No project loaded')"
+      :description="tr('Open a project to see the story preview.')"
     />
   </div>
 </template>

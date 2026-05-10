@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import VibeAssistant from './VibeAssistant.vue'
+import { translatePhrase } from '@/i18n'
 import { Sparkles, MessageSquare, X } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -14,6 +15,7 @@ const emit = defineEmits<{
 }>()
 
 const isOpen = ref(false)
+const tr = translatePhrase
 
 function toggle() {
   isOpen.value = !isOpen.value
@@ -32,7 +34,7 @@ function handleApply(content: string) {
         <div class="flex items-center justify-between px-3 py-2 bg-surface-2 border-b border-surface-4">
           <div class="flex items-center gap-2">
             <Sparkles :size="14" class="text-accent" />
-            <span class="text-xs font-medium text-text-primary">Vibe Assistant</span>
+            <span class="text-xs font-medium text-text-primary">{{ tr('Vibe Assistant') }}</span>
           </div>
           <button
             class="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors"

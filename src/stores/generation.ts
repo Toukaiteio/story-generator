@@ -6,35 +6,23 @@ import { buildPreviousSummary, buildCharacterContextForTask } from '@/services/p
 import { useProjectStore } from '@/stores/project'
 import { useProviderStore } from '@/stores/provider'
 import { providerManager } from '@/services/provider'
-import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
+import { getRelationshipQueryTools } from '@/services/relationship/tools'
 import { setToolContinuationHandler } from '@/services/agent/toolContinuation'
+import { clearAgentTodoList, getTodoListTool, handleTodoListToolCall, isTodoListTool, type AgentTodoListState } from '@/services/agent/todolist'
+import { countWords } from '@/services/agent/validation'
 import { buildProofreadingSegments, buildSegmentedProofreadingPrompts } from '@/services/proofreading/chunking'
+import { generationStageOrder, getNextGenerationAction, resolveChapterIndexById, resolveNextChapterIndex } from '@/services/generation/flow'
+import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSystemPrompt, getProofreadingTools, getChapterRegion, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
+import { chatWithRelationshipTools, chatWithRelationshipToolsInPlace, getToolCall } from '@/services/generation/toolWorkflow'
 import type { GenerationStage, StoryProject } from '@/types/project'
 import type { AgentType } from '@/types/agent'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
-import type { ToolDefinition, ToolCall } from '@/services/provider'
+import type { ToolDefinition } from '@/services/provider'
+import type { FunctionCallingResponse } from '@/services/provider/types'
+import type { ChapterAuditIssue } from '@/services/generation/types'
 
-export interface ChapterAuditIssue {
-  id: string
-  severity: 'low' | 'medium' | 'high'
-  category: 'chapter_plan' | 'character' | 'relationship' | 'continuity' | 'factual' | 'logic' | 'style' | 'grammar' | 'typo' | 'pacing' | 'consistency'
-  title: string
-  excerpt: string
-  explanation: string
-  suggestedFix: string
-  ignored?: boolean
-  adjustment?: string
-  polishStatus?: 'pending' | 'fixed' | 'ignored' | 'failed'
-  polishResult?: string
-  segmentIndex?: number
-  segmentTotal?: number
-  segmentCharStart?: number
-  segmentCharEnd?: number
-  segmentTokenStart?: number
-  segmentTokenEnd?: number
-  segmentTokenTotal?: number
-}
+export type { ChapterAuditIssue } from '@/services/generation/types'
 
 interface GenerationError {
   id: string
@@ -51,22 +39,6 @@ interface ToolContinuationRequest {
   continue: () => void
   stop: () => void
 }
-
-type NextAction =
-  | { stage: 'planning' }
-  | { stage: 'chapter-outline' }
-  | { stage: 'writing'; chapterIndex: number }
-  | { stage: 'proofreading'; chapterIndex: number }
-  | { stage: 'polishing'; chapterIndex: number }
-  | { stage: 'done' }
-
-const stageOrder: GenerationStage[] = [
-  'planning',
-  'chapter-outline',
-  'writing',
-  'proofreading',
-  'polishing',
-]
 
 export const useGenerationStore = defineStore('generation', () => {
   const isGenerating = ref(false)
@@ -99,6 +71,7 @@ export const useGenerationStore = defineStore('generation', () => {
     currentProjectId.value = projectId
     progressMessage.value = ''
     streamContent.value = ''
+    clearAgentTodoList()
     currentStage.value = 'idle'
     currentChapterIndex.value = null
     pipeline = new StoryPipeline()
@@ -130,56 +103,14 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function markCompletedThrough(stage: GenerationStage) {
-    for (const item of stageOrder) {
+    for (const item of generationStageOrder) {
       markCompleted(item)
       if (item === stage) break
     }
   }
 
-  function findNextChapterPosition(
-    chapters: StoryProject['chapters'],
-    predicate: (chapter: StoryProject['chapters'][number]) => boolean | string
-  ) {
-    let nextIndex = -1
-    for (let index = 0; index < chapters.length; index++) {
-      if (!predicate(chapters[index])) continue
-      if (nextIndex === -1 || chapters[index].index < chapters[nextIndex].index) {
-        nextIndex = index
-      }
-    }
-    return nextIndex
-  }
-
-  function getNextAction(project: StoryProject): NextAction {
-    if (!project.outline.trim() || !project.characters.length) return { stage: 'planning' }
-    if (!project.chapters.length || project.chapters.some(ch => !ch.outline.objective || !ch.outline.endingHook)) {
-      return { stage: 'chapter-outline' }
-    }
-
-    const writingIndex = findNextChapterPosition(project.chapters, ch => !ch.content.trim())
-    if (writingIndex !== -1) return { stage: 'writing', chapterIndex: writingIndex }
-
-    const proofreadingIndex = findNextChapterPosition(project.chapters, ch =>
-      ch.content.trim() && !['proofread', 'polishing', 'polished'].includes(ch.status)
-    )
-    if (proofreadingIndex !== -1) return { stage: 'proofreading', chapterIndex: proofreadingIndex }
-
-    const polishingIndex = findNextChapterPosition(project.chapters, ch =>
-      ch.content.trim() && ch.status === 'proofread' && !ch.polishedContent.trim()
-    )
-    if (polishingIndex !== -1) return { stage: 'polishing', chapterIndex: polishingIndex }
-
-    return { stage: 'done' }
-  }
-
-  function resolveChapterIndex(project: StoryProject, stage: Exclude<NextAction['stage'], 'planning' | 'chapter-outline' | 'done'>) {
-    const action = getNextAction(project)
-    return action.stage === stage ? action.chapterIndex : -1
-  }
-
-  function resolveChapterIndexById(project: StoryProject, chapterId: string) {
-    return project.chapters.findIndex(chapter => chapter.id === chapterId)
-  }
+  const getNextAction = getNextGenerationAction
+  const resolveChapterIndex = resolveNextChapterIndex
 
   async function applyProjectUpdate(projectId: string, updates: Partial<StoryProject>) {
     const projectStore = useProjectStore()
@@ -251,7 +182,7 @@ export const useGenerationStore = defineStore('generation', () => {
         appendStreamToken,
         message => { progressMessage.value = message },
         error => { addError('planning', error) },
-        updates => applyProjectUpdate(projectId, updates)
+        async updates => { await applyProjectUpdate(projectId, updates) }
       )
       await applyProjectUpdate(projectId, {
         outline: result.outline,
@@ -275,7 +206,13 @@ export const useGenerationStore = defineStore('generation', () => {
     try {
       currentStage.value = 'chapter-outline'
       progressMessage.value = 'Planning chapter outlines...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateChapterPlan(project)
+      const generated = await (pipeline ?? new StoryPipeline()).generateChapterPlan(
+        project,
+        appendStreamToken,
+        message => { progressMessage.value = message },
+        error => { addError('chapter-outline', error) },
+        async updates => { await applyProjectUpdate(projectId, updates) }
+      )
       await applyProjectUpdate(projectId, {
         chapters: generated,
         generationStage: 'writing',
@@ -648,7 +585,7 @@ export const useGenerationStore = defineStore('generation', () => {
         throw new Error('Failed to persist generated project')
       }
       if (!cancelled.value && getNextAction(updated).stage === 'done') {
-        completedStages.value = new Set(stageOrder)
+        completedStages.value = new Set(generationStageOrder)
         currentStage.value = 'done'
       }
       currentChapterIndex.value = null
@@ -744,90 +681,306 @@ export const useGenerationStore = defineStore('generation', () => {
     return providerStore.requireAgentModelRef(role)
   }
 
-  function getToolCall(toolCalls: ToolCall[], name: string) {
-    return toolCalls.find(toolCall => toolCall.name === name) ?? null
-  }
-
-  async function chatWithRelationshipTools(
-    messages: ChatMessage[],
-    modelRef: ProviderModelRef,
-    tools: ToolDefinition[],
-    options: {
-      project?: StoryProject | null
-      finalToolNames: string[]
-      maxTokens?: number
-      temperature?: number
-      maxRounds?: number
-    }
-  ) {
-    return chatWithRelationshipToolsInPlace([...messages], modelRef, tools, options)
-  }
-
-  async function chatWithRelationshipToolsInPlace(
-    currentMessages: ChatMessage[],
-    modelRef: ProviderModelRef,
-    tools: ToolDefinition[],
-    options: {
-      project?: StoryProject | null
-      finalToolNames: string[]
-      maxTokens?: number
-      temperature?: number
-      maxRounds?: number
-      finalToolResultContent?: (toolCall: ToolCall) => string
-    }
-  ) {
-    const allToolCalls: ToolCall[] = []
+  function getUsableAgentModelRef(role: AgentType, preferred?: ProviderModelRef | null): ProviderModelRef {
     const providerStore = useProviderStore()
-    const maxRounds = options.maxRounds ?? providerStore.toolWorkflowSettings.maxToolCallRounds
-    const finalToolNames = new Set(options.finalToolNames)
+    providerManager.setProviders(providerStore.providers)
+    const modelRef = providerStore.getAvailableModelRefForRole(role, preferred)
+    if (!modelRef) {
+      throw new Error(`No model available for ${role}. Please configure an active provider first.`)
+    }
+    return modelRef
+  }
 
-    let round = 0
-    while (true) {
-      if (round === maxRounds - 1) {
-        currentMessages.push({
-          role: 'user',
-          content: `You have reached the final tool round. Do not call lookup tools again. Call one of these final reporting tools now: ${options.finalToolNames.join(', ')}. If no issues are found, call the final reporting tool with {"issues": []}. Do not answer in text.`,
-        })
+  async function chatWithAssistant(
+    prompt: string,
+    modelOverride?: ProviderModelRef | null,
+    callbacks?: { onToken?: (token: string) => void; signal?: AbortSignal }
+  ): Promise<string> {
+    const modelRef = getUsableAgentModelRef('editingAI', modelOverride)
+
+    const messages: ChatMessage[] = [
+      { role: 'system', content: 'You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.' },
+      { role: 'user', content: prompt },
+    ]
+
+    try {
+      if (callbacks?.onToken) {
+        let streamed = ''
+        await providerManager.stream(
+          messages,
+          modelRef,
+          {
+            onToken: token => {
+              streamed += token
+              callbacks.onToken?.(token)
+            },
+            onComplete: text => {
+              streamed = text
+            },
+            onError: error => { throw error },
+          },
+          2048,
+          0.7,
+          callbacks.signal
+        )
+        return streamed
       }
 
-      const response = await providerManager.chatWithTools(
-        currentMessages,
+      const response = await providerManager.chat(
+        messages,
         modelRef,
-        tools,
-        options.maxTokens ?? 4096,
-        options.temperature ?? 0.2
+        2048,
+        0.7
       )
+      return response
+    } catch (error: any) {
+      throw new Error(`Assistant error: ${error?.message || 'Unknown error'}`)
+    }
+  }
 
-      allToolCalls.push(...response.tool_calls)
-      if (!response.tool_calls.length) {
-        currentMessages.push({
-          role: 'assistant',
-          content: response.content || null,
-          reasoning_content: response.reasoning_content ?? null,
-        })
-        currentMessages.push({
-          role: 'user',
-          content: `Your previous response was invalid because it did not call a required final tool. Do not answer in text. Call one of these tools now: ${options.finalToolNames.join(', ')}. If there are no issues or no results, call the tool with an empty result array.`,
-        })
-        round += 1
-        if (round >= maxRounds) {
-          const shouldContinue = await waitForToolContinuation({
-            workflow: options.finalToolNames.join(' / '),
-            rounds: maxRounds,
-            finalToolNames: options.finalToolNames,
-          })
+  async function editChapterWithTool(
+    prompt: string,
+    options: {
+      currentContent?: string
+      modelRef?: ProviderModelRef | null
+      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string; before?: string; after?: string }) => void
+      onTodoList?: (state: AgentTodoListState) => void
+      onToken?: (token: string) => void
+      onReasoningToken?: (token: string) => void
+      signal?: AbortSignal
+    } = {}
+  ): Promise<{ content: string; summary: string; toolName: string }> {
+    const modelRef = getUsableAgentModelRef('editingAI', options.modelRef)
+    const tools: ToolDefinition[] = [
+      getTodoListTool(),
+      {
+        name: 'insert_todolist_item',
+        description: 'Insert a new todo item into the current todo list without resubmitting the whole list. Use this when a complex edit discovers a new required step.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'A unique short id for the new todo item.' },
+            title: { type: 'string', description: 'The todo item title.' },
+            status: {
+              type: 'string',
+              enum: ['todo', 'in_progress', 'done', 'blocked'],
+              description: 'Initial status for this todo item. Defaults to todo.',
+            },
+            notes: { type: 'string', description: 'Optional note for this todo item.' },
+            afterId: { type: 'string', description: 'Optional existing todo id to insert this item after. If omitted or not found, the item is appended.' },
+          },
+          required: ['id', 'title'],
+        },
+      },
+      {
+        name: 'modify_todolist_item',
+        description: 'Modify one existing todo item without resubmitting the whole todo list. Use this to mark an item done, blocked, in progress, or to adjust its note.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'The id of the todo item to modify.' },
+            status: {
+              type: 'string',
+              enum: ['todo', 'in_progress', 'done', 'blocked'],
+              description: 'Optional next status for this todo item.',
+            },
+            title: { type: 'string', description: 'Optional replacement title.' },
+            notes: { type: 'string', description: 'Optional replacement note.' },
+          },
+          required: ['id'],
+        },
+      },
+      {
+        name: 'get_chapter_word_count',
+        description: 'Get the current chapter word/character count using the same counting logic as the editor. Use this before or after edits that target length.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: 'get_chapter_region',
+        description: 'Read a specific region from the current chapter by line number, paragraph index, or section index before preparing a localized edit.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['lines', 'paragraphs', 'sections'],
+              description: 'Region lookup mode.',
+            },
+            start: {
+              type: 'number',
+              description: 'One-based start index for lines/paragraphs/sections.',
+            },
+            end: {
+              type: 'number',
+              description: 'Optional one-based inclusive end index. Defaults to start.',
+            },
+          },
+          required: ['mode', 'start'],
+        },
+      },
+      {
+        name: 'replace_chapter_section',
+        description: 'Replace one exact passage in the current chapter while leaving the rest of the chapter unchanged.',
+        parameters: {
+          type: 'object',
+          properties: {
+            targetText: {
+              type: 'string',
+              description: 'The exact current passage to replace. It must appear verbatim in the current chapter content.',
+            },
+            revisedSectionContent: {
+              type: 'string',
+              description: 'The revised content for only that passage.',
+            },
+            summary: {
+              type: 'string',
+              description: 'A short summary of the localized change made.',
+            },
+          },
+          required: ['targetText', 'revisedSectionContent'],
+        },
+      },
+      {
+        name: 'replace_chapter_content',
+        description: 'Replace the current chapter content with a complete revised version when the requested edit affects broad structure or many passages.',
+        parameters: {
+          type: 'object',
+          properties: {
+            revisedContent: {
+              type: 'string',
+              description: 'The complete updated chapter content. This must include the full chapter, not a patch or excerpt.',
+            },
+            summary: {
+              type: 'string',
+              description: 'A short summary of the changes made.',
+            },
+          },
+          required: ['revisedContent'],
+        },
+      },
+    ]
 
-          if (!shouldContinue) {
-            throw new Error(`Assistant tool workflow stopped after ${maxRounds} rounds before calling ${options.finalToolNames.join(' or ')}.`)
-          }
+    const messages: ChatMessage[] = [
+      {
+        role: 'system',
+        content: [
+          'You are Vibe AI inside a chapter editor.',
+          'You must use a tool for every successful edit.',
+          'For multi-step edits, call update_todolist first and update it as you inspect, edit, and complete the request.',
+          'Use insert_todolist_item when you discover a new necessary step after the todo list already exists.',
+          'Use modify_todolist_item to update a single todo item when only one item changes.',
+          'Use get_chapter_word_count when the request mentions length, word count, expansion, trimming, or target size.',
+          'Prefer replace_chapter_section for localized changes to a paragraph, sentence, dialogue exchange, or short passage.',
+          'Use replace_chapter_content only when the request affects broad structure, many passages, or the whole chapter.',
+          'For replace_chapter_section, targetText must be copied exactly from the current chapter content.',
+          'If you are unsure about the exact targetText, call get_chapter_region first by line, paragraph, or section index.',
+          'If a section replacement fails because targetText does not match, use get_chapter_region to inspect the relevant area and retry with exact text.',
+          'Do not respond with plain prose when an edit is requested.',
+        ].join('\n'),
+      },
+      { role: 'user', content: prompt },
+    ]
 
-          round = 0
-        }
-        continue
+    try {
+      const currentContent = options.currentContent ?? ''
+      const hasCurrentContent = currentContent.trim().length > 0
+      const currentMessages = [...messages]
+      const toolContext: Record<string, any> = {
+        _onTodoListUpdated: options.onTodoList,
+      }
+      const maxRounds = 6
+      let pendingFinalResult: { content: string; summary: string; toolName: string } | null = null
+
+      const getOpenTodos = () => {
+        const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+        return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
       }
 
-      const finalToolCall = response.tool_calls.find(toolCall => finalToolNames.has(toolCall.name))
-      if (finalToolCall) {
+      const publishTodoList = async () => {
+        if (typeof options.onTodoList !== 'function') return
+        await options.onTodoList({
+          agent: 'Vibe AI',
+          updatedAt: new Date().toISOString(),
+          items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
+        })
+      }
+
+      if (!hasCurrentContent) {
+        currentMessages.push({
+          role: 'user',
+          content: [
+            'Important: the current chapter content is empty.',
+            'get_chapter_region will return an empty region with a warning.',
+            'replace_chapter_section can still create content when revisedSectionContent is provided; it will be treated as the full chapter content with a warning.',
+            'For a draft, continuation, rewrite, or any broad content change, prefer replace_chapter_content with the complete new chapter text.',
+          ].join('\n'),
+        })
+      }
+
+      for (let round = 0; round < maxRounds; round++) {
+        if (pendingFinalResult) {
+          const openTodos = getOpenTodos()
+          if (!openTodos.length) return pendingFinalResult
+
+          currentMessages.push({
+            role: 'user',
+            content: `The edit has been prepared, but the todolist is not complete. Call update_todolist now and mark every completed item as done before finishing. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
+          })
+        }
+
+        let streamedContent = ''
+        const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
+          providerManager.streamWithTools(
+            currentMessages,
+            modelRef,
+            tools,
+            {
+              onToken: token => {
+                streamedContent += token
+                options.onToken?.(token)
+              },
+              onReasoningToken: token => {
+                options.onReasoningToken?.(token)
+              },
+              onToolCall: toolCall => {
+                options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' })
+              },
+              onToolResult: () => {},
+              onComplete: result => {
+                resolve(result)
+              },
+              onError: error => {
+                reject(error)
+              },
+            },
+            8192,
+            0.5,
+            undefined,
+            options.signal
+          ).catch(reject)
+        })
+
+        if (streamedContent && response.content == null) {
+          response.content = streamedContent
+        }
+
+        if (!response.tool_calls.length) {
+          currentMessages.push({
+            role: 'assistant',
+            content: response.content || null,
+            reasoning_content: response.reasoning_content ?? null,
+          })
+          currentMessages.push({
+            role: 'user',
+            content: 'Use a tool to complete the edit. For small changes, inspect the needed region with get_chapter_region and then call replace_chapter_section.',
+          })
+          continue
+        }
+
         currentMessages.push({
           role: 'assistant',
           content: response.content || null,
@@ -841,133 +994,268 @@ export const useGenerationStore = defineStore('generation', () => {
             },
           })),
         })
+
         for (const toolCall of response.tool_calls) {
+          options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Running tool.' })
+
+          if (isTodoListTool(toolCall.name)) {
+            const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+            let detail = 'Todo list updated.'
+            try {
+              const parsed = JSON.parse(result.content)
+              if (parsed?.error) detail = parsed.error
+              else if (typeof parsed?.done === 'number' && typeof parsed?.total === 'number') detail = `${parsed.done}/${parsed.total} complete.`
+            } catch {
+              // keep fallback detail
+            }
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: result.content.includes('"ok":false') ? 'error' : 'success',
+              detail,
+            })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.content,
+            })
+            continue
+          }
+
+          if (toolCall.name === 'insert_todolist_item') {
+            const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+            const id = String(toolCall.arguments?.id ?? '').trim()
+            const title = String(toolCall.arguments?.title ?? '').trim()
+            const status = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status)
+              ? toolCall.arguments.status
+              : 'todo'
+            const notes = typeof toolCall.arguments?.notes === 'string'
+              ? toolCall.arguments.notes.trim() || undefined
+              : undefined
+            const afterId = String(toolCall.arguments?.afterId ?? '').trim()
+
+            let result: any
+            if (!id || !title) {
+              result = { ok: false, error: 'id and title are required.' }
+            } else if (items.some((item: any) => item.id === id)) {
+              result = { ok: false, error: `Todo item already exists: ${id}` }
+            } else if (items.length >= 12) {
+              result = { ok: false, error: 'Todo list cannot contain more than 12 items.' }
+            } else if (status === 'in_progress' && items.some((item: any) => item.status === 'in_progress')) {
+              result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
+            } else {
+              const newItem = { id, title, status, notes }
+              const insertIndex = afterId ? items.findIndex((item: any) => item.id === afterId) : -1
+              const nextItems = [...items]
+              if (insertIndex >= 0) nextItems.splice(insertIndex + 1, 0, newItem)
+              else nextItems.push(newItem)
+              toolContext._todoList = nextItems
+              await publishTodoList()
+              result = { ok: true, item: newItem, total: nextItems.length }
+            }
+
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: result.ok ? 'success' : 'error',
+              detail: result.ok ? `${result.item.id}: ${result.item.title}` : result.error,
+            })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result),
+            })
+            continue
+          }
+
+          if (toolCall.name === 'modify_todolist_item') {
+            const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+            const targetId = String(toolCall.arguments?.id ?? '').trim()
+            const index = items.findIndex((item: any) => item.id === targetId)
+            if (!targetId || index === -1) {
+              const result = { ok: false, error: targetId ? `Todo item not found: ${targetId}` : 'id is required.' }
+              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify(result),
+              })
+              continue
+            }
+
+            const nextStatus = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status)
+              ? toolCall.arguments.status
+              : items[index].status
+            if (nextStatus === 'in_progress' && items.some((item: any, itemIndex: number) => itemIndex !== index && item.status === 'in_progress')) {
+              const result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
+              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify(result),
+              })
+              continue
+            }
+
+            items[index] = {
+              ...items[index],
+              title: typeof toolCall.arguments?.title === 'string' && toolCall.arguments.title.trim()
+                ? toolCall.arguments.title.trim()
+                : items[index].title,
+              status: nextStatus,
+              notes: typeof toolCall.arguments?.notes === 'string'
+                ? toolCall.arguments.notes.trim() || undefined
+                : items[index].notes,
+            }
+            toolContext._todoList = items
+            await publishTodoList()
+            const result = { ok: true, item: items[index] }
+            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: `${targetId}: ${nextStatus}` })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result),
+            })
+            continue
+          }
+
+          if (toolCall.name === 'get_chapter_word_count') {
+            const countSource = pendingFinalResult?.content ?? currentContent
+            const result = {
+              ok: true,
+              words: countWords(countSource),
+              characters: countSource.length,
+              nonWhitespaceCharacters: countSource.replace(/\s/g, '').length,
+            }
+            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: `${result.words} words.` })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result),
+            })
+            continue
+          }
+
+          if (toolCall.name === 'get_chapter_region') {
+            const result = getChapterRegion(currentContent, toolCall.arguments)
+            const warning = 'warning' in result && typeof result.warning === 'string' ? result.warning : ''
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: result.ok ? (warning ? 'warning' : 'success') : 'error',
+              detail: result.ok && 'label' in result ? (warning || result.label) : result.error,
+            })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result),
+            })
+            if (result.ok && warning && !hasCurrentContent) {
+              currentMessages.push({
+                role: 'user',
+                content: 'The chapter is empty, so the region lookup returned an empty region as a warning. You can continue by calling replace_chapter_content, or use replace_chapter_section with revisedSectionContent to create the initial content.',
+              })
+            }
+            continue
+          }
+
+          if (toolCall.name === 'replace_chapter_section') {
+            const targetText = typeof toolCall.arguments?.targetText === 'string'
+              ? toolCall.arguments.targetText
+              : ''
+            const revisedSectionContent = typeof toolCall.arguments?.revisedSectionContent === 'string'
+              ? toolCall.arguments.revisedSectionContent
+              : ''
+
+            if (!hasCurrentContent && revisedSectionContent.trim()) {
+              options.onToolStatus?.({
+                name: toolCall.name,
+                status: 'warning',
+                detail: 'Chapter was empty; used the section replacement as the full chapter content.',
+                before: currentContent,
+                after: revisedSectionContent.trim(),
+              })
+              pendingFinalResult = {
+                content: revisedSectionContent.trim(),
+                summary: typeof toolCall.arguments?.summary === 'string'
+                  ? toolCall.arguments.summary.trim()
+                  : 'Created chapter content from a section replacement.',
+                toolName: 'replace_chapter_section',
+              }
+              if (!getOpenTodos().length) return pendingFinalResult
+              continue
+            }
+
+            if (!targetText || !revisedSectionContent || !currentContent.includes(targetText)) {
+              const result = {
+                ok: false,
+                error: 'The targetText did not match the current chapter exactly. Use get_chapter_region to inspect the relevant lines, paragraphs, or sections, then retry replace_chapter_section with exact targetText.',
+              }
+              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify(result),
+              })
+              continue
+            }
+
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: 'success',
+              detail: 'Matched and replaced one passage.',
+              before: targetText,
+              after: revisedSectionContent.trim(),
+            })
+            pendingFinalResult = {
+              content: currentContent.replace(targetText, revisedSectionContent.trim()),
+              summary: typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
+              toolName: 'replace_chapter_section',
+            }
+            if (!getOpenTodos().length) return pendingFinalResult
+            continue
+          }
+
+          if (toolCall.name === 'replace_chapter_content') {
+            const revisedContent = typeof toolCall.arguments?.revisedContent === 'string'
+              ? toolCall.arguments.revisedContent.trim()
+              : ''
+            if (!revisedContent) {
+              const result = { ok: false, error: 'revisedContent is required.' }
+              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: JSON.stringify(result),
+              })
+              continue
+            }
+
+            options.onToolStatus?.({
+              name: toolCall.name,
+              status: 'success',
+              detail: 'Prepared a complete chapter replacement.',
+              before: currentContent,
+              after: revisedContent,
+            })
+            pendingFinalResult = {
+              content: revisedContent,
+              summary: typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
+              toolName: 'replace_chapter_content',
+            }
+            if (!getOpenTodos().length) return pendingFinalResult
+            continue
+          }
+
           currentMessages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: options.finalToolResultContent?.(toolCall) ?? JSON.stringify({ ok: true, tool: toolCall.name }),
+            content: JSON.stringify({ ok: false, error: `Unsupported tool: ${toolCall.name}` }),
           })
         }
-        return { ...response, tool_calls: allToolCalls }
       }
 
-      currentMessages.push({
-        role: 'assistant',
-        content: response.content || null,
-        reasoning_content: response.reasoning_content ?? null,
-        tool_calls: response.tool_calls.map(toolCall => ({
-          id: toolCall.id,
-          type: 'function',
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
-      })
-
-      for (const toolCall of response.tool_calls) {
-        const relationshipResult = options.project
-          ? await handleRelationshipQueryTool(toolCall, options.project)
-          : null
-        currentMessages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: relationshipResult?.content ?? JSON.stringify({ error: `Unsupported tool: ${toolCall.name}` }),
-        })
-      }
-
-      round += 1
-      if (round >= maxRounds) {
-        const shouldContinue = await waitForToolContinuation({
-          workflow: options.finalToolNames.join(' / '),
-          rounds: maxRounds,
-          finalToolNames: options.finalToolNames,
-        })
-
-        if (!shouldContinue) {
-          throw new Error(`Assistant tool workflow stopped after ${maxRounds} rounds before calling ${options.finalToolNames.join(' or ')}.`)
-        }
-
-        round = 0
-        currentMessages.push({
-          role: 'user',
-          content: `Continue the tool workflow. Tool round counter has been reset. Prefer reporting with ${options.finalToolNames.join(' or ')} as soon as you have enough information; only use more lookup tools if necessary.`,
-        })
-      }
-    }
-  }
-
-  async function chatWithAssistant(prompt: string): Promise<string> {
-    const modelRef = getAgentModelRef('editingAI')
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: 'You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.' },
-      { role: 'user', content: prompt },
-    ]
-
-    try {
-      const response = await providerManager.chat(
-        messages,
-        modelRef,
-        2048,
-        0.7
-      )
-      return response
+      if (pendingFinalResult && !getOpenTodos().length) return pendingFinalResult
+      throw new Error('Vibe AI could not complete the tool edit after retrying.')
     } catch (error: any) {
-      throw new Error(`Assistant error: ${error?.message || 'Unknown error'}`)
-    }
-  }
-
-  async function editChapterWithTool(prompt: string): Promise<{ content: string; summary: string }> {
-    const modelRef = getAgentModelRef('editingAI')
-    const tools: ToolDefinition[] = [{
-      name: 'replace_chapter_content',
-      description: 'Replace the current chapter content with a complete revised version.',
-      parameters: {
-        type: 'object',
-        properties: {
-          revisedContent: {
-            type: 'string',
-            description: 'The complete updated chapter content. This must include the full chapter, not a patch or excerpt.',
-          },
-          summary: {
-            type: 'string',
-            description: 'A short summary of the changes made.',
-          },
-        },
-        required: ['revisedContent'],
-      },
-    }]
-
-    const messages: ChatMessage[] = [
-      {
-        role: 'system',
-        content: [
-          'You are Vibe AI inside a chapter editor.',
-          'You must use the replace_chapter_content tool for every successful edit.',
-          'Return the full updated chapter content in revisedContent.',
-          'Do not respond with plain prose when an edit is requested.',
-        ].join('\n'),
-      },
-      { role: 'user', content: prompt },
-    ]
-
-    try {
-      const response = await providerManager.chatWithTools(messages, modelRef, tools, 8192, 0.5)
-      const toolCall = getToolCall(response.tool_calls, 'replace_chapter_content')
-      const revisedContent = typeof toolCall?.arguments?.revisedContent === 'string'
-        ? toolCall.arguments.revisedContent.trim()
-        : ''
-
-      if (!revisedContent) {
-        throw new Error('Vibe AI did not call replace_chapter_content with revised content.')
-      }
-
-      return {
-        content: revisedContent,
-        summary: typeof toolCall?.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
-      }
-    } catch (error: any) {
+      options.onToolStatus?.({ name: 'replace_chapter_content', status: 'error', detail: error?.message || 'Unknown error' })
       throw new Error(`Tool edit error: ${error?.message || 'Unknown error'}`)
     }
   }
@@ -977,66 +1265,11 @@ export const useGenerationStore = defineStore('generation', () => {
     const project = projectId ? validateProject(projectId) : null
     const tools: ToolDefinition[] = [
       ...getRelationshipQueryTools(),
-      {
-        name: 'report_chapter_issues',
-        description: 'Report concrete issues found in the chapter after checking it against plan, characters, relationships, continuity, and factual logic.',
-        parameters: {
-          type: 'object',
-          properties: {
-            issues: {
-              type: 'array',
-              description: 'Concrete issues found in the current chapter. Return an empty array if no issues are found.',
-              items: {
-                type: 'object',
-                properties: {
-                  severity: {
-                    type: 'string',
-                    enum: ['low', 'medium', 'high'],
-                    description: 'How serious the issue is.',
-                  },
-                  category: {
-                    type: 'string',
-                    enum: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'],
-                    description: 'The issue category.',
-                  },
-                  title: {
-                    type: 'string',
-                    description: 'A short issue title.',
-                  },
-                  excerpt: {
-                    type: 'string',
-                    description: 'The shortest exact excerpt from the chapter that demonstrates the issue. Leave empty only if no exact excerpt exists.',
-                  },
-                  explanation: {
-                    type: 'string',
-                    description: 'Why this is inconsistent, implausible, or unsupported.',
-                  },
-                  suggestedFix: {
-                    type: 'string',
-                    description: 'A concrete fix instruction that Vibe AI can apply.',
-                  },
-                },
-                required: ['severity', 'category', 'title', 'explanation', 'suggestedFix'],
-              },
-            },
-          },
-          required: ['issues'],
-        },
-      },
+      getChapterIssueReportTool(),
     ]
 
     const messages: ChatMessage[] = [
-      {
-        role: 'system',
-        content: [
-          'You are Editing AI. Audit the current chapter against the supplied chapter plan, characters, relationship state, and story context.',
-          'The prompt intentionally includes only compact character and relationship context.',
-          'Use get_character_profile and relationship query tools for specific facts before reporting relationship or character consistency issues.',
-          'Focus on concrete contradictions, unsupported facts, chronology errors, relationship inconsistencies, missing plan beats, logic problems, and factual implausibility inside the story world.',
-          'Use report_chapter_issues. Do not return free-form prose.',
-          'Do not invent problems. If the chapter is coherent, report an empty issues array.',
-        ].join('\n'),
-      },
+      { role: 'system', content: getEditingAuditSystemPrompt() },
       { role: 'user', content: prompt },
     ]
 
@@ -1046,103 +1279,16 @@ export const useGenerationStore = defineStore('generation', () => {
         finalToolNames: ['report_chapter_issues'],
         maxTokens: 4096,
         temperature: 0.2,
+        maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        requestContinuation: waitForToolContinuation,
       })
       const toolCall = getToolCall(response.tool_calls, 'report_chapter_issues')
       const rawIssues = Array.isArray(toolCall?.arguments?.issues) ? toolCall.arguments.issues : []
 
-      return rawIssues.map((issue, index) => ({
-        id: `issue-${Date.now()}-${index}`,
-        severity: issue?.severity === 'high' || issue?.severity === 'medium' || issue?.severity === 'low' ? issue.severity : 'medium',
-        category: ['chapter_plan', 'character', 'relationship', 'continuity', 'factual', 'logic', 'style'].includes(issue?.category) ? issue.category : 'logic',
-        title: String(issue?.title ?? `Issue ${index + 1}`).trim(),
-        excerpt: String(issue?.excerpt ?? '').trim(),
-        explanation: String(issue?.explanation ?? '').trim(),
-        suggestedFix: String(issue?.suggestedFix ?? '').trim(),
-      })).filter(issue => issue.title && issue.explanation && issue.suggestedFix)
+      return mapEditingAuditIssues(rawIssues)
     } catch (error: any) {
       throw new Error(`Tool audit error: ${error?.message || 'Unknown error'}`)
     }
-  }
-
-  function getProofreadingTools(): ToolDefinition[] {
-    return [
-      ...getRelationshipQueryTools(),
-      {
-        name: 'report_proofreading_issues',
-        description: 'Report concrete grammar, typo, style, and consistency issues found in the chapter.',
-        parameters: {
-          type: 'object',
-          properties: {
-            issues: {
-              type: 'array',
-              description: 'List of specific issues found. Return an empty array if no issues are found.',
-              items: {
-                type: 'object',
-                properties: {
-                  severity: {
-                    type: 'string',
-                    enum: ['low', 'medium', 'high'],
-                    description: 'How serious the issue is.',
-                  },
-                  category: {
-                    type: 'string',
-                    enum: ['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'],
-                    description: 'The issue category.',
-                  },
-                  title: {
-                    type: 'string',
-                    description: 'A short issue title.',
-                  },
-                  excerpt: {
-                    type: 'string',
-                    description: 'The exact excerpt from the text that contains the issue.',
-                  },
-                  explanation: {
-                    type: 'string',
-                    description: 'Why this is an issue.',
-                  },
-                  suggestedFix: {
-                    type: 'string',
-                    description: 'Specific instruction on how to fix this issue.',
-                  },
-                },
-                required: ['severity', 'category', 'title', 'excerpt', 'explanation', 'suggestedFix'],
-              },
-            },
-          },
-          required: ['issues'],
-        },
-      },
-    ]
-  }
-
-  function getProofreadingSystemPrompt() {
-    return [
-      'You are a Proofreading Expert. Your job is to audit a chapter for grammar, typos, consistency, pacing, and logical flow errors through tools.',
-      'You are not a rewriting agent. Do not return corrected prose, markdown reports, JSON text, bullet lists, or explanations in assistant text.',
-      'Your final response for each submitted segment must be a tool call to report_proofreading_issues.',
-      'Focus on:',
-      '- Grammatical errors, typos, and punctuation issues.',
-      '- Consistency in character names, descriptions, and behaviors.',
-      '- Timeline and logical consistency within the chapter.',
-      '- Narrative pacing and prose style.',
-      'The prompt intentionally includes only compact character and relationship context.',
-      'Use get_character_profile and relationship query tools for specific facts before reporting character or relationship consistency issues.',
-      'Use report_proofreading_issues to report concrete findings. Assistant text is invalid.',
-      'Do not invent problems. If the current segment is sound, call report_proofreading_issues with {"issues": []}.',
-    ].join('\n')
-  }
-
-  function mapProofreadingIssues(rawIssues: any[]): ChapterAuditIssue[] {
-    return rawIssues.map((issue, index) => ({
-      id: `issue-${Date.now()}-${index}`,
-      severity: issue?.severity === 'high' || issue?.severity === 'medium' || issue?.severity === 'low' ? issue.severity : 'medium',
-      category: (['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'].includes(issue?.category) ? issue.category : 'grammar') as any,
-      title: String(issue?.title ?? `Issue ${index + 1}`).trim(),
-      excerpt: String(issue?.excerpt ?? '').trim(),
-      explanation: String(issue?.explanation ?? '').trim(),
-      suggestedFix: String(issue?.suggestedFix ?? '').trim(),
-    })).filter(issue => issue.title && issue.explanation && issue.suggestedFix)
   }
 
   async function proofreadChapterWithTool(prompt: string, projectId?: string): Promise<ChapterAuditIssue[]> {
@@ -1161,6 +1307,8 @@ export const useGenerationStore = defineStore('generation', () => {
         finalToolNames: ['report_proofreading_issues'],
         maxTokens: 4096,
         temperature: 0.2,
+        maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        requestContinuation: waitForToolContinuation,
       })
       const toolCall = getToolCall(response.tool_calls, 'report_proofreading_issues')
       const rawIssues = Array.isArray(toolCall?.arguments?.issues) ? toolCall.arguments.issues : []
@@ -1221,6 +1369,7 @@ export const useGenerationStore = defineStore('generation', () => {
     content: string,
     projectId?: string,
     options?: {
+      modelRef?: ProviderModelRef | null
       onSegmentStart?: (payload: {
         segmentIndex: number
         segmentTotal: number
@@ -1236,7 +1385,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const segments = buildProofreadingSegments(content)
     const issues: ChapterAuditIssue[] = []
     const prefix = contextPrompt.trimEnd()
-    const modelRef = getAgentModelRef('proofreader')
+    const modelRef = getUsableAgentModelRef('proofreader', options?.modelRef)
     const project = projectId ? validateProject(projectId) : null
     const tools = getProofreadingTools()
     const messages: ChatMessage[] = [
@@ -1273,6 +1422,8 @@ export const useGenerationStore = defineStore('generation', () => {
         finalToolNames: ['report_proofreading_issues'],
         maxTokens: 4096,
         temperature: 0.2,
+        maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        requestContinuation: waitForToolContinuation,
         finalToolResultContent: toolCall => JSON.stringify({
           ok: true,
           segment: `${segment.index + 1}/${segment.total}`,

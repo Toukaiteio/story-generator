@@ -261,7 +261,7 @@ export async function exportToEpub(project: StoryProject): Promise<Uint8Array> {
   const chapterFiles: string[] = []
   for (let i = 0; i < project.chapters.length; i++) {
     const chapter = project.chapters[i]
-    const content = chapter.polishedContent || chapter.content
+    const content = chapter.content
     if (!content) continue
 
     const filename = `chapter-${i + 1}.xhtml`

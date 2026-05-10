@@ -2,6 +2,8 @@
 import { ref, watch, nextTick, computed } from 'vue'
 import { useGenerationStore } from '@/stores/generation'
 import { ChevronUp, ChevronDown, Loader2 } from 'lucide-vue-next'
+import TodoListStatus from '@/components/ui/TodoListStatus.vue'
+import { agentTodoListState } from '@/services/agent/todolist'
 
 const genStore = useGenerationStore()
 const scrollContainer = ref<HTMLDivElement | null>(null)
@@ -66,8 +68,17 @@ function toggleCollapsed() {
       </div>
 
       <!-- Content -->
-      <div v-if="!collapsed && genStore.streamContent" class="border-t border-surface-4">
+      <div v-if="!collapsed && (agentTodoListState.items.length || genStore.streamContent)" class="border-t border-surface-4">
+        <div v-if="agentTodoListState.items.length" class="border-b border-surface-4 p-2">
+          <TodoListStatus
+            :items="agentTodoListState.items"
+            :agent="agentTodoListState.agent"
+            title="Agent Todo"
+            compact
+          />
+        </div>
         <div
+          v-if="genStore.streamContent"
           ref="scrollContainer"
           class="max-h-[150px] overflow-y-auto px-3 py-2 text-xs text-text-secondary whitespace-pre-wrap leading-relaxed"
         >

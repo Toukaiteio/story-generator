@@ -1,13 +1,15 @@
 import type { ChatMessage, ProviderConfig } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
-import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, FunctionCallingCallbacks, StreamWithToolsCallbacks } from './types'
+import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, FunctionCallingCallbacks, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall, ToolResult } from './tools'
 import { OpenAIAdapter } from './openai'
+import { OpenAIResponsesAdapter } from './openaiResponses'
 import { AnthropicAdapter } from './anthropic'
 import { GoogleAdapter } from './google'
 
 const adapters: Record<string, ProviderAdapter> = {
   openai: new OpenAIAdapter(),
+  'openai-responses': new OpenAIResponsesAdapter(),
   anthropic: new AnthropicAdapter(),
   google: new GoogleAdapter(),
 }
@@ -26,14 +28,23 @@ export class ProviderManager {
     return adapter
   }
 
-  private getProviderForModel(modelRef: ProviderModelRef): { provider: ProviderConfig; adapter: ProviderAdapter } | null {
+  private resolveModelConfig(provider: ProviderConfig, modelRef: ProviderModelRef) {
+    return provider.models.find(model =>
+      model.id === modelRef.modelId ||
+      model.id === `${modelRef.providerId}/${modelRef.modelId}` ||
+      (modelRef.modelId.includes('/') && model.id === modelRef.modelId.split('/').pop()) ||
+      model.id.split('/').pop() === modelRef.modelId
+    ) ?? null
+  }
+
+  private getProviderForModel(modelRef: ProviderModelRef): { provider: ProviderConfig; adapter: ProviderAdapter; model: ProviderConfig['models'][number] } | null {
     const provider = this.providers.find(item => item.id === modelRef.providerId && item.isActive)
     if (!provider) return null
 
-    const hasModel = provider.models.some(model => model.id === modelRef.modelId)
-    if (!hasModel) return null
+    const model = this.resolveModelConfig(provider, modelRef)
+    if (!model) return null
 
-    return { provider, adapter: this.getAdapter(provider.type) }
+    return { provider, adapter: this.getAdapter(provider.type), model }
   }
 
   getProviderConfigForModel(modelRef: ProviderModelRef): ProviderConfig | null {
@@ -43,9 +54,7 @@ export class ProviderManager {
   getModelConfigForRef(modelRef: ProviderModelRef): { provider: ProviderConfig; model: ProviderConfig['models'][number] } | null {
     const match = this.getProviderForModel(modelRef)
     if (!match) return null
-    const model = match.provider.models.find(item => item.id === modelRef.modelId) ?? null
-    if (!model) return null
-    return { provider: match.provider, model }
+    return { provider: match.provider, model: match.model }
   }
 
   async chat(messages: ChatMessage[], model: ProviderModelRef, maxTokens = 4096, temperature = 0.7): Promise<string> {
@@ -53,7 +62,7 @@ export class ProviderManager {
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
     const options: ChatOptions = {
-      model: model.modelId,
+      model: match.model.id,
       maxTokens,
       temperature,
       apiKey: match.provider.apiKey ?? '',
@@ -75,12 +84,12 @@ export class ProviderManager {
     throw lastError || new Error('Chat failed after retries')
   }
 
-  async chatWithTools(messages: ChatMessage[], model: ProviderModelRef, tools: ToolDefinition[], maxTokens = 4096, temperature = 0.7): Promise<FunctionCallingResponse> {
+  async chatWithTools(messages: ChatMessage[], model: ProviderModelRef, tools: ToolDefinition[], maxTokens = 4096, temperature = 0.7, toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
     const match = this.getProviderForModel(model)
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
     const options: ChatOptions = {
-      model: model.modelId,
+      model: match.model.id,
       maxTokens,
       temperature,
       apiKey: match.provider.apiKey ?? '',
@@ -90,7 +99,7 @@ export class ProviderManager {
     let lastError: Error | null = null
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        return await match.adapter.chatWithTools(messages, options, tools)
+        return await match.adapter.chatWithTools(messages, options, tools, toolOptions)
       } catch (e: any) {
         lastError = e
         if (attempt < this.maxRetries - 1) {
@@ -107,17 +116,19 @@ export class ProviderManager {
     model: ProviderModelRef,
     callbacks: StreamCallbacks,
     maxTokens = 4096,
-    temperature = 0.7
+    temperature = 0.7,
+    signal?: AbortSignal
   ): Promise<void> {
     const match = this.getProviderForModel(model)
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
     const options: ChatOptions = {
-      model: model.modelId,
+      model: match.model.id,
       maxTokens,
       temperature,
       apiKey: match.provider.apiKey ?? '',
       baseUrl: match.provider.baseUrl,
+      signal,
     }
 
     let lastError: Error | null = null
@@ -126,6 +137,7 @@ export class ProviderManager {
         await match.adapter.stream(messages, options, callbacks)
         return
       } catch (e: any) {
+        if (signal?.aborted || e?.name === 'AbortError') throw e
         lastError = e
         if (attempt < this.maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
@@ -142,25 +154,29 @@ export class ProviderManager {
     tools: ToolDefinition[],
     callbacks: StreamWithToolsCallbacks,
     maxTokens = 4096,
-    temperature = 0.7
+    temperature = 0.7,
+    toolOptions?: ToolCallOptions,
+    signal?: AbortSignal
   ): Promise<void> {
     const match = this.getProviderForModel(model)
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
     const options: ChatOptions = {
-      model: model.modelId,
+      model: match.model.id,
       maxTokens,
       temperature,
       apiKey: match.provider.apiKey ?? '',
       baseUrl: match.provider.baseUrl,
+      signal,
     }
 
     let lastError: Error | null = null
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        await match.adapter.streamWithTools(messages, options, tools, callbacks)
+        await match.adapter.streamWithTools(messages, options, tools, callbacks, toolOptions)
         return
       } catch (e: any) {
+        if (signal?.aborted || e?.name === 'AbortError') throw e
         lastError = e
         if (attempt < this.maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))

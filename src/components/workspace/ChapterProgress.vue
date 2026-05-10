@@ -21,14 +21,14 @@ const chapters = computed<ChapterStatus[]>(() => {
   const p = project.value
   if (!p) return []
 
-  return p.chapters.map(ch => {
+  return [...p.chapters].sort((a, b) => a.index - b.index).map(ch => {
     let status: ChapterStatus['status'] = 'empty'
-    if (ch.polishedContent) status = 'polished'
-    else if (['proofread', 'polishing', 'polished'].includes(ch.status)) status = 'proofread'
+    if (ch.status === 'polished') status = 'polished'
+    else if (['proofread', 'polishing'].includes(ch.status)) status = 'proofread'
     else if (ch.content) status = 'draft'
     else if (ch.outline.objective || ch.outline.endingHook) status = 'outline'
 
-    const content = ch.polishedContent || ch.content
+    const content = ch.content
     const tokenCount = estimateTokens(content)
 
     return {
@@ -75,8 +75,8 @@ function statusColor(status: ChapterStatus['status']) {
 <template>
   <div v-if="project && chapters.length" class="space-y-3">
     <div class="flex items-center justify-between">
-      <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">Chapter Progress</h3>
-      <span class="text-2xs text-text-muted">{{ completionRate }}% complete</span>
+      <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{{ ui.text('Chapter Progress') }}</h3>
+      <span class="text-2xs text-text-muted">{{ completionRate }}% {{ ui.text('complete') }}</span>
     </div>
 
     <div class="space-y-1">
@@ -92,10 +92,10 @@ function statusColor(status: ChapterStatus['status']) {
           :class="statusColor(chapter.status)"
         />
         <span class="text-xs text-text-primary truncate flex-1">
-          Ch{{ chapter.index + 1 }}: {{ chapter.title }}
+          {{ ui.text('Ch') }}{{ chapter.index + 1 }}: {{ chapter.title }}
         </span>
         <span v-if="chapter.tokenCount" class="text-2xs text-text-muted">
-          {{ chapter.tokenCount }} tok
+          {{ chapter.tokenCount }} {{ ui.text('tok') }}
         </span>
       </button>
     </div>

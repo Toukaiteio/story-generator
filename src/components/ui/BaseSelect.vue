@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ChevronDown, Check } from 'lucide-vue-next'
+import { translatePhrase } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -22,8 +23,17 @@ const containerRef = ref<HTMLDivElement>()
 
 const selectedLabel = computed(() => {
   const opt = props.options.find(o => o.value === props.modelValue)
-  return opt?.label ?? ''
+  return opt?.label ? translatePhrase(opt.label) : ''
 })
+
+const translatedLabel = computed(() => props.label ? translatePhrase(props.label) : '')
+const translatedPlaceholder = computed(() => translatePhrase(props.placeholder))
+const translatedOptions = computed(() =>
+  props.options.map(option => ({
+    ...option,
+    label: translatePhrase(option.label),
+  }))
+)
 
 function select(value: string) {
   emit('update:modelValue', value)
@@ -42,7 +52,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
 
 <template>
   <div class="flex flex-col gap-1.5" ref="containerRef">
-    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ label }}</label>
+    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ translatedLabel }}</label>
     <div class="relative">
       <button
         type="button"
@@ -56,7 +66,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
         :disabled="disabled"
       >
         <span :class="selectedLabel ? 'text-text-primary' : 'text-text-muted'">
-          {{ selectedLabel || placeholder }}
+          {{ selectedLabel || translatedPlaceholder }}
         </span>
         <ChevronDown :size="14" :class="['text-text-muted transition-transform duration-100', open ? 'rotate-180' : '']" />
       </button>
@@ -67,7 +77,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
           class="absolute z-50 w-full mt-1 py-1 rounded-md border border-surface-4 bg-surface-2 shadow-lg max-h-60 overflow-y-auto"
         >
           <button
-            v-for="opt in options"
+            v-for="opt in translatedOptions"
             :key="opt.value"
             type="button"
             :class="[

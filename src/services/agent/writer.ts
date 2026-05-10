@@ -142,6 +142,7 @@ Use the write_chapter tool to write the chapter in multiple sections.
 Each tool call should provide the next section of prose, typically 300-600 words.
 Set isComplete to true only on the final section once the full chapter is done.
 Do not include meta-commentary or notes.
+Never output chapter prose in assistant text. Put prose only in write_chapter.content.
 Never include the chapter title or chapter number in the generated prose; the application renders those separately.
 Write prose only.`
   }
@@ -171,7 +172,7 @@ ${knowledgeContext ? `\nReference Material:\n${knowledgeContext}` : ''}
 
 Write the chapter in multiple tool-call sections in ${language || 'English'}. Aim for a total of 2000-3000 words across all sections. Each section should stay focused and substantial, but do not try to fit the whole chapter into one tool call. Include natural dialogue, vivid descriptions, and advance the plot according to the outline.
 
-Use the write_chapter tool to provide prose content only. Unless the Writing Style Guide explicitly requires title or section structures, the content field must not start with the chapter title, "Chapter ${displayChapterNumber}", a Chinese chapter-number heading, or any section heading.`
+Use the write_chapter tool to provide prose content only. Do not output chapter prose outside tool arguments. Unless the Writing Style Guide explicitly requires title or section structures, the content field must not start with the chapter title, "Chapter ${displayChapterNumber}", a Chinese chapter-number heading, or any section heading.`
   }
 
   parseResponse(response: string): any {
@@ -212,6 +213,6 @@ ${this.buildPrompt(context)}
 Previous chapter draft:
 ${previousResponse}
 
-Use the write_chapter tool to continue or rewrite the chapter in sections. Preserve the plot, style, and character intent, but make the chapter substantially more complete and coherent. Set isComplete to true only when the full chapter is finished.`
+Use the write_chapter tool to continue or rewrite the chapter in sections. Preserve the plot, style, and character intent, but make the chapter substantially more complete and coherent. Set isComplete to true only when the full chapter is finished. Do not output prose outside write_chapter.content.`
   }
 }

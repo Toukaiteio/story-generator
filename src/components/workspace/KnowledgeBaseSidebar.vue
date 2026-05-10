@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { BookOpen, Link, Unlink, ExternalLink } from 'lucide-vue-next'
@@ -10,6 +11,7 @@ import { BookOpen, Link, Unlink, ExternalLink } from 'lucide-vue-next'
 const projectStore = useProjectStore()
 const knowledgeStore = useKnowledgeStore()
 const toast = useToast()
+const tr = translatePhrase
 
 const project = computed(() => projectStore.activeProject)
 
@@ -63,10 +65,10 @@ async function saveKnowledgeBases() {
     <div class="px-3 py-3 border-b border-surface-4 shrink-0">
       <div class="flex items-center gap-2">
         <BookOpen :size="14" class="text-accent" />
-        <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">Knowledge Bases</h3>
+        <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">{{ tr('Knowledge Bases') }}</h3>
       </div>
       <p class="text-2xs text-text-muted mt-1">
-        {{ selectedKnowledgeBases.length }} linked
+        {{ selectedKnowledgeBases.length }} {{ tr('linked') }}
       </p>
     </div>
 
@@ -108,7 +110,7 @@ async function saveKnowledgeBases() {
               {{ base.description }}
             </div>
             <div class="flex items-center gap-1.5 mt-1">
-              <BaseTag size="sm">{{ base.documents }} docs</BaseTag>
+              <BaseTag size="sm">{{ base.documents }} {{ tr('docs') }}</BaseTag>
             </div>
           </div>
         </button>
@@ -116,9 +118,9 @@ async function saveKnowledgeBases() {
 
       <div v-else class="px-3 py-6 text-center">
         <BookOpen :size="24" class="text-text-muted mx-auto mb-2" />
-        <p class="text-xs text-text-muted">No knowledge bases</p>
+        <p class="text-xs text-text-muted">{{ tr('No knowledge bases') }}</p>
         <p class="text-2xs text-text-muted mt-1">
-          Create one in Knowledge Base page
+          {{ tr('Create one in Knowledge Base page') }}
         </p>
       </div>
     </div>

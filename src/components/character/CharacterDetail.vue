@@ -150,7 +150,7 @@ async function deleteCharacter() {
                 <BaseTag :variant="roleVariant" size="sm" class="uppercase tracking-wider font-semibold text-[10px] px-2">{{ form.role }}</BaseTag>
               </div>
               <p class="text-sm text-text-secondary max-w-2xl leading-relaxed">
-                Define the character's core identity, physical traits, emotional drivers, and interpersonal relationships.
+                {{ ui.text("Define the character's core identity, physical traits, emotional drivers, and interpersonal relationships.") }}
               </p>
             </div>
 
@@ -161,7 +161,7 @@ async function deleteCharacter() {
                 class="px-2.5 py-1 rounded-md bg-surface-2 border border-surface-3 text-xs text-text-secondary flex items-center gap-1.5"
               >
                 <CalendarDays :size="12" class="text-text-muted" />
-                <span class="text-text-muted">{{ item.label }}:</span>
+                <span class="text-text-muted">{{ ui.text(item.label) }}:</span>
                 <span class="text-text-primary font-medium">{{ item.value }}</span>
               </div>
             </div>
@@ -171,11 +171,11 @@ async function deleteCharacter() {
         <div class="flex items-center gap-3 shrink-0">
           <BaseButton variant="secondary" size="md" @click="requestDelete" class="!text-danger hover:!bg-danger-subtle hover:!border-danger/30">
             <Trash2 :size="16" />
-            <span>Delete</span>
+            <span>{{ ui.text('Delete') }}</span>
           </BaseButton>
           <BaseButton variant="primary" size="md" @click="save">
             <Save :size="16" />
-            <span>Save Changes</span>
+            <span>{{ ui.text('Save Changes') }}</span>
           </BaseButton>
         </div>
       </div>
@@ -188,8 +188,8 @@ async function deleteCharacter() {
                 <Fingerprint :size="18" class="text-accent" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">Core Identity</h3>
-                <p class="text-xs text-text-secondary">Name, role, and personality traits.</p>
+                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Core Identity') }}</h3>
+                <p class="text-xs text-text-secondary">{{ ui.text('Name, role, and personality traits.') }}</p>
               </div>
             </div>
 
@@ -215,8 +215,8 @@ async function deleteCharacter() {
                 <Heart :size="18" class="text-success" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">Physical & Past</h3>
-                <p class="text-xs text-text-secondary">Concrete details for consistent generation.</p>
+                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Physical & Past') }}</h3>
+                <p class="text-xs text-text-secondary">{{ ui.text('Concrete details for consistent generation.') }}</p>
               </div>
             </div>
 
@@ -232,8 +232,8 @@ async function deleteCharacter() {
                 <Target :size="18" class="text-warning" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">Motivation & Conflict</h3>
-                <p class="text-xs text-text-secondary">What drives them and what stands in their way.</p>
+                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Motivation & Conflict') }}</h3>
+                <p class="text-xs text-text-secondary">{{ ui.text('What drives them and what stands in their way.') }}</p>
               </div>
             </div>
 
@@ -259,8 +259,8 @@ async function deleteCharacter() {
                 <ArrowLeftRight :size="18" class="text-accent" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">Relationships</h3>
-                <p class="text-xs text-text-secondary">Connections to others.</p>
+                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Relationships') }}</h3>
+                <p class="text-xs text-text-secondary">{{ ui.text('Connections to others.') }}</p>
               </div>
             </div>
 
@@ -281,8 +281,8 @@ async function deleteCharacter() {
               <div class="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center mb-3">
                 <ArrowLeftRight :size="20" class="text-text-muted" />
               </div>
-              <p class="text-sm font-medium text-text-primary">No relationships yet</p>
-              <p class="text-xs text-text-secondary mt-1">Interactions will appear here as the story evolves.</p>
+              <p class="text-sm font-medium text-text-primary">{{ ui.text('No relationships yet') }}</p>
+              <p class="text-xs text-text-secondary mt-1">{{ ui.text('Interactions will appear here as the story evolves.') }}</p>
             </div>
           </BaseCard>
 
@@ -292,18 +292,18 @@ async function deleteCharacter() {
                 <Trash2 :size="18" class="text-danger" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">Danger Zone</h3>
-                <p class="text-xs text-danger/80">Irreversible actions.</p>
+                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Danger Zone') }}</h3>
+                <p class="text-xs text-danger/80">{{ ui.text('Irreversible actions.') }}</p>
               </div>
             </div>
 
             <p class="text-sm text-text-secondary leading-relaxed mb-5">
-              Permanently delete this character from the project. All related references in other characters will be cleaned up.
+              {{ ui.text('Permanently delete this character from the project. All related references in other characters will be cleaned up.') }}
             </p>
             
             <BaseButton variant="danger" class="w-full justify-center" @click="requestDelete">
               <Trash2 :size="16" />
-              <span>Delete Character</span>
+              <span>{{ ui.text('Delete Character') }}</span>
             </BaseButton>
           </BaseCard>
         </div>
@@ -312,10 +312,10 @@ async function deleteCharacter() {
 
     <ConfirmDialog
       v-model="showDeleteConfirm"
-      title="Delete Character"
-      message="This will remove the character from the project and clean up any relationships that point to it. This action cannot be undone."
-      confirm-text="Delete"
-      cancel-text="Cancel"
+      :title="ui.text('Delete Character')"
+      :message="ui.text('This will remove the character from the project and clean up any relationships that point to it. This action cannot be undone.')"
+      :confirm-text="ui.text('Delete')"
+      :cancel-text="ui.text('Cancel')"
       variant="danger"
       @confirm="deleteCharacter"
     />

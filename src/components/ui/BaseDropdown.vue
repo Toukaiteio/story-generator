@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { translatePhrase } from '@/i18n'
 
 export interface DropdownItem {
   label?: string
@@ -76,7 +77,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
               @click="handleItemClick(item)"
             >
               <component :is="item.icon" v-if="item.icon" :size="14" class="shrink-0" />
-              <span>{{ item.label }}</span>
+              <span>{{ item.label ? translatePhrase(item.label) : '' }}</span>
             </button>
           </template>
         </div>

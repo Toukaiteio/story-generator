@@ -34,5 +34,6 @@ export default {
     providers: 'AI Providers',
     writingStyles: 'Writing Styles',
     settings: 'Settings',
-  }
+  },
+  phrases: {},
 }

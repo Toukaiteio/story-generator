@@ -7,6 +7,7 @@ import { useWritingStyleStore } from '@/stores/writingStyle'
 import { providerManager } from '@/services/provider'
 import { getAgent } from '@/services/agent'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -18,6 +19,7 @@ const projectStore = useProjectStore()
 const providerStore = useProviderStore()
 const writingStyleStore = useWritingStyleStore()
 const toast = useToast()
+const tr = translatePhrase
 
 const project = computed(() => projectStore.activeProject)
 const isOptimizing = ref(false)
@@ -280,19 +282,19 @@ async function optimizeWithDetailer() {
     <div class="px-6 py-6">
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h2 class="text-base font-semibold text-text-primary">Story Configuration</h2>
+          <h2 class="text-base font-semibold text-text-primary">{{ tr('Story Configuration') }}</h2>
           <p class="text-xs text-text-secondary mt-1">
-            Edit your configuration directly, then use Detailer to refine it for generation.
+            {{ tr('Edit your configuration directly, then use Detailer to refine it for generation.') }}
           </p>
         </div>
         <div class="flex items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="isOptimizing" @click="optimizeWithDetailer">
             <Wand2 :size="14" />
-            <span>Detailer</span>
+            <span>{{ tr('Detailer') }}</span>
           </BaseButton>
           <BaseButton variant="primary" size="sm" @click="save">
             <Save :size="14" />
-            <span>Save</span>
+            <span>{{ tr('Save') }}</span>
           </BaseButton>
         </div>
       </div>
@@ -354,7 +356,7 @@ async function optimizeWithDetailer() {
         </div>
 
         <div v-if="requiredElementsPreview.length" class="mt-2">
-          <p class="text-xs font-medium text-text-secondary mb-2">Required Elements Preview</p>
+          <p class="text-xs font-medium text-text-secondary mb-2">{{ tr('Required Elements Preview') }}</p>
           <div class="flex flex-wrap gap-1.5">
             <BaseTag v-for="el in requiredElementsPreview" :key="el" variant="success">
               {{ el }}
@@ -363,7 +365,7 @@ async function optimizeWithDetailer() {
         </div>
 
         <div v-if="forbiddenElementsPreview.length" class="mt-2">
-          <p class="text-xs font-medium text-text-secondary mb-2">Forbidden Elements Preview</p>
+          <p class="text-xs font-medium text-text-secondary mb-2">{{ tr('Forbidden Elements Preview') }}</p>
           <div class="flex flex-wrap gap-1.5">
             <BaseTag v-for="el in forbiddenElementsPreview" :key="el" variant="danger">
               {{ el }}

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { Calendar, BookOpen, MoreVertical, Trash2, FolderOpen, FileDown, Link, Unlink, RefreshCw, Search } from 'lucide-vue-next'
 import type { StoryProject } from '@/types/project'
 import type { ProjectExportBinding } from '@/services/projectExportSync'
+import { translatePhrase } from '@/i18n'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseDropdown from '@/components/ui/BaseDropdown.vue'
 
@@ -39,6 +40,7 @@ const lengthLabel = computed(() => {
 
 const languageLabel = computed(() => props.project.language || 'English')
 const exportBinding = computed(() => props.exportBinding ?? null)
+const tr = translatePhrase
 
 const formattedDate = computed(() => {
   const date = new Date(props.project.updatedAt)
@@ -79,24 +81,24 @@ const dropdownItems = computed(() => [
     </div>
 
     <p class="text-xs text-text-secondary line-clamp-2 mb-3 min-h-[2rem]">
-      {{ project.theme || 'No theme specified' }}
+      {{ project.theme || tr('No theme specified') }}
     </p>
 
     <div class="flex items-center gap-2 flex-wrap">
       <BaseTag v-if="project.genre" variant="accent" size="sm">{{ project.genre }}</BaseTag>
       <BaseTag size="sm">{{ languageLabel }}</BaseTag>
-      <BaseTag size="sm">{{ lengthLabel }}</BaseTag>
-      <BaseTag :variant="statusVariant" size="sm">{{ project.status }}</BaseTag>
-      <BaseTag v-if="exportBinding" variant="success" size="sm" :title="exportBinding.filePath">Linked</BaseTag>
-      <BaseTag v-if="exportBinding?.lastError" variant="danger" size="sm" :title="exportBinding.lastError">Sync error</BaseTag>
-      <BaseTag v-if="isExportSyncing" variant="warning" size="sm">Syncing</BaseTag>
+      <BaseTag size="sm">{{ tr(lengthLabel) }}</BaseTag>
+      <BaseTag :variant="statusVariant" size="sm">{{ tr(project.status) }}</BaseTag>
+      <BaseTag v-if="exportBinding" variant="success" size="sm" :title="exportBinding.filePath">{{ tr('Linked') }}</BaseTag>
+      <BaseTag v-if="exportBinding?.lastError" variant="danger" size="sm" :title="exportBinding.lastError">{{ tr('Sync error') }}</BaseTag>
+      <BaseTag v-if="isExportSyncing" variant="warning" size="sm">{{ tr('Syncing') }}</BaseTag>
     </div>
 
     <div class="flex items-center gap-1.5 mt-3 text-2xs text-text-muted">
       <Calendar :size="12" />
       <span>{{ formattedDate }}</span>
       <span class="mx-1">·</span>
-      <span>{{ project.chapters.length }} chapters</span>
+      <span>{{ project.chapters.length }} {{ tr('chapters') }}</span>
     </div>
   </div>
 </template>

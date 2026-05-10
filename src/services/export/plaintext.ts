@@ -19,7 +19,7 @@ export function exportToPlainText(project: StoryProject): string {
     lines.push(`Chapter ${chapter.index + 1}: ${chapter.title}`)
     lines.push('-'.repeat(40))
     lines.push('')
-    const content = chapter.polishedContent || chapter.content
+    const content = chapter.content
     lines.push(content || 'No content yet')
     lines.push('')
     lines.push('')

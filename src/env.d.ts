@@ -15,6 +15,7 @@ declare global {
       maximize: () => void
       close: () => void
       isMaximized: () => Promise<boolean>
+      setUnsavedChanges: (value: boolean) => void
     }
     app: {
       getPath: (name: 'documents' | 'downloads' | 'desktop' | 'userData') => Promise<string | null>
@@ -27,6 +28,10 @@ declare global {
       load: (id: string, directoryPath?: string) => Promise<any | null>
       save: (project: any, directoryPath?: string) => Promise<any>
       delete: (id: string) => Promise<boolean>
+    }
+    vibeChat: {
+      load: (projectId: string, directoryPath: string | undefined, key: string) => Promise<any | null>
+      save: (projectId: string, directoryPath: string | undefined, key: string, payload: any) => Promise<boolean>
     }
     provider: {
       listModels: (request: { type: ProviderType; apiKey: string; baseUrl: string }) => Promise<any>

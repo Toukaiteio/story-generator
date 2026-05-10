@@ -427,7 +427,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
   runtime: PlanningRuntime,
   onToken?: (token: string) => void,
   onProgress?: (message: string) => void,
-  onIntermediateSave?: (updates: Partial<StoryProject>) => void
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
 ): Promise<{ outline: string; characters: Character[] }> {
   const { outlineAgent, characterAgent, characterModel } = runtime
   const knowledgeContext = await buildKnowledgeContextForProject(project, {
@@ -454,13 +454,18 @@ async function runOutlineFirstStoryPlanningWorkflow(
     customRequirements: project.customRequirements,
     knowledgeContext,
     planningMode: 'draft',
+    _onOutlineUpdated: async (outlineData: any) => {
+      if (typeof outlineData?.outline === 'string' && outlineData.outline.trim()) {
+        await onIntermediateSave?.({ outline: outlineData.outline })
+      }
+    },
   }
 
   const draftResult = await outlineAgent.execute(draftContext, onToken)
   const draft = draftContext._outlineData || parsePlanningDraft(draftResult.content)
 
   if (draft.outline) {
-    onIntermediateSave?.({ outline: draft.outline })
+    await onIntermediateSave?.({ outline: draft.outline })
   }
 
   const needsCharacters = shouldCreateCharacters(project, draft)
@@ -486,13 +491,19 @@ async function runOutlineFirstStoryPlanningWorkflow(
       characterSignals: draft.characterSignals,
       preferredCount: getPreferredCharacterCount(project),
       knowledgeContext,
+      _onCharactersUpdated: async (rawCharacters: any[]) => {
+        const partialCharacters = parseCharacterArray(rawCharacters, new Date().toISOString())
+        if (partialCharacters.length > 0) {
+          await onIntermediateSave?.({ characters: partialCharacters })
+        }
+      },
     }
 
     await characterAgent.execute(charContext, onToken)
     characters = parseGeneratedCharacters('', charContext)
 
     if (characters.length > 0) {
-      onIntermediateSave?.({ characters })
+      await onIntermediateSave?.({ characters })
     }
   } else {
     onProgress?.('Reusing existing characters for blueprint refinement...')
@@ -517,6 +528,11 @@ async function runOutlineFirstStoryPlanningWorkflow(
     outline: draft.outline,
     characters: buildCharacterContextForTask(characters.length ? characters : project.characters, 'outlining'),
     characterSignals: draft.characterSignals,
+    _onOutlineUpdated: async (outlineData: any) => {
+      if (typeof outlineData?.outline === 'string' && outlineData.outline.trim()) {
+        await onIntermediateSave?.({ outline: outlineData.outline })
+      }
+    },
   }
 
   const refinedResult = await outlineAgent.execute(refinedContext, onToken)
@@ -533,7 +549,7 @@ export async function runStoryPlanningWorkflow(
   onToken?: (token: string) => void,
   onProgress?: (message: string) => void,
   onError?: (error: string) => void,
-  onIntermediateSave?: (updates: Partial<StoryProject>) => void
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
 ): Promise<{ outline: string; characters: Character[] }> {
   const runtime = preparePlanningRuntime()
 
@@ -607,7 +623,7 @@ export async function generateStoryPlan(
   onToken?: (token: string) => void,
   onProgress?: (message: string) => void,
   onError?: (error: string) => void,
-  onIntermediateSave?: (updates: Partial<StoryProject>) => void
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
 ): Promise<{ outline: string; characters: Character[] }> {
   return runStoryPlanningWorkflow(project, onToken, onProgress, onError, onIntermediateSave)
 }

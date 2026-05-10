@@ -24,6 +24,10 @@ const project = computed(() => projectStore.activeProject)
 
 const expandedSections = ref<Set<string>>(new Set(['generation', 'outline', 'chapters', 'characters']))
 
+const orderedChapters = computed(() =>
+  [...(project.value?.chapters ?? [])].sort((a, b) => a.index - b.index)
+)
+
 function toggleSection(section: string) {
   if (expandedSections.value.has(section)) {
     expandedSections.value.delete(section)
@@ -37,6 +41,7 @@ interface TreeNode {
   label: string
   icon: any
   section?: string
+  unsaved?: boolean
   children?: TreeNode[]
 }
 
@@ -76,10 +81,11 @@ const tree = computed<TreeNode[]>(() => {
       label: `Chapters (${project.value.chapters.length})`,
       icon: BookOpen,
       section: 'chapters',
-      children: project.value.chapters.map(ch => ({
+      children: orderedChapters.value.map(ch => ({
         id: `chapter-${ch.id}`,
         label: `Ch ${ch.index + 1}: ${ch.title}`,
         icon: FileText,
+        unsaved: Boolean(ui.unsavedWorkspaceNodes[`chapter-${ch.id}`]),
       })),
     },
     {
@@ -109,7 +115,7 @@ function handleNodeClick(node: TreeNode) {
   <div class="h-full flex flex-col bg-surface-1 border-r border-surface-4 overflow-hidden">
     <div class="px-3 py-3 border-b border-surface-4 shrink-0">
       <h3 class="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-        {{ project?.name || 'Project' }}
+        {{ project?.name || ui.text('Project') }}
       </h3>
     </div>
 
@@ -135,7 +141,7 @@ function handleNodeClick(node: TreeNode) {
             ]"
           />
           <component :is="node.icon" :size="14" class="shrink-0" />
-          <span class="truncate text-xs">{{ node.label }}</span>
+          <span class="truncate text-xs">{{ ui.text(node.label) }}</span>
         </button>
 
         <Transition name="fade">
@@ -143,15 +149,24 @@ function handleNodeClick(node: TreeNode) {
             <div v-for="child in node.children" :key="child.id">
               <button
                 :class="[
-                  'flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors duration-100',
+                  'relative flex items-center gap-2 w-full pl-8 pr-3 py-1.5 text-xs text-left transition-colors duration-100',
                   ui.activeWorkspaceNode === child.id
-                    ? 'bg-accent-subtle text-accent'
-                    : 'text-text-secondary hover:text-text-primary hover:bg-surface-3',
+                    ? child.unsaved
+                      ? 'bg-warning/10 text-warning border-l-2 border-warning'
+                      : 'bg-accent-subtle text-accent'
+                    : child.unsaved
+                      ? 'text-warning bg-warning/5 hover:bg-warning/10 hover:text-warning'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-surface-3',
                 ]"
                 @click="ui.setWorkspaceNode(child.id)"
               >
                 <component :is="child.icon" :size="12" class="shrink-0" />
-                <span class="truncate">{{ child.label }}</span>
+                <span class="truncate">{{ ui.text(child.label) }}</span>
+                <span
+                  v-if="child.unsaved"
+                  class="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-warning shadow-[0_0_0_3px_rgba(245,158,11,0.12)]"
+                  :title="ui.text('Unsaved changes')"
+                ></span>
               </button>
             </div>
           </div>
@@ -159,7 +174,7 @@ function handleNodeClick(node: TreeNode) {
       </div>
 
       <div v-if="!project" class="px-3 py-6 text-center">
-        <p class="text-xs text-text-muted">No project loaded</p>
+        <p class="text-xs text-text-muted">{{ ui.text('No project loaded') }}</p>
       </div>
     </div>
 

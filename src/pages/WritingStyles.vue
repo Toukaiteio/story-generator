@@ -650,9 +650,9 @@ function sourceVariant(source: string): 'accent' | 'default' {
   <div class="h-full flex flex-col overflow-hidden">
     <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">Writing Styles</h1>
+        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Writing Styles') }}</h1>
         <p class="text-xs text-text-secondary mt-0.5">
-          Create and manage reusable writing style guides for story generation
+          {{ ui.text('Create and manage reusable writing style guides for story generation') }}
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -665,11 +665,11 @@ function sourceVariant(source: string): 'accent' | 'default' {
         />
         <BaseButton variant="secondary" size="sm" @click="triggerImport">
           <Upload :size="14" />
-          <span>Import</span>
+          <span>{{ ui.text('Import') }}</span>
         </BaseButton>
         <BaseButton variant="primary" size="sm" @click="openCreateDrawer">
           <Plus :size="14" />
-          <span>Create Style</span>
+          <span>{{ ui.text('Create Style') }}</span>
         </BaseButton>
       </div>
     </div>
@@ -690,11 +690,11 @@ function sourceVariant(source: string): 'accent' | 'default' {
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <h3 class="text-sm font-semibold text-text-primary">Default (No Reference)</h3>
-                <BaseTag variant="default" size="sm">Built-in</BaseTag>
+                <h3 class="text-sm font-semibold text-text-primary">{{ ui.text('Default (No Reference)') }}</h3>
+                <BaseTag variant="default" size="sm">{{ ui.text('Built-in') }}</BaseTag>
               </div>
               <p class="text-xs text-text-secondary mt-0.5">
-                The AI will infer an appropriate writing style from the genre, theme, and target reader.
+                {{ ui.text('The AI will infer an appropriate writing style from the genre, theme, and target reader.') }}
               </p>
             </div>
           </div>
@@ -703,13 +703,13 @@ function sourceVariant(source: string): 'accent' | 'default' {
         <EmptyState
           v-if="!styleStore.styles.length && !searchQuery"
           :icon="Palette"
-          title="No custom styles yet"
-          description="Create a writing style guide to give your story a consistent voice. You can write one manually or let AI analyze a reference text."
+          :title="ui.text('No custom styles yet')"
+          :description="ui.text('Create a writing style guide to give your story a consistent voice. You can write one manually or let AI analyze a reference text.')"
         >
           <template #action>
             <BaseButton variant="primary" size="sm" @click="openCreateDrawer">
               <Plus :size="14" />
-              <span>Create Style</span>
+              <span>{{ ui.text('Create Style') }}</span>
             </BaseButton>
           </template>
         </EmptyState>
@@ -717,8 +717,8 @@ function sourceVariant(source: string): 'accent' | 'default' {
         <EmptyState
           v-else-if="!filteredStyles.length && searchQuery"
           :icon="Palette"
-          title="No matching styles"
-          description="Try a different search term."
+          :title="ui.text('No matching styles')"
+          :description="ui.text('Try a different search term.')"
         />
 
         <div v-else class="space-y-3">
@@ -736,7 +736,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                   <div class="flex items-center gap-2 flex-wrap">
                     <h3 class="text-sm font-semibold text-text-primary">{{ style.name }}</h3>
                     <BaseTag :variant="sourceVariant(style.source)" size="sm">
-                      {{ formatSource(style.source) }}
+                    {{ ui.text(formatSource(style.source)) }}
                     </BaseTag>
                   </div>
                   <p v-if="style.description" class="text-xs text-text-secondary mt-1">
@@ -748,28 +748,28 @@ function sourceVariant(source: string): 'accent' | 'default' {
                     </BaseTag>
                   </div>
                   <p class="text-2xs text-text-muted mt-2">
-                    {{ style.content.length }} characters · Updated {{ new Date(style.updatedAt).toLocaleDateString() }}
+                    {{ style.content.length }} {{ ui.text('characters') }} · {{ ui.text('Updated') }} {{ new Date(style.updatedAt).toLocaleDateString() }}
                   </p>
                 </div>
               </div>
               <div class="flex items-center gap-1.5 shrink-0">
                 <button
                   class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
-                  title="Export Style"
+                  :title="ui.text('Export Style')"
                   @click="exportStyle(style)"
                 >
                   <Download :size="14" />
                 </button>
                 <button
                   class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
-                  title="Edit Style"
+                  :title="ui.text('Edit Style')"
                   @click="openEditDrawer(style)"
                 >
                   <Pencil :size="14" />
                 </button>
                 <button
                   class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
-                  title="Delete Style"
+                  :title="ui.text('Delete Style')"
                   @click="requestDelete(style.id)"
                 >
                   <Trash2 :size="14" />
@@ -795,7 +795,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
           >
             <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
               <h2 class="text-base font-semibold text-text-primary">
-                {{ editingId ? 'Edit Style' : 'Create Style' }}
+                {{ ui.text(editingId ? 'Edit Style' : 'Create Style') }}
               </h2>
               <button
                 class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
@@ -814,7 +814,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center justify-between gap-2">
                       <p class="text-sm font-semibold text-text-primary">{{ generationPhase || 'Preparing analysis' }}</p>
-                      <BaseTag variant="accent" size="sm">Live</BaseTag>
+                      <BaseTag variant="accent" size="sm">{{ ui.text('Live') }}</BaseTag>
                     </div>
                     <p class="text-xs text-text-secondary mt-1">
                       {{ generationStatus || 'Waiting for model response...' }}
@@ -829,15 +829,15 @@ function sourceVariant(source: string): 'accent' | 'default' {
 
                 <div class="grid grid-cols-3 gap-2 text-xs">
                   <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
-                    <div class="text-2xs text-text-muted">Style Name</div>
+                    <div class="text-2xs text-text-muted">{{ ui.text('Style Name') }}</div>
                     <div class="text-text-primary truncate">{{ form.name || '—' }}</div>
                   </div>
                   <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
-                    <div class="text-2xs text-text-muted">Tags</div>
+                    <div class="text-2xs text-text-muted">{{ ui.text('Tags') }}</div>
                     <div class="text-text-primary truncate">{{ form.tags || '—' }}</div>
                   </div>
                   <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
-                    <div class="text-2xs text-text-muted">Content</div>
+                    <div class="text-2xs text-text-muted">{{ ui.text('Content') }}</div>
                     <div class="text-text-primary">{{ form.content.length }} chars</div>
                   </div>
                 </div>
@@ -851,7 +851,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                 </div>
 
                 <div v-if="generationEvents.length" class="space-y-1">
-                  <p class="text-2xs font-medium uppercase tracking-wide text-text-muted">Recent updates</p>
+                  <p class="text-2xs font-medium uppercase tracking-wide text-text-muted">{{ ui.text('Recent updates') }}</p>
                   <div class="max-h-28 overflow-y-auto space-y-1">
                     <p v-for="event in generationEvents" :key="event" class="text-2xs text-text-secondary">{{ event }}</p>
                   </div>
@@ -879,8 +879,8 @@ function sourceVariant(source: string): 'accent' | 'default' {
 
               <div class="flex-1 flex flex-col gap-2">
                 <div class="flex items-center justify-between">
-                  <label class="text-xs font-medium text-text-secondary">Style Guide Content</label>
-                  <span class="text-2xs text-text-muted">{{ form.content.length }} chars</span>
+                  <label class="text-xs font-medium text-text-secondary">{{ ui.text('Style Guide Content') }}</label>
+                  <span class="text-2xs text-text-muted">{{ form.content.length }} {{ ui.text('chars') }}</span>
                 </div>
                 <textarea
                   v-model="form.content"
@@ -907,16 +907,16 @@ Focus on concrete sensory details. Avoid abstraction."
                 >
                   <div class="flex items-center gap-2">
                     <Sparkles :size="14" class="text-accent" />
-                    <span class="text-sm font-medium text-text-primary">Analyze Reference Text</span>
+                    <span class="text-sm font-medium text-text-primary">{{ ui.text('Analyze Reference Text') }}</span>
                   </div>
                   <span class="text-xs text-text-muted">
-                    {{ showReferenceSection ? 'Hide' : 'Show' }}
+                    {{ ui.text(showReferenceSection ? 'Hide' : 'Show') }}
                   </span>
                 </button>
 
                 <div v-if="showReferenceSection" class="px-4 pb-4 space-y-3">
                   <p class="text-xs text-text-secondary">
-                    Paste a sample of the writing style you want to capture. The AI will analyze it, fill Style Name / Description / Tags / Style Guide Content, and can split the guide into smaller chunks for better accuracy.
+                    {{ ui.text('Paste a sample of the writing style you want to capture. The AI will analyze it, fill Style Name / Description / Tags / Style Guide Content, and can split the guide into smaller chunks for better accuracy.') }}
                   </p>
                   <textarea
                     v-model="form.referenceText"
@@ -932,21 +932,21 @@ Focus on concrete sensory details. Avoid abstraction."
                     @click="generateFromReference"
                   >
                     <Sparkles :size="14" />
-                    <span>Generate Style Guide</span>
+                    <span>{{ ui.text('Generate Style Guide') }}</span>
                   </BaseButton>
                 </div>
               </div>
             </div>
 
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="showDrawer = false">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="showDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
                 size="sm"
                 :disabled="isGenerating || !form.name.trim()"
                 @click="saveStyle"
               >
-                {{ editingId ? 'Save Changes' : 'Create Style' }}
+                {{ ui.text(editingId ? 'Save Changes' : 'Create Style') }}
               </BaseButton>
             </div>
           </div>
@@ -956,9 +956,9 @@ Focus on concrete sensory details. Avoid abstraction."
 
     <ConfirmDialog
       v-model="showDeleteConfirm"
-      title="Delete Style"
-      message="This will permanently delete this writing style. Projects using it will fall back to the default style."
-      confirm-text="Delete"
+      :title="ui.text('Delete Style')"
+      :message="ui.text('This will permanently delete this writing style. Projects using it will fall back to the default style.')"
+      :confirm-text="ui.text('Delete')"
       variant="danger"
       @confirm="confirmDelete"
     />

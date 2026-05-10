@@ -126,6 +126,9 @@ export class CharacterExpert extends BaseAgent {
       context._createdCharacters.push(toolCall.arguments)
       // Also update _charactersData for pipeline compatibility
       context._charactersData = context._createdCharacters
+      if (typeof context._onCharactersUpdated === 'function') {
+        await context._onCharactersUpdated(context._charactersData)
+      }
       const targetCount = this.getTargetCharacterCount(context)
       return {
         tool_call_id: toolCall.id,

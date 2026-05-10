@@ -2,10 +2,12 @@
 import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
+import { translatePhrase } from '@/i18n'
 import { User, Shield, Users, UserCircle } from 'lucide-vue-next'
 
 const projectStore = useProjectStore()
 const ui = useUiStore()
+const tr = translatePhrase
 const project = computed(() => projectStore.activeProject)
 
 const characters = computed(() => {
@@ -42,15 +44,15 @@ function roleIcon(role: string) {
 }
 
 function roleLabel(role: string) {
-  return role.charAt(0).toUpperCase() + role.slice(1)
+  return tr(role.charAt(0).toUpperCase() + role.slice(1))
 }
 </script>
 
 <template>
   <div v-if="project && characters.length" class="space-y-3">
     <div class="flex items-center justify-between">
-      <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">Characters</h3>
-      <span class="text-2xs text-text-muted">{{ characters.length }} total</span>
+      <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{{ tr('Characters') }}</h3>
+      <span class="text-2xs text-text-muted">{{ characters.length }} {{ tr('total') }}</span>
     </div>
 
     <div v-for="(chars, role) in roleGroups" :key="role" class="space-y-1">
@@ -75,7 +77,7 @@ function roleLabel(role: string) {
           </div>
         </div>
         <span v-if="char.relationCount" class="text-2xs text-text-muted">
-          {{ char.relationCount }} rel
+          {{ char.relationCount }} {{ tr('rel') }}
         </span>
       </button>
     </div>

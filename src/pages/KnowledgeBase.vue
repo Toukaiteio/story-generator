@@ -540,21 +540,21 @@ watch(
   <div class="h-full flex flex-col overflow-hidden">
     <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">Knowledge Base</h1>
-        <p class="text-xs text-text-secondary mt-0.5">Manage reference material, import documents, and reuse it in generation.</p>
+        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Knowledge Base') }}</h1>
+        <p class="text-xs text-text-secondary mt-0.5">{{ ui.text('Manage reference material, import documents, and reuse it in generation.') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <BaseButton variant="secondary" size="sm" @click="openImportBaseDialog">
           <Upload :size="14" />
-          <span>Import Base</span>
+          <span>{{ ui.text('Import Base') }}</span>
         </BaseButton>
         <BaseButton variant="secondary" size="sm" @click="openDocumentImportDialog">
           <FileText :size="14" />
-          <span>Upload Docs</span>
+          <span>{{ ui.text('Upload Docs') }}</span>
         </BaseButton>
         <BaseButton variant="primary" size="sm" @click="openCreateBaseDrawer">
           <Plus :size="14" />
-          <span>New Base</span>
+          <span>{{ ui.text('New Base') }}</span>
         </BaseButton>
       </div>
     </div>
@@ -563,12 +563,12 @@ watch(
       <aside class="min-h-0 rounded-lg border border-surface-4 bg-surface-2 flex flex-col overflow-hidden">
         <div class="px-4 py-3 border-b border-surface-4 flex items-center justify-between gap-3">
           <div>
-            <p class="text-sm font-semibold text-text-primary">Knowledge Bases</p>
-            <p class="text-xs text-text-secondary">{{ knowledgeStore.sortedKnowledgeBases.length }} total</p>
+            <p class="text-sm font-semibold text-text-primary">{{ ui.text('Knowledge Bases') }}</p>
+            <p class="text-xs text-text-secondary">{{ knowledgeStore.sortedKnowledgeBases.length }} {{ ui.text('total') }}</p>
           </div>
           <BaseButton variant="ghost" size="sm" @click="openCreateBaseDrawer">
             <Plus :size="14" />
-            <span>New</span>
+            <span>{{ ui.text('New') }}</span>
           </BaseButton>
         </div>
 
@@ -583,7 +583,7 @@ watch(
             <div class="flex items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="text-sm font-semibold text-text-primary truncate">{{ base.name }}</div>
-                <div class="text-2xs text-text-secondary mt-0.5 line-clamp-2">{{ base.description || 'No description' }}</div>
+                <div class="text-2xs text-text-secondary mt-0.5 line-clamp-2">{{ base.description || ui.text('No description') }}</div>
               </div>
               <div class="flex items-center gap-1 shrink-0" @click.stop>
                 <BaseDropdown :items="getBaseDropdownItems(base.id)">
@@ -596,7 +596,7 @@ watch(
               </div>
             </div>
             <div class="flex items-center gap-2 mt-3">
-              <BaseTag size="sm">{{ base.documents.length }} docs</BaseTag>
+              <BaseTag size="sm">{{ base.documents.length }} {{ ui.text('docs') }}</BaseTag>
               <BaseTag size="sm">{{ formatDate(base.updatedAt) }}</BaseTag>
             </div>
           </button>
@@ -604,13 +604,13 @@ watch(
           <EmptyState
             v-if="!knowledgeStore.sortedKnowledgeBases.length"
             :icon="BookOpen"
-            title="No knowledge bases yet"
-            description="Create a base, import a bundle, or upload documents to start building reference material."
+            :title="ui.text('No knowledge bases yet')"
+            :description="ui.text('Create a base, import a bundle, or upload documents to start building reference material.')"
           >
             <template #action>
               <BaseButton variant="primary" size="sm" @click="openCreateBaseDrawer">
                 <Plus :size="14" />
-                <span>Create Base</span>
+                <span>{{ ui.text('Create Base') }}</span>
               </BaseButton>
             </template>
           </EmptyState>
@@ -623,37 +623,37 @@ watch(
             <div class="min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
                 <h2 class="text-base font-semibold text-text-primary truncate">{{ activeBase.name }}</h2>
-                <BaseTag size="sm">{{ activeBase.documents.length }} docs</BaseTag>
-                <BaseTag size="sm">{{ activeBase.mode }}</BaseTag>
+                <BaseTag size="sm">{{ activeBase.documents.length }} {{ ui.text('docs') }}</BaseTag>
+                <BaseTag size="sm">{{ ui.text(activeBase.mode) }}</BaseTag>
               </div>
               <p class="text-xs text-text-secondary mt-1">
-                Updated {{ formatDate(activeBase.updatedAt) }}
+                {{ ui.text('Updated') }} {{ formatDate(activeBase.updatedAt) }}
               </p>
               <p class="text-xs text-text-secondary mt-1">
-                {{ activeBase.indexingStatus === 'ready' ? 'Indexed' : activeBase.indexingStatus === 'indexing' ? 'Indexing' : activeBase.mode === 'keyword' ? 'Keyword only' : 'Needs indexing' }}
-                <span v-if="activeBase.lastIndexedAt"> · Last indexed {{ formatDate(activeBase.lastIndexedAt) }}</span>
+                {{ ui.text(activeBase.indexingStatus === 'ready' ? 'Indexed' : activeBase.indexingStatus === 'indexing' ? 'Indexing' : activeBase.mode === 'keyword' ? 'Keyword only' : 'Needs indexing') }}
+                <span v-if="activeBase.lastIndexedAt"> · {{ ui.text('Last indexed') }} {{ formatDate(activeBase.lastIndexedAt) }}</span>
               </p>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <BaseButton v-if="activeBase.mode !== 'keyword'" variant="secondary" size="sm" @click="reindexActiveBase">
                 <RefreshCw :size="14" />
-                <span>Reindex</span>
+                <span>{{ ui.text('Reindex') }}</span>
               </BaseButton>
               <BaseButton variant="secondary" size="sm" @click="openDocumentImportDialog">
                 <Upload :size="14" />
-                <span>Upload</span>
+                <span>{{ ui.text('Upload') }}</span>
               </BaseButton>
               <BaseButton variant="secondary" size="sm" @click="openAddTextDrawer">
                 <Plus :size="14" />
-                <span>Add Text</span>
+                <span>{{ ui.text('Add Text') }}</span>
               </BaseButton>
               <BaseButton variant="ghost" size="sm" @click="openEditBaseDrawer(activeBase.id)">
                 <FileText :size="14" />
-                <span>Edit</span>
+                <span>{{ ui.text('Edit') }}</span>
               </BaseButton>
               <BaseButton variant="primary" size="sm" @click="exportKnowledgeBase(activeBase.id)">
                 <FileDown :size="14" />
-                <span>Export</span>
+                <span>{{ ui.text('Export') }}</span>
               </BaseButton>
             </div>
           </div>
@@ -679,13 +679,13 @@ watch(
             />
           </div>
           <p class="text-xs text-text-secondary mt-2">
-            Keyword mode uses the built-in text search. Vector and hybrid modes require an embedding model and reindexing.
+            {{ ui.text('Keyword mode uses the built-in text search. Vector and hybrid modes require an embedding model and reindexing.') }}
           </p>
 
           <div class="mt-4 flex justify-end">
             <BaseButton variant="primary" size="sm" @click="saveBase">
               <Save :size="14" />
-              <span>Save Base</span>
+              <span>{{ ui.text('Save Base') }}</span>
             </BaseButton>
           </div>
         </section>
@@ -708,7 +708,7 @@ watch(
                   <div class="min-w-0">
                     <div class="text-sm font-semibold text-text-primary truncate">{{ doc.name }}</div>
                     <div class="text-2xs text-text-secondary mt-0.5 line-clamp-2">
-                      {{ doc.sourceName || doc.fileType || (doc.source === 'manual' ? 'Manual entry' : 'Uploaded document') }}
+                      {{ doc.sourceName || doc.fileType || ui.text(doc.source === 'manual' ? 'Manual entry' : 'Uploaded document') }}
                     </div>
                   </div>
                   <div class="shrink-0">
@@ -717,7 +717,7 @@ watch(
                 </div>
                 <div class="flex items-center gap-1.5 mt-3 flex-wrap">
                   <BaseTag v-if="doc.fileType" size="sm">{{ doc.fileType }}</BaseTag>
-                  <BaseTag size="sm">{{ doc.chunks.length }} chunks</BaseTag>
+                  <BaseTag size="sm">{{ doc.chunks.length }} {{ ui.text('chunks') }}</BaseTag>
                   <BaseTag size="sm">{{ formatDate(doc.updatedAt) }}</BaseTag>
                 </div>
               </button>
@@ -725,20 +725,20 @@ watch(
               <EmptyState
                 v-if="!filteredDocuments.length"
                 :icon="FileText"
-                title="No documents"
-                :description="searchQuery.trim() ? 'No documents matched your search.' : 'Upload files or add text to populate this knowledge base.'"
+                :title="ui.text('No documents')"
+                :description="searchQuery.trim() ? ui.text('No documents matched your search.') : ui.text('Upload files or add text to populate this knowledge base.')"
               />
             </div>
 
             <div v-if="searchQuery.trim() && searchMatches.length" class="border-t border-surface-4 p-3 space-y-2">
-              <p class="text-xs font-medium text-text-secondary uppercase tracking-wider">Content Matches</p>
+              <p class="text-xs font-medium text-text-secondary uppercase tracking-wider">{{ ui.text('Content Matches') }}</p>
               <div class="space-y-2 max-h-48 overflow-y-auto">
                 <div
                   v-for="result in searchMatches.slice(0, 5)"
                   :key="result.chunk.id"
                   class="rounded-md border border-surface-4 bg-surface-1 p-2"
                 >
-                  <div class="text-2xs font-medium text-text-secondary mb-1">Score {{ result.score }}</div>
+                  <div class="text-2xs font-medium text-text-secondary mb-1">{{ ui.text('Score') }} {{ result.score }}</div>
                   <div class="text-xs text-text-primary line-clamp-4 whitespace-pre-wrap">{{ result.highlight }}</div>
                 </div>
               </div>
@@ -759,11 +759,11 @@ watch(
                 <div class="flex items-center gap-2 shrink-0">
                   <BaseButton variant="danger" size="sm" @click="deleteSelectedDocument">
                     <Trash2 :size="14" />
-                    <span>Delete</span>
+                    <span>{{ ui.text('Delete') }}</span>
                   </BaseButton>
                   <BaseButton variant="primary" size="sm" @click="saveSelectedDocument">
                     <Save :size="14" />
-                    <span>Save</span>
+                    <span>{{ ui.text('Save') }}</span>
                   </BaseButton>
                 </div>
               </div>
@@ -771,8 +771,8 @@ watch(
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <BaseInput v-model="documentForm.name" label="Document Name" />
                 <div class="rounded-md border border-surface-4 bg-surface-1 px-3 py-2">
-                  <p class="text-xs font-medium text-text-secondary">Content Format</p>
-                  <p class="text-sm text-text-primary mt-1">Stored as markdown text inside the knowledge base</p>
+                  <p class="text-xs font-medium text-text-secondary">{{ ui.text('Content Format') }}</p>
+                  <p class="text-sm text-text-primary mt-1">{{ ui.text('Stored as markdown text inside the knowledge base') }}</p>
                 </div>
               </div>
 
@@ -788,8 +788,8 @@ watch(
             <EmptyState
               v-else
               :icon="FileText"
-              title="Select a document"
-              description="Pick a document to inspect or edit its markdown content."
+              :title="ui.text('Select a document')"
+              :description="ui.text('Pick a document to inspect or edit its markdown content.')"
             />
           </div>
         </section>
@@ -797,8 +797,8 @@ watch(
         <EmptyState
           v-else
           :icon="BookOpen"
-          title="Select or create a knowledge base"
-          description="Knowledge bases hold the documents used as generation reference material."
+          :title="ui.text('Select or create a knowledge base')"
+          :description="ui.text('Knowledge bases hold the documents used as generation reference material.')"
         />
       </main>
     </div>
@@ -834,7 +834,7 @@ watch(
               />
             </div>
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="showBaseDrawer = false">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="showBaseDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton variant="primary" size="sm" @click="saveBase">
                 {{ baseDialogConfirm }}
               </BaseButton>
@@ -856,7 +856,7 @@ watch(
             class="absolute right-0 top-0 h-full w-[420px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
-              <h2 class="text-base font-semibold text-text-primary">Add Text Entry</h2>
+              <h2 class="text-base font-semibold text-text-primary">{{ ui.text('Add Text Entry') }}</h2>
               <button
                 class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
                 @click="showTextDrawer = false"
@@ -875,9 +875,9 @@ watch(
               />
             </div>
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="showTextDrawer = false">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="showTextDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton variant="primary" size="sm" :disabled="!textForm.name.trim() || !textForm.content.trim()" @click="saveTextDocument">
-                Save
+                {{ ui.text('Save') }}
               </BaseButton>
             </div>
           </div>

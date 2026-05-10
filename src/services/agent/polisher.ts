@@ -132,6 +132,7 @@ Rules:
 - When fixing, provide exact word indices and replacement text
 - When specific issues are supplied, make the minimal necessary edits for those issues only
 - Do not perform broad rewrites, scene expansion, paragraph reordering, or unrelated style changes
+- Do not output polished prose in assistant text. Put final prose only in polish_complete.finalContent.
 
 Tools available:
 - fix_section: Polish a specific section of text
@@ -170,7 +171,7 @@ ${content}
 Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
 
 Only change text needed to fix the listed issues or the explicit user adjustment. Do not perform broad style rewrites, do not reorder paragraphs, and do not add or remove scene content.
-Use fix_section only for targeted fixes. When done with this segment, call polish_complete with only the polished segment text in finalContent.
+Use fix_section only for targeted fixes. When done with this segment, call polish_complete with only the polished segment text in finalContent. Do not output polished prose outside tool arguments.
 For every issue listed above, include an item in issueResults using that issue id and status fixed, ignored, or failed.`
     }
 
@@ -193,7 +194,7 @@ ${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Use get_character_profile for character details only when needed. Use relationship query tools for specific relationship checks, preferably with character IDs from the compact directory.
 
-Use fix_section for each area that needs improvement. When all issues are fixed, call polish_complete with the final polished chapter and issueResults.`
+Use fix_section for each area that needs improvement. When all issues are fixed, call polish_complete with the final polished chapter and issueResults. Do not output polished prose outside tool arguments.`
   }
 
   parseResponse(response: string, context?: Record<string, any>): any {
@@ -264,6 +265,6 @@ ${proofreadingIssues && proofreadingIssues.length > 0 ? proofreadingIssues.map((
 Chapter content (${countWords(content)} words):
 ${content}
 
-CRITICAL: You MUST use fix_section for each area needing improvement, then call polish_complete when done. Do NOT output free-form text.`
+CRITICAL: You MUST use fix_section for each area needing improvement, then call polish_complete when done. Do NOT output free-form text or duplicate polished prose outside tool arguments.`
   }
 }

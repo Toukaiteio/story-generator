@@ -65,7 +65,9 @@ function hasAllProofread(project: StoryProject) {
 }
 
 function hasAllPolished(project: StoryProject) {
-  return project.chapters.length > 0 && project.chapters.every(chapter => chapter.polishedContent.trim())
+  return project.chapters.length > 0 && project.chapters.every(chapter =>
+    chapter.content.trim() && chapter.status === 'polished'
+  )
 }
 
 function chapterPositionsInStoryOrder(chapters: Chapter[]) {
@@ -120,7 +122,7 @@ export function buildChaptersFromPlanEntries(
       proofreadingIssues: preserveChapterState ? (prev?.proofreadingIssues || []) : [],
       proofreadingIssuesStale: preserveChapterState ? Boolean(prev?.proofreadingIssuesStale) : false,
       contentVersions: preserveChapterState ? (prev?.contentVersions || []) : [],
-      polishedContent: preserveChapterState ? (prev?.polishedContent || '') : '',
+      polishedContent: '',
       status: preserveChapterState ? (prev?.status || 'outline') : 'outline',
       summary: preserveChapterState ? (prev?.summary || '') : '',
       characterStateUpdates: preserveChapterState ? (prev?.characterStateUpdates || {}) : {},
@@ -135,7 +137,7 @@ export async function runChapterPlanningWorkflow(
   onToken?: (token: string) => void,
   onProgress?: (message: string) => void,
   onError?: (error: string) => void,
-  onIntermediateSave?: (updates: Partial<StoryProject>) => void,
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>,
   isCancelled: () => boolean = () => false
 ): Promise<Chapter[]> {
   const runtime = prepareRuntime()
@@ -200,6 +202,14 @@ export async function runChapterPlanningWorkflow(
       knowledgeContext,
       targetChapter: titleEntry,
       chapterCount,
+      _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
+        const currentChapters = buildChaptersFromPlanEntries(
+          [...plannedEntries, outlineData],
+          chapterCount,
+          project.chapters
+        )
+        await onIntermediateSave?.({ chapters: currentChapters })
+      },
     }
 
     try {
@@ -208,7 +218,7 @@ export async function runChapterPlanningWorkflow(
       plannedEntries.push(outlineData)
 
       const currentChapters = buildChaptersFromPlanEntries(plannedEntries, chapterCount, project.chapters)
-      onIntermediateSave?.({ chapters: currentChapters })
+      await onIntermediateSave?.({ chapters: currentChapters })
     } catch (e: any) {
       const msg = `Outline planning failed for Chapter ${titleEntry.chapterNumber}: ${e.message}`
       onError?.(msg)
@@ -224,7 +234,7 @@ export async function generateChapterPlan(
   onToken?: (token: string) => void,
   onProgress?: (message: string) => void,
   onError?: (error: string) => void,
-  onIntermediateSave?: (updates: Partial<StoryProject>) => void,
+  onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>,
   isCancelled: () => boolean = () => false
 ): Promise<Chapter[]> {
   return runChapterPlanningWorkflow(project, onToken, onProgress, onError, onIntermediateSave, isCancelled)
@@ -407,7 +417,7 @@ export async function polishChapter(
   }
 
   const buildChapterSnapshot = (status: Chapter['status'] = 'polishing') => {
-    const polishedContent = sanitizeGeneratedChapterContent(
+    const nextContent = sanitizeGeneratedChapterContent(
       segmentContents.join('\n\n'),
       {
         writingFormat: project.writingFormat,
@@ -436,7 +446,8 @@ export async function polishChapter(
     return {
       ...chapter,
       proofreadingIssues: nextIssues,
-      polishedContent,
+      content: nextContent,
+      polishedContent: '',
       status,
     }
   }
@@ -635,7 +646,6 @@ export async function run(
           updatedProject.chapters[i].content = draftContent
           updatedProject.chapters[i].proofreadingIssues = []
           updatedProject.chapters[i].proofreadingIssuesStale = false
-          updatedProject.chapters[i].polishedContent = ''
           updatedProject.chapters[i].summary = typeof writerContext._chapterSummary === 'string' && writerContext._chapterSummary.trim()
             ? writerContext._chapterSummary.trim()
             : `${draftContent.substring(0, 200)}...`
@@ -664,7 +674,6 @@ export async function run(
         updatedProject.chapters[i].content = chapterContent
         updatedProject.chapters[i].proofreadingIssues = []
         updatedProject.chapters[i].proofreadingIssuesStale = false
-        updatedProject.chapters[i].polishedContent = ''
         updatedProject.chapters[i].summary = chapterSummary
         updatedProject.chapters[i].status = 'draft'
 
@@ -789,7 +798,7 @@ export async function run(
       if (isCancelled()) break
       const chapter = updatedProject.chapters[i]
       const chapterNumber = chapter.index + 1
-      if (chapter.polishedContent.trim()) continue
+      if (chapter.status === 'polished') continue
 
       callbacks.onChapterStart(i)
       callbacks.onProgress(`Polishing chapter ${chapterNumber}...`)

@@ -25,7 +25,7 @@ export class StoryPipeline {
     onToken?: (token: string) => void,
     onProgress?: (message: string) => void,
     onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void
+    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
   ) {
     return generateStoryPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave)
   }
@@ -35,7 +35,7 @@ export class StoryPipeline {
     onToken?: (token: string) => void,
     onProgress?: (message: string) => void,
     onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void
+    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
   ) {
     return generateChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave, () => this.cancelled)
   }

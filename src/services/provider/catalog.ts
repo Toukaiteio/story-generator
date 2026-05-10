@@ -2,18 +2,26 @@ import type { ModelConfig, ProviderModelRef, ProviderType, ReasoningConfig, Reas
 
 export const defaultProviderNames: Record<ProviderType, string> = {
   openai: 'OpenAI',
+  'openai-responses': 'OpenAI Responses',
   anthropic: 'Anthropic',
   google: 'Google GenAI',
 }
 
 export const defaultBaseUrls: Record<ProviderType, string> = {
   openai: 'https://api.openai.com/v1',
+  'openai-responses': 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com',
   google: 'https://generativelanguage.googleapis.com',
 }
 
 export const builtinModels: Record<ProviderType, ModelConfig[]> = {
   openai: [
+    { id: 'gpt-4o', name: 'GPT-4o', tier: 'expert', maxTokens: 16384, supportsStreaming: true, supportsEmbeddings: false, source: 'builtin', reasoning: defaultReasoningConfig() },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tier: 'standard', maxTokens: 16384, supportsStreaming: true, supportsEmbeddings: false, source: 'builtin', reasoning: defaultReasoningConfig() },
+    { id: 'text-embedding-3-small', name: 'Text Embedding 3 Small', tier: 'standard', maxTokens: 8192, supportsStreaming: false, supportsEmbeddings: true, embeddingDimensions: 1536, source: 'builtin', reasoning: defaultReasoningConfig() },
+    { id: 'text-embedding-3-large', name: 'Text Embedding 3 Large', tier: 'expert', maxTokens: 8192, supportsStreaming: false, supportsEmbeddings: true, embeddingDimensions: 3072, source: 'builtin', reasoning: defaultReasoningConfig() },
+  ],
+  'openai-responses': [
     { id: 'gpt-4o', name: 'GPT-4o', tier: 'expert', maxTokens: 16384, supportsStreaming: true, supportsEmbeddings: false, source: 'builtin', reasoning: defaultReasoningConfig() },
     { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tier: 'standard', maxTokens: 16384, supportsStreaming: true, supportsEmbeddings: false, source: 'builtin', reasoning: defaultReasoningConfig() },
     { id: 'text-embedding-3-small', name: 'Text Embedding 3 Small', tier: 'standard', maxTokens: 8192, supportsStreaming: false, supportsEmbeddings: true, embeddingDimensions: 1536, source: 'builtin', reasoning: defaultReasoningConfig() },
@@ -68,7 +76,7 @@ function normalizeDisplayName(modelId: string, displayName?: string | null) {
 function inferTier(providerType: ProviderType, modelId: string): 'expert' | 'standard' {
   const id = modelId.toLowerCase()
 
-  if (providerType === 'openai') {
+  if (providerType === 'openai' || providerType === 'openai-responses') {
     if (id.includes('mini') || id.includes('nano') || id.includes('light')) return 'standard'
     return 'expert'
   }
@@ -139,7 +147,7 @@ function inferSupportsStreaming(providerType: ProviderType, modelId: string): bo
 function inferMaxTokens(providerType: ProviderType, modelId: string): number {
   const id = modelId.toLowerCase()
 
-  if (providerType === 'openai') {
+  if (providerType === 'openai' || providerType === 'openai-responses') {
     if (id.includes('mini') || id.includes('nano')) return 16384
     if (id.includes('gpt-5') || id.includes('4.1')) return 32768
     return 16384
@@ -199,13 +207,13 @@ const googleContextFallback: Record<string, number> = {
 
 function inferContextTokens(providerType: ProviderType, modelId: string): { tokens: number | null; source: 'fallback' | null } {
   const id = modelId.toLowerCase()
-  const table = providerType === 'openai' ? openaiContextFallback : providerType === 'google' ? googleContextFallback : anthropicContextFallback
+  const table = providerType === 'openai' || providerType === 'openai-responses' ? openaiContextFallback : providerType === 'google' ? googleContextFallback : anthropicContextFallback
 
   // Exact match
   if (table[id]) return { tokens: table[id], source: 'fallback' }
 
   // Pattern match for OpenAI
-  if (providerType === 'openai') {
+  if (providerType === 'openai' || providerType === 'openai-responses') {
     if (id.includes('gpt-4.1') || id.includes('gpt-5')) return { tokens: 1047576, source: 'fallback' }
     if (id.includes('gpt-4o') || id.includes('gpt-4-turbo')) return { tokens: 128000, source: 'fallback' }
     if (id.includes('o1') || id.includes('o3') || id.includes('o4')) return { tokens: 200000, source: 'fallback' }

@@ -45,7 +45,7 @@ const fastFilling = ref(false)
 async function handleSelectDirectory() {
   if (!window.electronAPI?.dialog?.openDirectory) return
   const path = await window.electronAPI.dialog.openDirectory({
-    title: 'Select Project Storage Directory',
+    title: ui.text('Select Project Storage Directory'),
   })
   if (path) {
     form.directoryPath = path
@@ -209,7 +209,7 @@ const canFastFill = computed(() => form.name.trim() && form.theme.trim() && !fas
   <BaseDialog
     :model-value="modelValue"
     @update:model-value="emit('update:modelValue', $event)"
-    title="New Story Project"
+    :title="ui.text('New Story Project')"
     width="560px"
   >
     <div class="flex flex-col gap-4">
@@ -221,17 +221,17 @@ const canFastFill = computed(() => form.name.trim() && form.theme.trim() && !fas
       />
 
       <div class="flex flex-col gap-1.5">
-        <label class="text-xs font-medium text-text-secondary">Storage Directory</label>
+        <label class="text-xs font-medium text-text-secondary">{{ ui.text('Storage Directory') }}</label>
         <div class="flex gap-2">
           <div class="flex-1 min-w-0 h-9 flex items-center px-3 bg-surface-2 border border-surface-4 rounded-md text-sm text-text-primary truncate">
-            {{ form.directoryPath || 'Select a directory...' }}
+            {{ form.directoryPath || ui.text('Select a directory...') }}
           </div>
           <BaseButton variant="secondary" class="!h-9" @click="handleSelectDirectory">
             <FolderOpen :size="14" />
-            <span>Browse</span>
+            <span>{{ ui.text('Browse') }}</span>
           </BaseButton>
         </div>
-        <p class="text-[10px] text-text-muted">A folder with the project name will be created inside this directory.</p>
+        <p class="text-[10px] text-text-muted">{{ ui.text('A folder with the project name will be created inside this directory.') }}</p>
       </div>
 
       <BaseTextarea
@@ -321,15 +321,15 @@ const canFastFill = computed(() => form.name.trim() && form.theme.trim() && !fas
             class="text-accent hover:bg-accent/10"
           >
             <Sparkles :size="14" class="mr-1.5" />
-            <span>Fast Fill with AI</span>
+            <span>{{ ui.text('Fast Fill with AI') }}</span>
           </BaseButton>
         </div>
         <div class="flex items-center gap-2">
           <BaseButton variant="ghost" size="sm" @click="emit('update:modelValue', false)">
-            Cancel
+            {{ ui.text('Cancel') }}
           </BaseButton>
           <BaseButton variant="primary" size="sm" :disabled="!isValid() || fastFilling" @click="handleCreate">
-            Create Project
+            {{ ui.text('Create Project') }}
           </BaseButton>
         </div>
       </div>

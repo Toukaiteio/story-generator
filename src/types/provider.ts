@@ -1,6 +1,6 @@
 import type { ID } from './common'
 
-export type ProviderType = 'openai' | 'anthropic' | 'google'
+export type ProviderType = 'openai' | 'openai-responses' | 'anthropic' | 'google'
 export type ModelSource = 'builtin' | 'remote' | 'custom'
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max'
 

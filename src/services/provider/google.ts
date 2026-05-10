@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai'
 import type { Content, Part, FunctionDeclaration, Tool, GenerateContentConfig } from '@google/genai'
 import type { ChatMessage } from '@/types/provider'
-import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks } from './types'
+import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
 
 export class GoogleAdapter implements ProviderAdapter {
@@ -74,7 +74,7 @@ export class GoogleAdapter implements ProviderAdapter {
     return [{ functionDeclarations: declarations }]
   }
 
-  private buildConfig(options: ChatOptions, messages: ChatMessage[], tools?: Tool[]): GenerateContentConfig {
+  private buildConfig(options: ChatOptions, messages: ChatMessage[], tools?: Tool[], toolOptions?: ToolCallOptions): GenerateContentConfig {
     const config: GenerateContentConfig = {
       maxOutputTokens: options.maxTokens,
       temperature: options.temperature,
@@ -87,6 +87,15 @@ export class GoogleAdapter implements ProviderAdapter {
 
     if (tools?.length) {
       config.tools = tools
+    }
+
+    const choice = toolOptions?.toolChoice
+    if (choice && choice !== 'auto') {
+      ;(config as any).toolConfig = {
+        functionCallingConfig: choice === 'none'
+          ? { mode: 'NONE' }
+          : { mode: 'ANY', allowedFunctionNames: [choice.function.name] },
+      }
     }
 
     return config
@@ -104,14 +113,14 @@ export class GoogleAdapter implements ProviderAdapter {
     return response.text ?? ''
   }
 
-  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[]): Promise<FunctionCallingResponse> {
+  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
     const client = this.getClient(options)
     const googleTools = this.buildTools(tools)
 
     const response = await client.models.generateContent({
       model: options.model,
       contents: this.buildContents(messages),
-      config: this.buildConfig(options, messages, googleTools),
+      config: this.buildConfig(options, messages, googleTools, toolOptions),
     })
 
     const toolCalls: ToolCall[] = []
@@ -139,7 +148,10 @@ export class GoogleAdapter implements ProviderAdapter {
       const stream = await client.models.generateContentStream({
         model: options.model,
         contents: this.buildContents(messages),
-        config: this.buildConfig(options, messages),
+        config: {
+          ...this.buildConfig(options, messages),
+          abortSignal: options.signal,
+        },
       })
 
       let fullText = ''
@@ -156,7 +168,7 @@ export class GoogleAdapter implements ProviderAdapter {
     }
   }
 
-  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks): Promise<void> {
+  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks, toolOptions?: ToolCallOptions): Promise<void> {
     const client = this.getClient(options)
     const googleTools = this.buildTools(tools)
 
@@ -164,7 +176,10 @@ export class GoogleAdapter implements ProviderAdapter {
       const stream = await client.models.generateContentStream({
         model: options.model,
         contents: this.buildContents(messages),
-        config: this.buildConfig(options, messages, googleTools),
+        config: {
+          ...this.buildConfig(options, messages, googleTools, toolOptions),
+          abortSignal: options.signal,
+        },
       })
 
       let fullText = ''

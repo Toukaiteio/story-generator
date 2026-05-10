@@ -129,9 +129,20 @@ export class StoryPlannerExpert extends BaseAgent {
     ]
   }
 
+  private getOutlineTools(): ToolDefinition[] {
+    return this.getTools().filter(tool => tool.name === 'create_story_outline')
+  }
+
+  private getCharacterTools(): ToolDefinition[] {
+    return this.getTools().filter(tool => tool.name === 'create_characters')
+  }
+
   protected async handleToolCall(toolCall: ToolCall, context: Record<string, any>): Promise<ToolResult> {
     if (toolCall.name === 'create_story_outline') {
       context._outlineData = toolCall.arguments
+      if (typeof context._onOutlineUpdated === 'function') {
+        await context._onOutlineUpdated(toolCall.arguments)
+      }
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({ success: true, message: 'Story outline created successfully' }),
@@ -152,6 +163,9 @@ export class StoryPlannerExpert extends BaseAgent {
         }
       }
       context._charactersData = toolCall.arguments.characters
+      if (typeof context._onCharactersUpdated === 'function') {
+        await context._onCharactersUpdated(context._charactersData)
+      }
       return {
         tool_call_id: toolCall.id,
         content: JSON.stringify({ success: true, message: 'Characters created successfully', totalCharacters: toolCall.arguments.characters.length, targetCharacters: targetCount }),
@@ -177,6 +191,22 @@ Use the create_story_outline tool to create the story outline.
 Then use the create_characters tool to create the exact requested number of main characters with interconnected relationships.
 
 Do not omit any fields. Do not add meta commentary or code fences outside the tools.`
+  }
+
+  protected shouldStopAfterToolCallRound(context: Record<string, any>): boolean {
+    if (context._storyPlannerPhase === 'outline') return Boolean(context._outlineData)
+    if (context._storyPlannerPhase === 'characters') return Array.isArray(context._charactersData) && context._charactersData.length > 0
+    return false
+  }
+
+  protected getToolResultContent(context: Record<string, any>): string | null {
+    if (context._storyPlannerPhase === 'outline' && context._outlineData) {
+      return JSON.stringify(context._outlineData)
+    }
+    if (context._storyPlannerPhase === 'characters' && Array.isArray(context._charactersData)) {
+      return JSON.stringify({ characters: context._charactersData })
+    }
+    return null
   }
 
   protected getCharacterSystemPrompt(): string {
@@ -478,6 +508,8 @@ Keep the character concepts intact and do not omit any required fields. The list
     const retryLimit = this.getValidationRetryLimit()
     let previousResponse = ''
     let lastIssues: string[] = []
+    delete context._outlineData
+    context._storyPlannerPhase = 'outline'
 
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const userPrompt = attempt === 0
@@ -491,7 +523,7 @@ Keep the character concepts intact and do not omit any required fields. The list
 
 
       // Use function calling with tools
-      const tools = this.getTools()
+      const tools = this.getOutlineTools()
       if (!this.model) throw new Error(`${this.name} has no model assigned`)
       
       const result = await this.executeWithTools(
@@ -540,6 +572,8 @@ Keep the character concepts intact and do not omit any required fields. The list
     const retryLimit = this.getValidationRetryLimit()
     let previousResponse = ''
     let lastIssues: string[] = []
+    delete context._charactersData
+    context._storyPlannerPhase = 'characters'
 
     for (let attempt = 0; attempt <= retryLimit; attempt++) {
       const userPrompt = attempt === 0
@@ -553,7 +587,7 @@ Keep the character concepts intact and do not omit any required fields. The list
 
 
       // Use function calling with tools
-      const tools = this.getTools()
+      const tools = this.getCharacterTools()
       if (!this.model) throw new Error(`${this.name} has no model assigned`)
       
       const result = await this.executeWithTools(

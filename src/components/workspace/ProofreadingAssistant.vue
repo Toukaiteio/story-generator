@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import { AlertTriangle, Ban, CheckCircle2, ChevronDown, ChevronRight, FileSearch, Send, ShieldCheck, Sparkles } from 'lucide-vue-next'
@@ -36,6 +37,10 @@ const emit = defineEmits<{
 
 const genStore = useGenerationStore()
 const toast = useToast()
+
+function tr(value: string) {
+  return translatePhrase(value)
+}
 
 const issues = ref<ChapterAuditIssue[]>([])
 const isProofereading = ref(false)
@@ -79,7 +84,7 @@ const ignoredIssues = computed(() => issues.value.filter(isIssueIgnored))
 const issueGroups = computed(() => [
   {
     key: 'open',
-    title: 'Open',
+    title: 'Open issues',
     description: 'Needs review or polish',
     issues: openIssues.value,
   },
@@ -297,8 +302,8 @@ function toggleIssueGroup(key: string) {
           <ShieldCheck :size="13" class="text-accent" />
         </div>
         <div class="min-w-0">
-          <h3 class="truncate text-xs font-semibold text-text-primary">Proofreading Expert</h3>
-          <p class="truncate text-[9px] font-bold uppercase tracking-widest text-text-muted">Grammar & consistency audit</p>
+          <h3 class="truncate text-xs font-semibold text-text-primary">{{ tr('Proofreading Expert') }}</h3>
+          <p class="truncate text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Grammar & consistency audit') }}</p>
         </div>
       </div>
     </div>
@@ -306,8 +311,8 @@ function toggleIssueGroup(key: string) {
     <div class="flex-1 overflow-y-auto px-3 py-4">
       <div v-if="!hasContent" class="flex h-full flex-col items-center justify-center text-center">
         <FileSearch :size="24" class="mb-3 text-text-muted" />
-        <p class="text-sm font-medium text-text-primary">No chapter content</p>
-        <p class="mt-1 max-w-[240px] text-xs text-text-secondary">Write or generate chapter text before running a proofread.</p>
+        <p class="text-sm font-medium text-text-primary">{{ tr('No chapter content') }}</p>
+        <p class="mt-1 max-w-[240px] text-xs text-text-secondary">{{ tr('Write or generate chapter text before running a proofread.') }}</p>
       </div>
 
       <template v-else>
@@ -316,7 +321,7 @@ function toggleIssueGroup(key: string) {
             <div class="flex min-w-0 items-center gap-2">
               <Sparkles :size="15" class="shrink-0 animate-pulse text-accent" />
               <div class="min-w-0">
-                <p class="truncate text-xs font-semibold text-text-primary">Proofreading in progress</p>
+                <p class="truncate text-xs font-semibold text-text-primary">{{ tr('Proofreading in progress') }}</p>
                 <p class="text-[10px] text-text-muted">
                   Segment {{ currentSegment?.index ?? 1 }}/{{ currentSegment?.total ?? '?' }} - {{ issues.length }} issue{{ issues.length === 1 ? '' : 's' }} collected
                 </p>
@@ -331,44 +336,44 @@ function toggleIssueGroup(key: string) {
             ></div>
           </div>
           <p class="mt-2 text-[10px] leading-relaxed text-text-secondary">
-            Continuing one Proofreading session and submitting segments sequentially.
+            {{ tr('Continuing one Proofreading session and submitting segments sequentially.') }}
           </p>
         </div>
 
         <div v-if="isProofereading && !issues.length" class="flex h-[calc(100%-5rem)] flex-col items-center justify-center text-center">
           <Sparkles :size="24" class="mb-3 animate-pulse text-accent" />
-          <p class="text-sm font-medium text-text-primary">Scanning current segment...</p>
+          <p class="text-sm font-medium text-text-primary">{{ tr('Scanning current segment...') }}</p>
           <p class="mt-1 max-w-[260px] text-xs text-text-secondary">
-            Issues will appear here as soon as each segment reports results.
+            {{ tr('Issues will appear here as soon as each segment reports results.') }}
           </p>
         </div>
 
         <div v-else-if="!issues.length && !isProofereading" class="flex h-full flex-col items-center justify-center text-center">
           <CheckCircle2 :size="24" class="mb-3 text-success" />
-          <p class="text-sm font-medium text-text-primary">No issues found</p>
+          <p class="text-sm font-medium text-text-primary">{{ tr('No issues found') }}</p>
           <p class="mt-1 max-w-[260px] text-xs text-text-secondary">
-            This chapter has been proofread.
+            {{ tr('This chapter has been proofread.') }}
             <br class="mt-2" />
-            Issues will appear below when detected.
+            {{ tr('Issues will appear below when detected.') }}
           </p>
         </div>
 
         <div v-else class="space-y-3">
         <div class="flex items-center justify-between gap-2">
           <div>
-            <p class="text-xs font-semibold text-text-primary">{{ issues.length }} issue{{ issues.length === 1 ? '' : 's' }} found</p>
+            <p class="text-xs font-semibold text-text-primary">{{ tr('{count} issues found').replace('{count}', String(issues.length)) }}</p>
             <p class="text-[10px] text-text-muted">
               <template v-if="isProofereading">
                 Segment {{ currentSegment?.index ?? 1 }}/{{ currentSegment?.total ?? '?' }} is being scanned. More issues may appear.
               </template>
               <template v-else>
-                Click an issue to inspect it.
+                {{ tr('Click an issue to inspect it.') }}
               </template>
             </p>
           </div>
           <BaseButton v-if="isDetailMode" variant="primary" size="sm" :disabled="!openIssues.length" @click="fixAll">
             <Send :size="13" />
-            <span>Fix all</span>
+            <span>{{ tr('Fix all') }}</span>
           </BaseButton>
         </div>
 
@@ -395,9 +400,9 @@ function toggleIssueGroup(key: string) {
                     'text-text-muted': group.key === 'ignored',
                   }"
                 >
-                  {{ group.title }}
+                  {{ tr(group.title) }}
                 </p>
-                <p class="truncate text-[10px] text-text-muted">{{ group.description }}</p>
+                <p class="truncate text-[10px] text-text-muted">{{ tr(group.description) }}</p>
               </div>
             </div>
             <span class="shrink-0 text-xs font-bold text-text-secondary">{{ group.issues.length }}</span>
@@ -440,13 +445,13 @@ function toggleIssueGroup(key: string) {
                     v-if="isIssueIgnored(issue)"
                     class="rounded-full border border-surface-5 bg-surface-3 px-1.5 py-0.5 text-[9px] font-bold text-text-muted"
                   >
-                    IGNORED
+                    {{ tr('IGNORED') }}
                   </span>
                   <span
                     v-else-if="isIssueFixed(issue)"
                     class="rounded-full border border-success/30 bg-success/10 px-1.5 py-0.5 text-[9px] font-bold text-success"
                   >
-                    FIXED
+                    {{ tr('FIXED') }}
                   </span>
                   <span v-else-if="issue.polishStatus">/ {{ issue.polishStatus }}</span>
                 </p>
@@ -455,13 +460,13 @@ function toggleIssueGroup(key: string) {
                 v-if="isIssueIgnored(issue)"
                 class="shrink-0 rounded-full border border-surface-5 bg-surface-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-text-muted"
               >
-                skipped
+                {{ tr('skipped') }}
               </span>
               <span
                 v-else-if="isIssueFixed(issue)"
                 class="shrink-0 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-success"
               >
-                fixed
+                {{ tr('fixed') }}
               </span>
               <BaseTag v-else :variant="severityVariant(issue.severity)" size="sm">{{ issue.severity }}</BaseTag>
             </div>
@@ -485,7 +490,7 @@ function toggleIssueGroup(key: string) {
                 'border-accent/20 bg-accent/10 text-text-secondary': !isIssueIgnored(issue) && !isIssueFixed(issue),
               }"
             >
-              Adjustment: {{ issue.adjustment }}
+              {{ tr('Adjustment') }}: {{ issue.adjustment }}
             </p>
             <p
               v-if="issue.polishResult"
@@ -496,7 +501,7 @@ function toggleIssueGroup(key: string) {
                 'text-text-muted': !isIssueIgnored(issue) && !isIssueFixed(issue),
               }"
             >
-              Polish result: {{ issue.polishResult }}
+              {{ tr('Polish result') }}: {{ issue.polishResult }}
             </p>
           </button>
         </section>
@@ -513,14 +518,14 @@ function toggleIssueGroup(key: string) {
         class="mt-3 flex items-start gap-2 rounded-md border border-surface-4 bg-surface-1 px-2 py-2 text-xs leading-relaxed text-text-muted"
       >
         <Ban :size="14" class="mt-0.5 shrink-0" />
-        <span>This issue is ignored and will be skipped by Polish.</span>
+        <span>{{ tr('This issue is ignored and will be skipped by Polish.') }}</span>
       </div>
       <div
         v-else-if="isIssueFixed(selectedIssue)"
         class="mt-3 flex items-start gap-2 rounded-md border border-success/20 bg-success/10 px-2 py-2 text-xs leading-relaxed text-text-secondary"
       >
         <CheckCircle2 :size="14" class="mt-0.5 shrink-0 text-success" />
-        <span>This issue has been fixed by Polish and is archived.</span>
+        <span>{{ tr('This issue has been fixed by Polish and is archived.') }}</span>
       </div>
       <div class="mt-3 flex gap-2">
         <BaseButton
@@ -530,10 +535,10 @@ function toggleIssueGroup(key: string) {
           size="sm"
           @click="toggleIssueIgnored(selectedIssue)"
         >
-          <span>{{ isIssueIgnored(selectedIssue) ? 'Unignore' : 'Ignore issue' }}</span>
+          <span>{{ tr(isIssueIgnored(selectedIssue) ? 'Unignore' : 'Ignore issue') }}</span>
         </BaseButton>
         <BaseButton class="flex-1" variant="secondary" size="sm" @click="startEditAdjustment(selectedIssue)">
-          <span>Edit fix</span>
+          <span>{{ tr('Edit fix') }}</span>
         </BaseButton>
       </div>
       <BaseButton
@@ -545,37 +550,37 @@ function toggleIssueGroup(key: string) {
         @click="submitIssueToPolish(selectedIssue)"
       >
         <Sparkles :size="13" :class="isPolishing ? 'animate-pulse' : ''" />
-        <span>{{ isPolishing ? 'Submitting to Polish...' : 'Send this issue to Polish' }}</span>
+        <span>{{ tr(isPolishing ? 'Submitting to Polish...' : 'Send this issue to Polish') }}</span>
       </BaseButton>
       <div v-if="editingAdjustmentId === selectedIssue.id" class="mt-3">
         <textarea
           v-model="adjustmentDraft"
           class="min-h-20 w-full rounded-md border border-surface-4 bg-surface-1 px-2 py-2 text-xs leading-relaxed text-text-primary outline-none focus:border-accent"
-          placeholder="Describe how this issue should be fixed..."
+          :placeholder="tr('Describe how this issue should be fixed...')"
         ></textarea>
         <div class="mt-2 flex gap-2">
           <BaseButton class="flex-1" variant="primary" size="sm" @click="saveAdjustment(selectedIssue)">
-            <span>Save adjustment</span>
+            <span>{{ tr('Save adjustment') }}</span>
           </BaseButton>
           <BaseButton class="flex-1" variant="secondary" size="sm" @click="cancelAdjustment">
-            <span>Cancel</span>
+            <span>{{ tr('Cancel') }}</span>
           </BaseButton>
         </div>
       </div>
       <BaseButton v-if="isDetailMode" class="mt-3 w-full" variant="primary" size="sm" @click="fixIssue(selectedIssue)">
         <Send :size="13" />
-        <span>Send this to Vibe AI</span>
+        <span>{{ tr('Send this to Vibe AI') }}</span>
       </BaseButton>
     </div>
 
     <div v-if="isWorkflowMode && issues.length" class="shrink-0 border-t border-surface-4 bg-surface-2/60 p-3">
-      <p class="mb-1 text-xs font-semibold text-text-primary">Polish this chapter</p>
+      <p class="mb-1 text-xs font-semibold text-text-primary">{{ tr('Polish this chapter') }}</p>
       <p class="mb-2 text-[10px] leading-relaxed text-text-muted">
-        Submit every open issue in the current chapter. Fixed and ignored issues are skipped.
+        {{ tr('Submit every open issue in the current chapter. Fixed and ignored issues are skipped.') }}
       </p>
       <BaseButton class="w-full" variant="primary" size="sm" :disabled="isPolishing || isProofereading || !openIssues.length" @click="submitToPolish">
         <Sparkles :size="13" :class="isPolishing ? 'animate-pulse' : ''" />
-        <span>{{ submitAllPolishLabel }}</span>
+        <span>{{ tr(submitAllPolishLabel) }}</span>
       </BaseButton>
     </div>
   </div>

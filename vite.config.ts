@@ -5,17 +5,22 @@ import electronRenderer from 'vite-plugin-electron-renderer'
 import { resolve } from 'path'
 import type { IncomingMessage, ServerResponse } from 'http'
 
-function buildModelListEndpoints(type: 'openai' | 'anthropic', baseUrl: string) {
+function buildModelListEndpoints(type: 'openai' | 'openai-responses' | 'anthropic' | 'google', baseUrl: string) {
   const normalizedBase = baseUrl.replace(/\/+$/, '')
   const endpoints = type === 'anthropic'
     ? [
         normalizedBase.endsWith('/v1') ? `${normalizedBase}/models` : `${normalizedBase}/v1/models`,
         normalizedBase.endsWith('/v1') ? `${normalizedBase.replace(/\/v1$/, '')}/v1/models` : `${normalizedBase}/models`,
       ]
-    : [
-        `${normalizedBase}/models`,
-        normalizedBase.endsWith('/v1') ? `${normalizedBase.replace(/\/v1$/, '')}/v1/models` : `${normalizedBase}/v1/models`,
-      ]
+    : type === 'google'
+      ? [
+          `${normalizedBase}/v1beta/models`,
+          `${normalizedBase}/v1/models`,
+        ]
+      : [
+          `${normalizedBase}/models`,
+          normalizedBase.endsWith('/v1') ? `${normalizedBase.replace(/\/v1$/, '')}/v1/models` : `${normalizedBase}/v1/models`,
+        ]
 
   return [...new Set(endpoints.filter(Boolean))]
 }
@@ -48,7 +53,7 @@ function providerModelProxy() {
 
         try {
           const body = await readRequestJson(req)
-          const type = body?.type === 'anthropic' ? 'anthropic' : 'openai'
+          const type = body?.type === 'anthropic' ? 'anthropic' : body?.type === 'google' ? 'google' : body?.type === 'openai-responses' ? 'openai-responses' : 'openai'
           const baseUrl = typeof body?.baseUrl === 'string' ? body.baseUrl : ''
           const apiKey = typeof body?.apiKey === 'string' ? body.apiKey : ''
 
@@ -61,13 +66,15 @@ function providerModelProxy() {
             'Content-Type': 'application/json',
           }
 
-          if (type === 'openai' && apiKey) {
+          if ((type === 'openai' || type === 'openai-responses') && apiKey) {
             headers.Authorization = `Bearer ${apiKey}`
           } else if (type === 'anthropic') {
             headers['anthropic-version'] = '2023-06-01'
             if (apiKey) {
               headers['x-api-key'] = apiKey
             }
+          } else if (type === 'google' && apiKey) {
+            headers['x-goog-api-key'] = apiKey
           }
 
           const endpoints = buildModelListEndpoints(type, baseUrl)
@@ -110,7 +117,7 @@ function providerModelProxy() {
 
         try {
           const body = await readRequestJson(req)
-          const type = body?.type === 'anthropic' ? 'anthropic' : 'openai'
+          const type = body?.type === 'anthropic' ? 'anthropic' : body?.type === 'google' ? 'google' : body?.type === 'openai-responses' ? 'openai-responses' : 'openai'
           const baseUrl = typeof body?.baseUrl === 'string' ? body.baseUrl : ''
           const apiKey = typeof body?.apiKey === 'string' ? body.apiKey : ''
           const model = typeof body?.model === 'string' ? body.model : ''
@@ -127,6 +134,34 @@ function providerModelProxy() {
           }
 
           const normalizedBase = baseUrl.replace(/\/+$/, '')
+          if (type === 'google') {
+            const headers: Record<string, string> = {
+              'Content-Type': 'application/json',
+            }
+            if (apiKey) {
+              headers['x-goog-api-key'] = apiKey
+            }
+
+            try {
+              const response = await fetch(`${normalizedBase}/v1beta/models/${model}:embedContent`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ content: { parts: [{ text }] } }),
+              })
+
+              if (response.ok) {
+                sendJson(res, 200, await response.json())
+                return
+              }
+
+              sendJson(res, 502, { error: `Google embedding request failed: ${response.status} - ${await response.text()}` })
+              return
+            } catch (error: any) {
+              sendJson(res, 502, { error: `Google embedding request failed: ${error instanceof Error ? error.message : String(error)}` })
+              return
+            }
+          }
+
           const endpoints = [
             `${normalizedBase}/embeddings`,
             normalizedBase.endsWith('/v1') ? `${normalizedBase.replace(/\/v1$/, '')}/v1/embeddings` : `${normalizedBase}/v1/embeddings`,
@@ -174,6 +209,7 @@ function providerModelProxy() {
 }
 
 export default defineConfig({
+  base: './',
   plugins: [
     providerModelProxy(),
     vue(),

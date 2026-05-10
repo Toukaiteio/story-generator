@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
+import { translatePhrase } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -22,6 +23,9 @@ const emit = defineEmits<{
 
 const textareaRef = ref<HTMLTextAreaElement>()
 const focused = ref(false)
+const translatedLabel = computed(() => props.label ? translatePhrase(props.label) : '')
+const translatedPlaceholder = computed(() => props.placeholder ? translatePhrase(props.placeholder) : '')
+const translatedError = computed(() => props.error ? translatePhrase(props.error) : '')
 
 function adjustHeight() {
   if (!props.autoResize || !textareaRef.value) return
@@ -36,11 +40,11 @@ watch(() => props.modelValue, () => {
 
 <template>
   <div class="flex flex-col gap-1.5">
-    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ label }}</label>
+    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ translatedLabel }}</label>
     <textarea
       ref="textareaRef"
       :value="modelValue"
-      :placeholder="placeholder"
+      :placeholder="translatedPlaceholder"
       :rows="rows"
       :disabled="disabled"
       :class="[
@@ -54,6 +58,6 @@ watch(() => props.modelValue, () => {
       @focus="focused = true"
       @blur="focused = false"
     />
-    <p v-if="error" class="text-xs text-danger">{{ error }}</p>
+    <p v-if="error" class="text-xs text-danger">{{ translatedError }}</p>
   </div>
 </template>

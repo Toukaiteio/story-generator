@@ -72,7 +72,7 @@ export async function createTextEmbedding({ text, model }: EmbeddingRequest): Pr
       }
     }
 
-    if (providerType === 'openai') {
+    if (providerType === 'openai' || providerType === 'openai-responses') {
       const response = await fetch(`${baseUrl}/embeddings`, {
         method: 'POST',
         headers: {

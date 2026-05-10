@@ -208,17 +208,17 @@ async function handleImportProjectFile() {
   <div class="h-full flex flex-col overflow-hidden">
     <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">Story Projects</h1>
-        <p class="text-xs text-text-secondary mt-0.5">{{ projectStore.sortedProjects.length }} projects</p>
+        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Story Projects') }}</h1>
+        <p class="text-xs text-text-secondary mt-0.5">{{ projectStore.sortedProjects.length }} {{ ui.text('projects') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <BaseButton variant="secondary" size="sm" @click="openImportDialog">
           <Upload :size="14" />
-          <span>Import Project</span>
+          <span>{{ ui.text('Import Project') }}</span>
         </BaseButton>
         <BaseButton variant="primary" size="sm" @click="showCreateDialog = true">
           <Plus :size="14" />
-          <span>New Project</span>
+          <span>{{ ui.text('New Project') }}</span>
         </BaseButton>
       </div>
     </div>
@@ -227,13 +227,13 @@ async function handleImportProjectFile() {
       <EmptyState
         v-if="!projectStore.sortedProjects.length && !projectStore.isLoading"
         :icon="FolderOpen"
-        title="No projects yet"
-        description="Create your first story project to get started with AI-powered story generation."
+        :title="ui.text('No projects yet')"
+        :description="ui.text('Create your first story project to get started with AI-powered story generation.')"
       >
         <template #action>
           <BaseButton variant="primary" size="sm" @click="showCreateDialog = true">
             <Plus :size="14" />
-            <span>Create Project</span>
+            <span>{{ ui.text('Create Project') }}</span>
           </BaseButton>
         </template>
       </EmptyState>

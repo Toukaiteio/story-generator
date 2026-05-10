@@ -1,10 +1,11 @@
 import { useUiStore } from '@/stores/ui'
+import { translatePhrase } from '@/i18n'
 
 export function useToast() {
   const ui = useUiStore()
 
   function toast(message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info', duration?: number) {
-    ui.addToast({ type, message, duration })
+    ui.addToast({ type, message: translatePhrase(message), duration })
   }
 
   return {

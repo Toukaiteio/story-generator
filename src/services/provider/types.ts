@@ -3,6 +3,7 @@ import type { ToolDefinition, ToolCall, ToolResult } from './tools'
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
+  onReasoningToken?: (token: string) => void
   onComplete: (fullText: string) => void
   onError: (error: Error) => void
 }
@@ -21,6 +22,10 @@ export interface FunctionCallingResponse {
   finish_reason: 'stop' | 'tool_calls' | 'length'
 }
 
+export interface ToolCallOptions {
+  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } }
+}
+
 export interface StreamWithToolsCallbacks extends Omit<StreamCallbacks, 'onComplete'> {
   onToolCall: (toolCall: ToolCall) => void
   onToolResult: (result: ToolResult) => void
@@ -29,9 +34,9 @@ export interface StreamWithToolsCallbacks extends Omit<StreamCallbacks, 'onCompl
 
 export interface ProviderAdapter {
   chat(messages: ChatMessage[], options: ChatOptions): Promise<string>
-  chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[]): Promise<FunctionCallingResponse>
+  chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse>
   stream(messages: ChatMessage[], options: ChatOptions, callbacks: StreamCallbacks): Promise<void>
-  streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks): Promise<void>
+  streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks, toolOptions?: ToolCallOptions): Promise<void>
 }
 
 export interface ChatOptions {
@@ -40,4 +45,5 @@ export interface ChatOptions {
   temperature: number
   apiKey: string
   baseUrl: string
+  signal?: AbortSignal
 }

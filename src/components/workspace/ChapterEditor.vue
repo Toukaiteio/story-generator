@@ -1,24 +1,33 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useProjectStore } from '@/stores/project'
+import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
+import { useWritingStyleStore } from '@/stores/writingStyle'
+import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
 import { detectMarkdown, markdownToHtml } from '@/services/markdown'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { countWords } from '@/services/agent/validation'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import VibeAssistant from '@/components/workspace/VibeAssistant.vue'
 import EditingAssistant from '@/components/workspace/EditingAssistant.vue'
-import ProofreadingAssistant from '@/components/workspace/ProofreadingAssistant.vue'
-import { Save, Eye, EyeOff, FileText, Type, Sparkles, Clock, RotateCcw, Code2, BookOpen } from 'lucide-vue-next'
-import type { Chapter, ChapterContentVersion } from '@/types/chapter'
+import { Save, Eye, EyeOff, FileText, Type, Sparkles, Clock, RotateCcw, Code2, BookOpen, Send } from 'lucide-vue-next'
+import type { Chapter, ChapterContentVersion, ChapterOutline } from '@/types/chapter'
 
 const props = defineProps<{
   chapterId: string
 }>()
 
 const projectStore = useProjectStore()
+const genStore = useGenerationStore()
+const writingStyleStore = useWritingStyleStore()
+const ui = useUiStore()
 const toast = useToast()
+const tr = translatePhrase
 
 const project = computed(() => projectStore.activeProject)
 const chapter = computed(() => {
@@ -30,10 +39,23 @@ const title = ref('')
 const content = ref('')
 const showVersions = ref(false)
 const viewMode = ref<'edit' | 'preview'>('edit')
-const assistantTab = ref<'vibe' | 'editing' | 'proofreading'>('vibe')
+const assistantTab = ref<'outline' | 'vibe' | 'editing'>('outline')
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 const contentPreviewRef = ref<HTMLElement | null>(null)
 const selectedProofreadingIssue = ref<any | null>(null)
+const outlineObjective = ref('')
+const outlineConflict = ref('')
+const outlineKeyEvents = ref('')
+const outlineCharacterActions = ref('')
+const outlineInfoReveals = ref('')
+const outlineEndingHook = ref('')
+const selectedStyleId = ref('default')
+type OutlineEditField = 'objective' | 'conflict' | 'keyEvents' | 'characterActions' | 'infoReveals' | 'endingHook'
+const editingOutlineField = ref<OutlineEditField | null>(null)
+let outlineSaveTimer: ReturnType<typeof setTimeout> | null = null
+let syncingOutline = false
+let loadedChapterId = ''
+let lastReportedUnsavedState = false
 
 function createContentVersion(label: string, versionContent: string, issues?: any[]): ChapterContentVersion {
   return {
@@ -62,11 +84,143 @@ function buildChapterWithDraftUpdate(ch: Chapter, nextContent: string) {
   }
 }
 
-watch(chapter, (ch) => {
-  if (ch) {
+const isDirty = computed(() => {
+  const ch = chapter.value
+  if (!ch) return false
+  return title.value !== (ch.title || '') || content.value !== (ch.content || '')
+})
+
+const styleOptions = computed(() => [
+  { label: 'Default (No Reference)', value: 'default' },
+  ...writingStyleStore.styles.map(style => ({ label: style.name, value: style.id })),
+])
+
+function listToText(items?: string[]) {
+  return Array.isArray(items) ? items.join('\n') : ''
+}
+
+function parseOutlineList(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map(item => item.replace(/^\s*[-*]\s+/, '').trim())
+    .filter(Boolean)
+}
+
+function syncOutlineDraft(outline: ChapterOutline) {
+  syncingOutline = true
+  outlineObjective.value = outline.objective || ''
+  outlineConflict.value = outline.conflict || ''
+  outlineKeyEvents.value = listToText(outline.keyEvents)
+  outlineCharacterActions.value = listToText(outline.characterActions)
+  outlineInfoReveals.value = listToText(outline.infoReveals)
+  outlineEndingHook.value = outline.endingHook || ''
+  nextTick(() => {
+    syncingOutline = false
+  })
+}
+
+function syncChapterDraft(ch: Chapter) {
+  const isNewChapter = loadedChapterId !== ch.id
+  if (isNewChapter || !isDirty.value) {
     title.value = ch.title || ''
     content.value = ch.content || ''
+    loadedChapterId = ch.id
   }
+  syncOutlineDraft(ch.outline)
+  selectedStyleId.value = project.value?.styleId || 'default'
+}
+
+watch(chapter, (ch) => {
+  if (ch) syncChapterDraft(ch)
+}, { immediate: true })
+
+function buildOutlineDraft(): ChapterOutline {
+  return {
+    objective: outlineObjective.value.trim(),
+    conflict: outlineConflict.value.trim(),
+    keyEvents: parseOutlineList(outlineKeyEvents.value),
+    characterActions: parseOutlineList(outlineCharacterActions.value),
+    infoReveals: parseOutlineList(outlineInfoReveals.value),
+    endingHook: outlineEndingHook.value.trim(),
+  }
+}
+
+async function saveOutlineNow() {
+  if (!project.value || !chapter.value) return
+  if (outlineSaveTimer) {
+    clearTimeout(outlineSaveTimer)
+    outlineSaveTimer = null
+  }
+  const nextOutline = buildOutlineDraft()
+  const chapters = project.value.chapters.map(ch =>
+    ch.id === props.chapterId
+      ? { ...ch, outline: nextOutline }
+      : ch
+  )
+  const saved = await projectStore.updateProject(project.value.id, { chapters })
+  if (!saved) {
+    toast.error('Failed to save chapter outline')
+  }
+}
+
+async function updateWritingStyle(styleId: string) {
+  if (!project.value) return
+  selectedStyleId.value = styleId
+  const saved = await projectStore.updateProject(project.value.id, {
+    styleId,
+    style: writingStyleStore.resolveStyleContent(styleId),
+  })
+  if (!saved) {
+    toast.error('Failed to save writing style')
+  }
+}
+
+function scheduleOutlineSave() {
+  if (syncingOutline) return
+  if (outlineSaveTimer) clearTimeout(outlineSaveTimer)
+  outlineSaveTimer = setTimeout(() => {
+    void saveOutlineNow()
+  }, 450)
+}
+
+function editOutlineField(field: OutlineEditField) {
+  editingOutlineField.value = field
+}
+
+async function finishOutlineEdit() {
+  await saveOutlineNow()
+  editingOutlineField.value = null
+}
+
+function setWindowUnsavedState(value: boolean) {
+  lastReportedUnsavedState = value
+  window.electronAPI?.window?.setUnsavedChanges?.(value)
+  ui.setWorkspaceNodeUnsaved(`chapter-${props.chapterId}`, value)
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!isDirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeUnmount(() => {
+  if (outlineSaveTimer) {
+    void saveOutlineNow()
+  }
+  window.removeEventListener('keydown', handleSaveShortcut)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  if (lastReportedUnsavedState) setWindowUnsavedState(false)
+  else ui.setWorkspaceNodeUnsaved(`chapter-${props.chapterId}`, false)
+})
+
+onMounted(() => {
+  window.addEventListener('keydown', handleSaveShortcut)
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+watch(isDirty, dirty => {
+  setWindowUnsavedState(dirty)
 }, { immediate: true })
 
 async function save() {
@@ -92,6 +246,13 @@ async function save() {
     return
   }
   toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
+}
+
+function handleSaveShortcut(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    void save()
+  }
 }
 
 async function restoreVersion(version: { content: string; proofreadingIssues?: any[] }) {
@@ -146,8 +307,7 @@ const statusVariant = computed(() => {
 })
 
 const wordCount = computed(() => {
-  const text = content.value || ''
-  return text.trim() ? text.trim().split(/\s+/).length : 0
+  return countWords(content.value || '')
 })
 
 const isMarkdownContent = computed(() => project.value?.writingFormat === 'markdown')
@@ -217,7 +377,6 @@ function findIssueMatch(issue: any): TextMatch | null {
 
   const sources = [
     content.value,
-    chapter.value?.polishedContent ?? '',
     chapter.value?.content ?? '',
   ].filter(Boolean)
 
@@ -243,7 +402,6 @@ function getIssueSegmentIndex(issue: any) {
 function getContentSources() {
   return [
     content.value,
-    chapter.value?.polishedContent ?? '',
     chapter.value?.content ?? '',
   ].filter(Boolean)
 }
@@ -305,14 +463,27 @@ const renderedContent = computed(() => {
 })
 
 const vibeContext = computed(() => ({
+  projectId: project.value?.id ?? '',
+  directoryPath: project.value?.directoryPath ?? '',
+  workspaceSnapshot: chapter.value
+    ? {
+        type: 'chapter-detail',
+        chapterId: chapter.value.id,
+        title: title.value,
+        content: content.value,
+        outline: buildOutlineDraft(),
+        styleId: selectedStyleId.value,
+      }
+    : null,
   writingFormat: isMarkdownContent.value ? 'markdown' : 'plaintext',
   writingStyle: project.value?.style ?? '',
   outline: project.value?.outline ?? '',
   chapter: chapter.value
     ? {
+        id: chapter.value.id,
         index: chapter.value.index,
         title: title.value,
-        outline: chapter.value.outline,
+        outline: buildOutlineDraft(),
         content: content.value,
       }
     : null,
@@ -344,13 +515,72 @@ function applyVibeContent(nextContent: string) {
   if (project.value.writingFormat === 'markdown' && detectMarkdown(content.value)) viewMode.value = 'preview'
 }
 
+function rewindVibeWorkspace(snapshot: any) {
+  if (!snapshot || snapshot.type !== 'chapter-detail') return
+  if (snapshot.chapterId && snapshot.chapterId !== props.chapterId) return
+  title.value = typeof snapshot.title === 'string' ? snapshot.title : title.value
+  content.value = typeof snapshot.content === 'string' ? snapshot.content : content.value
+  if (snapshot.outline) syncOutlineDraft(snapshot.outline)
+  if (typeof snapshot.styleId === 'string') selectedStyleId.value = snapshot.styleId
+  viewMode.value = 'edit'
+  toast.success('Workspace snapshot restored')
+}
+
 async function sendToVibe(instruction: string) {
   assistantTab.value = 'vibe'
   await nextTick()
   vibeAssistant.value?.submitRequest(instruction)
 }
 
-async function saveProofreadingIssues(issues: any[]) {
+function formatList(items?: string[]) {
+  return Array.isArray(items) && items.length
+    ? items.map(item => `- ${item}`).join('\n')
+    : ''
+}
+
+const chapterOutlineText = computed(() => {
+  const outline = buildOutlineDraft()
+  if (!outline) return ''
+  return [
+    outline.objective ? `Objective:\n${outline.objective}` : '',
+    outline.conflict ? `Conflict:\n${outline.conflict}` : '',
+    formatList(outline.keyEvents) ? `Plot Beats:\n${formatList(outline.keyEvents)}` : '',
+    formatList(outline.characterActions) ? `Character Actions:\n${formatList(outline.characterActions)}` : '',
+    formatList(outline.infoReveals) ? `Reveals:\n${formatList(outline.infoReveals)}` : '',
+    outline.endingHook ? `Ending Hook:\n${outline.endingHook}` : '',
+  ].filter(Boolean).join('\n\n')
+})
+
+const selectedWritingStyleForVibe = computed(() => {
+  const styleId = selectedStyleId.value || project.value?.styleId || 'default'
+  const content = writingStyleStore.resolveStyleContent(styleId).trim()
+  if (!content) return ''
+  const style = writingStyleStore.getStyleById(styleId)
+  return [
+    style?.name ? `Style Name: ${style.name}` : '',
+    style?.description ? `Style Description: ${style.description}` : '',
+    `Style Guide:\n${content}`,
+  ].filter(Boolean).join('\n\n')
+})
+
+function draftFromOutlineWithVibe() {
+  if (!chapter.value) return
+  const prompt = [
+    `Draft Chapter ${chapter.value.index + 1}: ${title.value || chapter.value.title || 'Untitled'} from the chapter outline.`,
+    'Use the outline as the primary source of truth and create a complete first draft for this chapter.',
+    'Preserve the project language, writing format, writing style, characters, and continuity.',
+    selectedWritingStyleForVibe.value
+      ? `Writing Style to follow:\n${selectedWritingStyleForVibe.value}`
+      : 'Writing Style to follow: use the project default style.',
+    content.value.trim()
+      ? 'The editor already contains text. Rewrite or expand it only where needed to align with the outline.'
+      : 'The editor is empty. Create the initial draft directly from the outline.',
+    `Chapter Outline:\n${chapterOutlineText.value || JSON.stringify(chapter.value.outline, null, 2)}`,
+  ].join('\n\n')
+  void sendToVibe(prompt)
+}
+
+async function saveProofreadingIssues(issues: ChapterAuditIssue[]) {
   if (!project.value || !chapter.value) return
   const chapters = project.value.chapters.map(ch =>
     ch.id === props.chapterId
@@ -368,7 +598,7 @@ async function saveProofreadingIssues(issues: any[]) {
   }
 }
 
-async function handleProofreadingIssueSelected(issue: any) {
+async function handleProofreadingIssueSelected(issue: ChapterAuditIssue) {
   selectedProofreadingIssue.value = issue
   viewMode.value = 'preview'
   await nextTick()
@@ -386,6 +616,29 @@ async function handleProofreadingIssueSelected(issue: any) {
 
   toast.warning('Could not locate this excerpt in the current chapter text. It may come from an older proofreading run.')
 }
+
+async function polishProofreadingIssue(issue?: ChapterAuditIssue) {
+  if (!project.value || !chapter.value || genStore.isGenerating) return
+  const issues = issue
+    ? [issue]
+    : (chapter.value.proofreadingIssues || []).filter(item => !item.ignored && item.polishStatus !== 'fixed')
+  if (!issues.length) {
+    toast.warning('No available issues to polish')
+    return
+  }
+
+  try {
+    await saveProofreadingIssues(chapter.value.proofreadingIssues || issues)
+    await genStore.polishChapter(project.value.id, chapter.value.id, issues)
+    const latest = projectStore.getProjectById(project.value.id)?.chapters.find(item => item.id === chapter.value?.id)
+    if (latest) {
+      content.value = latest.content || content.value
+    }
+    toast.success(issue ? 'Issue sent to Polish AI' : 'Issues sent to Polish AI')
+  } catch (error: any) {
+    toast.error(error?.message || 'Polish AI failed')
+  }
+}
 </script>
 
 <template>
@@ -398,30 +651,33 @@ async function handleProofreadingIssueSelected(issue: any) {
         </div>
         <div class="flex-1 flex flex-col gap-1 min-w-0">
           <div class="flex items-center gap-3">
-            <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">Chapter {{ chapter.index + 1 }}</span>
+            <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">{{ tr('Chapter') }} {{ chapter.index + 1 }}</span>
             <BaseTag :variant="statusVariant" size="sm" class="uppercase tracking-wider font-semibold text-[10px] px-2">{{ chapter.status }}</BaseTag>
+            <BaseTag v-if="isDirty" variant="warning" size="sm" class="uppercase tracking-wider font-semibold text-[10px] px-2">
+              {{ tr('Unsaved changes') }}
+            </BaseTag>
           </div>
           <input 
             v-model="title" 
             class="text-xl font-bold text-text-primary bg-transparent outline-none placeholder:text-text-muted/50 truncate w-full transition-colors focus:text-accent"
-            placeholder="Enter Chapter Title..."
+            :placeholder="tr('Enter Chapter Title...')"
           />
         </div>
       </div>
 
       <div class="flex items-center gap-3 shrink-0 sm:ml-4">
         <BaseTag :variant="isMarkdownContent ? 'accent' : 'default'" size="sm" class="hidden md:inline-flex">
-          {{ isMarkdownContent ? 'Markdown' : 'Plain Text' }}
+          {{ tr(isMarkdownContent ? 'Markdown' : 'Plain Text') }}
         </BaseTag>
         <div class="px-2.5 py-1.5 rounded-md bg-surface-2 border border-surface-3 text-xs text-text-secondary flex items-center gap-1.5 hidden md:flex">
           <Type :size="14" class="text-text-muted" />
-          <span class="text-text-muted">Words:</span>
+          <span class="text-text-muted">{{ tr('Words:') }}</span>
           <span class="text-text-primary font-medium">{{ wordCount }}</span>
         </div>
         <BaseButton variant="secondary" size="md" @click="showVersions = !showVersions" class="hover:border-surface-4">
           <Eye v-if="!showVersions" :size="16" />
           <EyeOff v-else :size="16" />
-          <span>{{ showVersions ? 'Editor' : 'Versions' }}</span>
+          <span>{{ tr(showVersions ? 'Editor' : 'Versions') }}</span>
         </BaseButton>
         <div v-if="!showVersions" class="hidden lg:flex rounded-md border border-surface-4 bg-surface-2 p-0.5">
           <button
@@ -432,7 +688,7 @@ async function handleProofreadingIssueSelected(issue: any) {
             @click="viewMode = 'edit'"
           >
             <Code2 :size="13" />
-            Edit
+            {{ tr('Edit') }}
           </button>
           <button
             :class="[
@@ -442,12 +698,13 @@ async function handleProofreadingIssueSelected(issue: any) {
             @click="viewMode = 'preview'"
           >
             <BookOpen :size="13" />
-            Preview
+            {{ tr('Preview') }}
           </button>
         </div>
         <BaseButton variant="primary" size="md" @click="save">
           <Save :size="16" />
-          <span>Save Changes</span>
+          <span>{{ tr('Save Changes') }}</span>
+          <span class="hidden text-[10px] opacity-70 xl:inline">Ctrl+S</span>
         </BaseButton>
       </div>
     </div>
@@ -456,14 +713,14 @@ async function handleProofreadingIssueSelected(issue: any) {
       v-if="chapter.proofreadingIssuesStale"
       class="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-6 py-2 text-xs"
     >
-      <span class="text-warning">Draft changed after proofreading. Existing issues may no longer match this text.</span>
+      <span class="text-warning">{{ tr('Draft changed after proofreading. Existing issues may no longer match this text.') }}</span>
       <BaseButton
         v-if="chapter.contentVersions?.some(version => version.proofreadingIssues?.length)"
         variant="secondary"
         size="sm"
         @click="restoreLatestIssueSnapshot"
       >
-        Restore issue snapshot
+        {{ tr('Restore issue snapshot') }}
       </BaseButton>
     </div>
 
@@ -476,7 +733,7 @@ async function handleProofreadingIssueSelected(issue: any) {
               v-if="viewMode === 'edit'"
               v-model="content"
               class="w-full flex-1 min-h-[60vh] bg-transparent text-text-primary resize-none outline-none font-serif selection:bg-accent/30 selection:text-text-primary"
-              placeholder="Start writing your chapter here..."
+              :placeholder="tr('Start writing your chapter here...')"
               style="font-size: 1.125rem; line-height: 1.8; letter-spacing: 0.01em;"
             />
 
@@ -484,50 +741,30 @@ async function handleProofreadingIssueSelected(issue: any) {
               v-else
               ref="contentPreviewRef"
               class="markdown-preview min-h-[60vh] text-text-primary"
-              v-html="renderedContent || '<p class=&quot;text-text-muted&quot;>No content to preview.</p>'"
+              v-html="renderedContent || `<p class=&quot;text-text-muted&quot;>${tr('No content to preview.')}</p>`"
             />
           </div>
 
           <div v-else class="flex-1 flex flex-col">
             <div class="flex items-center justify-between mb-10 pb-4 border-b border-surface-4">
               <div>
-                <h3 class="text-xl font-bold text-text-primary">Generation History</h3>
-                <p class="text-xs text-text-secondary mt-1">Review and restore content from different generation stages.</p>
+                <h3 class="text-xl font-bold text-text-primary">{{ tr('Generation History') }}</h3>
+                <p class="text-xs text-text-secondary mt-1">{{ tr('Review and restore content from different generation stages.') }}</p>
               </div>
             </div>
 
             <div class="space-y-16">
-              <!-- Polished Version -->
-              <div v-if="chapter.polishedContent" class="group relative">
-                <div class="flex items-center gap-3 mb-6">
-                  <div class="w-8 h-8 rounded-full bg-success/10 text-success flex items-center justify-center shrink-0">
-                    <Sparkles :size="16" />
-                  </div>
-                  <span class="text-xs font-black uppercase tracking-widest text-success">Polished Version</span>
-                  <div class="h-px flex-1 bg-surface-4"></div>
-                  <span class="text-[10px] font-bold text-text-muted uppercase">{{ (chapter.polishedContent.trim().split(/\s+/).length) }} words</span>
-                  <BaseButton variant="secondary" size="sm" @click="restoreVersion({ content: chapter.polishedContent })" class="ml-4">
-                    <RotateCcw :size="14" class="mr-1.5" />
-                    Restore
-                  </BaseButton>
-                </div>
-                <div class="text-text-primary font-serif text-lg leading-relaxed whitespace-pre-wrap px-2">
-                  {{ chapter.polishedContent }}
-                </div>
-              </div>
-
-              <!-- Draft Version -->
               <div v-if="chapter.content" class="group relative">
                 <div class="flex items-center gap-3 mb-6">
                   <div class="w-8 h-8 rounded-full bg-surface-3 text-text-muted flex items-center justify-center shrink-0">
                     <Clock :size="16" />
                   </div>
-                  <span class="text-xs font-black uppercase tracking-widest text-text-muted">Initial Draft</span>
+                  <span class="text-xs font-black uppercase tracking-widest text-text-muted">{{ tr('Current Text') }}</span>
                   <div class="h-px flex-1 bg-surface-4"></div>
-                  <span class="text-[10px] font-bold text-text-muted uppercase">{{ (chapter.content.trim().split(/\s+/).length) }} words</span>
+                  <span class="text-[10px] font-bold text-text-muted uppercase">{{ countWords(chapter.content) }} {{ tr('words') }}</span>
                   <BaseButton variant="secondary" size="sm" @click="restoreVersion({ content: chapter.content })" class="ml-4">
                     <RotateCcw :size="14" class="mr-1.5" />
-                    Restore
+                    {{ tr('Restore') }}
                   </BaseButton>
                 </div>
                 <div class="text-text-primary font-serif text-lg leading-relaxed whitespace-pre-wrap px-2">
@@ -540,7 +777,7 @@ async function handleProofreadingIssueSelected(issue: any) {
                   <div class="w-8 h-8 rounded-full bg-surface-3 text-text-muted flex items-center justify-center shrink-0">
                     <Clock :size="16" />
                   </div>
-                  <span class="text-xs font-black uppercase tracking-widest text-text-muted">Saved Draft Versions</span>
+                  <span class="text-xs font-black uppercase tracking-widest text-text-muted">{{ tr('Saved Draft Versions') }}</span>
                   <div class="h-px flex-1 bg-surface-4"></div>
                 </div>
                 <div class="space-y-4">
@@ -554,16 +791,16 @@ async function handleProofreadingIssueSelected(issue: any) {
                         <p class="truncate text-xs font-semibold text-text-primary">{{ version.label }}</p>
                         <p class="text-[10px] text-text-muted">
                           {{ new Date(version.createdAt).toLocaleString() }}
-                          <span v-if="version.proofreadingIssues?.length"> · includes proofreading issues</span>
+                          <span v-if="version.proofreadingIssues?.length"> · {{ tr('includes proofreading issues') }}</span>
                         </p>
                       </div>
                       <div class="flex shrink-0 gap-2">
                         <BaseButton variant="secondary" size="sm" @click="restoreVersion(version)">
                           <RotateCcw :size="14" />
-                          Restore
+                          {{ tr('Restore') }}
                         </BaseButton>
                         <BaseButton variant="danger" size="sm" @click="deleteVersion(version.id)">
-                          Delete
+                          {{ tr('Delete') }}
                         </BaseButton>
                       </div>
                     </div>
@@ -572,12 +809,12 @@ async function handleProofreadingIssueSelected(issue: any) {
                 </div>
               </div>
 
-              <div v-if="!chapter.content && !chapter.polishedContent" class="h-[40vh] flex flex-col items-center justify-center text-center">
+              <div v-if="!chapter.content" class="h-[40vh] flex flex-col items-center justify-center text-center">
                 <div class="w-16 h-16 rounded-full bg-surface-2 flex items-center justify-center mb-4 border border-surface-3">
                   <FileText :size="24" class="text-text-muted" />
                 </div>
-                <p class="text-base font-medium text-text-primary">No content generated yet</p>
-                <p class="text-sm text-text-secondary mt-1 max-w-sm">Use the generation tools to create content for this chapter.</p>
+                <p class="text-base font-medium text-text-primary">{{ tr('No content generated yet') }}</p>
+                <p class="text-sm text-text-secondary mt-1 max-w-sm">{{ tr('Use the generation tools to create content for this chapter.') }}</p>
               </div>
             </div>
           </div>
@@ -589,11 +826,20 @@ async function handleProofreadingIssueSelected(issue: any) {
           <button
             :class="[
               'flex-1 rounded text-[11px] font-medium transition-colors',
+              assistantTab === 'outline' ? 'bg-surface-4 text-text-primary' : 'text-text-secondary hover:text-text-primary',
+            ]"
+            @click="assistantTab = 'outline'"
+          >
+            {{ tr('Outline') }}
+          </button>
+          <button
+            :class="[
+              'flex-1 rounded text-[11px] font-medium transition-colors',
               assistantTab === 'vibe' ? 'bg-surface-4 text-text-primary' : 'text-text-secondary hover:text-text-primary',
             ]"
             @click="assistantTab = 'vibe'"
           >
-            Vibe AI
+            {{ tr('Vibe AI') }}
           </button>
           <button
             :class="[
@@ -602,58 +848,202 @@ async function handleProofreadingIssueSelected(issue: any) {
             ]"
             @click="assistantTab = 'editing'"
           >
-            Editing AI
-          </button>
-          <button
-            :class="[
-              'flex-1 rounded text-[11px] font-medium transition-colors',
-              assistantTab === 'proofreading' ? 'bg-surface-4 text-text-primary' : 'text-text-secondary hover:text-text-primary',
-            ]"
-            @click="assistantTab = 'proofreading'"
-          >
-            Proofreading
+            {{ tr('Editing AI') }}
           </button>
         </div>
 
-        <VibeAssistant
-          v-if="assistantTab === 'vibe'"
-          ref="vibeAssistant"
-          stage="chapter-detail"
-          mode="editor-agent"
-          :context="vibeContext"
-          @apply="applyVibeContent"
-        />
-        <EditingAssistant
-          v-else-if="assistantTab === 'editing'"
-          :project-id="project?.id"
-          :chapter-title="title"
-          :chapter-number="chapter.index + 1"
-          :content="content"
-          :chapter-plan="chapter.outline"
-          :characters="characterContext"
-          :relationships="relationshipContext"
-          :story-outline="project?.outline ?? ''"
-          :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
-          @fix="sendToVibe"
-        />
-        <ProofreadingAssistant
-          v-else
-          :project-id="project?.id"
-          :chapter-id="chapter.id"
-          :chapter-title="title"
-          :chapter-number="chapter.index + 1"
-          :content="content"
-          :chapter-outline="chapter.outline"
-          :characters="characterContext"
-          :relationships="relationshipContext"
-          :story-outline="project?.outline ?? ''"
-          :language="project?.language ?? 'English'"
-          :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
-          :initial-issues="chapter.proofreadingIssues || []"
-          @fix="sendToVibe"
-          @issuesFound="saveProofreadingIssues"
-          @issueSelected="handleProofreadingIssueSelected"
-        />
+        <div v-if="assistantTab === 'outline'" class="flex min-h-0 flex-1 flex-col">
+          <div class="shrink-0 border-b border-surface-4 px-4 py-3">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold text-text-primary">{{ tr('Chapter Outline') }}</p>
+                <p class="mt-0.5 text-[10px] text-text-muted">{{ tr('Use this as an assisted drafting brief.') }}</p>
+              </div>
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :disabled="!chapterOutlineText.trim()"
+                @click="draftFromOutlineWithVibe"
+              >
+                <Send :size="13" />
+                <span>{{ tr('Send to Vibe') }}</span>
+              </BaseButton>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto custom-scrollbar px-4 py-4">
+            <div v-if="chapterOutlineText.trim() || chapter" class="space-y-4 text-xs leading-relaxed text-text-secondary">
+              <section class="outline-display-card cursor-default">
+                <p class="mb-2 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Writing Style') }}</p>
+                <BaseSelect
+                  :model-value="selectedStyleId"
+                  :options="styleOptions"
+                  placeholder="Select style"
+                  @update:model-value="updateWritingStyle"
+                  @click.stop
+                />
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('objective')">
+                <p class="mb-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Objective') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'objective'"
+                  v-model="outlineObjective"
+                  rows="3"
+                  class="outline-edit-field"
+                  :placeholder="tr('What this chapter must accomplish...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <p v-else class="text-text-primary">
+                  {{ outlineObjective || tr('Click to add an objective...') }}
+                </p>
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('conflict')">
+                <p class="mb-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Conflict') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'conflict'"
+                  v-model="outlineConflict"
+                  rows="3"
+                  class="outline-edit-field"
+                  :placeholder="tr('Core tension, obstacle, or dilemma...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <p v-else class="text-text-primary">
+                  {{ outlineConflict || tr('Click to add a conflict...') }}
+                </p>
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('keyEvents')">
+                <p class="mb-2 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Plot Beats') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'keyEvents'"
+                  v-model="outlineKeyEvents"
+                  rows="5"
+                  class="outline-edit-field"
+                  :placeholder="tr('One plot beat per line...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <ul v-else-if="parseOutlineList(outlineKeyEvents).length" class="space-y-1.5">
+                  <li v-for="item in parseOutlineList(outlineKeyEvents)" :key="item" class="flex gap-2">
+                    <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+                    <span>{{ item }}</span>
+                  </li>
+                </ul>
+                <p v-else class="text-text-muted">{{ tr('Click to add plot beats...') }}</p>
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('characterActions')">
+                <p class="mb-2 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Character Actions') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'characterActions'"
+                  v-model="outlineCharacterActions"
+                  rows="5"
+                  class="outline-edit-field"
+                  :placeholder="tr('One character action per line...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <ul v-else-if="parseOutlineList(outlineCharacterActions).length" class="space-y-1.5">
+                  <li v-for="item in parseOutlineList(outlineCharacterActions)" :key="item" class="flex gap-2">
+                    <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>
+                    <span>{{ item }}</span>
+                  </li>
+                </ul>
+                <p v-else class="text-text-muted">{{ tr('Click to add character actions...') }}</p>
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('infoReveals')">
+                <p class="mb-2 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Reveals') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'infoReveals'"
+                  v-model="outlineInfoReveals"
+                  rows="4"
+                  class="outline-edit-field"
+                  :placeholder="tr('One reveal per line...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <ul v-else-if="parseOutlineList(outlineInfoReveals).length" class="space-y-1.5">
+                  <li v-for="item in parseOutlineList(outlineInfoReveals)" :key="item" class="flex gap-2">
+                    <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-success"></span>
+                    <span>{{ item }}</span>
+                  </li>
+                </ul>
+                <p v-else class="text-text-muted">{{ tr('Click to add reveals...') }}</p>
+              </section>
+              <section class="outline-display-card" @click="editOutlineField('endingHook')">
+                <p class="mb-1 text-[10px] font-bold uppercase tracking-wider text-text-muted">{{ tr('Ending Hook') }}</p>
+                <textarea
+                  v-if="editingOutlineField === 'endingHook'"
+                  v-model="outlineEndingHook"
+                  rows="3"
+                  class="outline-edit-field"
+                  :placeholder="tr('Final hook, turn, or question...')"
+                  autofocus
+                  @click.stop
+                  @input="scheduleOutlineSave"
+                  @blur="finishOutlineEdit"
+                  @keydown.esc.prevent="editingOutlineField = null"
+                />
+                <p v-else class="text-text-primary">
+                  {{ outlineEndingHook || tr('Click to add an ending hook...') }}
+                </p>
+              </section>
+            </div>
+
+            <div v-else class="flex h-full flex-col items-center justify-center px-8 text-center">
+              <Sparkles :size="24" class="mb-3 text-text-muted" />
+              <p class="text-sm font-medium text-text-primary">{{ tr('No chapter outline yet') }}</p>
+              <p class="mt-1 text-xs text-text-secondary">{{ tr('Create or generate a chapter outline before sending it to Vibe AI.') }}</p>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="assistantTab === 'vibe'" class="min-h-0 flex-1">
+          <VibeAssistant
+            ref="vibeAssistant"
+            stage="chapter-detail"
+            mode="editor-agent"
+            :context="vibeContext"
+            @apply="applyVibeContent"
+            @rewind="rewindVibeWorkspace"
+          />
+        </div>
+        <div v-else-if="assistantTab === 'editing'" class="min-h-0 flex-1">
+          <EditingAssistant
+            :project-id="project?.id"
+            :chapter-title="title"
+            :chapter-number="chapter.index + 1"
+            :content="content"
+            :chapter-plan="chapter.outline"
+            :characters="characterContext"
+            :relationships="relationshipContext"
+            :story-outline="project?.outline ?? ''"
+            :language="project?.language ?? 'English'"
+            :writing-format="isMarkdownContent ? 'markdown' : 'plaintext'"
+            :chapter-id="chapter.id"
+            :initial-issues="chapter.proofreadingIssues || []"
+            :is-polishing="genStore.isGenerating && genStore.currentStage === 'polishing'"
+            @fix="sendToVibe"
+            @issuesFound="saveProofreadingIssues"
+            @issueSelected="handleProofreadingIssueSelected"
+            @quickSubmitPolish="polishProofreadingIssue"
+          />
+        </div>
       </aside>
     </div>
   </div>
@@ -765,5 +1155,47 @@ async function handleProofreadingIssueSelected(issue: any) {
 
 .markdown-preview :deep(th) {
   background: #1c2128;
+}
+
+.outline-display-card {
+  cursor: text;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-surface-4, #30363d);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0.75rem;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.outline-display-card:hover {
+  border-color: rgba(88, 166, 255, 0.35);
+  background: rgba(88, 166, 255, 0.04);
+}
+
+.outline-display-card.cursor-default {
+  cursor: default;
+}
+
+.outline-edit-field {
+  min-height: 2.5rem;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.45rem 0.5rem;
+  color: #e6edf3;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.outline-edit-field::placeholder {
+  color: #6b7280;
+}
+
+.outline-edit-field:focus {
+  border-color: rgba(88, 166, 255, 0.45);
+  background: rgba(88, 166, 255, 0.06);
+  outline: none;
 }
 </style>

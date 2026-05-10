@@ -107,9 +107,11 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
 
 <template>
   <div v-if="projectStore.activeProject" class="h-full flex flex-col overflow-hidden">
-    <div class="shrink-0">
-      <GenerationControls />
-    </div>
+    <Transition name="controls-collapse">
+      <div v-if="activeView !== 'chapter'" class="shrink-0 overflow-hidden">
+        <GenerationControls />
+      </div>
+    </Transition>
 
     <div class="shrink-0 px-4">
       <StreamPreview />
@@ -157,8 +159,8 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
       >
         <div class="mt-4 flex items-center gap-2 rounded-md border border-surface-4 bg-surface-1/95 px-3 py-2 text-xs text-text-secondary shadow-lg">
           <Lock :size="13" class="text-warning" />
-          <span class="font-medium text-text-primary">Following Generate All</span>
-          <span>{{ genStore.progressMessage || 'Workflow is running...' }}</span>
+          <span class="font-medium text-text-primary">{{ ui.text('Following Generate All') }}</span>
+          <span>{{ ui.text(genStore.progressMessage || 'Workflow is running...') }}</span>
           <Loader2 :size="13" class="animate-spin text-accent" />
         </div>
       </div>
@@ -168,15 +170,30 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
   <div v-else class="h-full flex items-center justify-center">
     <EmptyState
       :icon="PenTool"
-      title="No project selected"
-      description="Select a project from the Projects page to start working."
+      :title="ui.text('No project selected')"
+      :description="ui.text('Select a project from the Projects page to start working.')"
     >
       <template #action>
         <BaseButton variant="secondary" size="sm" @click="router.push('/')">
           <ArrowLeft :size="14" />
-          <span>Back to Projects</span>
+          <span>{{ ui.text('Back to Projects') }}</span>
         </BaseButton>
       </template>
     </EmptyState>
   </div>
 </template>
+
+<style scoped>
+.controls-collapse-enter-active,
+.controls-collapse-leave-active {
+  max-height: 72px;
+  opacity: 1;
+  transition: max-height 0.22s ease, opacity 0.18s ease;
+}
+
+.controls-collapse-enter-from,
+.controls-collapse-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+</style>

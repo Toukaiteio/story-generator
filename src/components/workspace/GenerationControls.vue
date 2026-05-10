@@ -3,13 +3,16 @@ import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useGenerationStore } from '@/stores/generation'
 import { useToast } from '@/composables/useToast'
+import { translatePhrase } from '@/i18n'
+import { exportProject, exportProjectEpub, type ExportFormat } from '@/services/export'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
-import { ArrowRight, Play, Square, CheckCircle2, Circle, Loader2 } from 'lucide-vue-next'
+import { ArrowRight, Play, Square, CheckCircle2, Circle, Loader2, Download } from 'lucide-vue-next'
 
 const projectStore = useProjectStore()
 const genStore = useGenerationStore()
 const toast = useToast()
+const tr = translatePhrase
 
 const project = computed(() => projectStore.activeProject)
 
@@ -39,12 +42,64 @@ const stageStatus = computed(() => {
     } else if (stage.key === 'proofreading') {
       done = p.chapters.length > 0 && p.chapters.every(ch => ['proofread', 'polishing', 'polished'].includes(ch.status))
     } else if (stage.key === 'polishing') {
-      done = p.chapters.length > 0 && p.chapters.every(ch => ch.polishedContent.trim())
+      done = p.chapters.length > 0 && p.chapters.every(ch => ch.content.trim() && ch.status === 'polished')
     }
 
     return { ...stage, done, isActive: genStore.isGenerating && genStore.currentStage === stage.key }
   })
 })
+
+const canExportManuscript = computed(() =>
+  !!project.value?.chapters.length && project.value.chapters.every(chapter => chapter.content.trim())
+)
+
+const exportDisabledReason = computed(() => {
+  const p = project.value
+  if (!p) return 'Open a project before exporting.'
+  if (!p.chapters.length) return 'Generate or add chapter outlines before exporting.'
+
+  const missing = p.chapters
+    .filter(chapter => !chapter.content.trim())
+    .sort((a, b) => a.index - b.index)
+
+  if (missing.length) {
+    const preview = missing.slice(0, 4).map(chapter => `Ch ${chapter.index + 1}`).join(', ')
+    const suffix = missing.length > 4 ? ` and ${missing.length - 4} more` : ''
+    return `Export is available after Writing is complete. Missing chapter text: ${preview}${suffix}.`
+  }
+
+  return ''
+})
+
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function exportManuscript(format: Exclude<ExportFormat, 'json'>) {
+  if (!project.value || !canExportManuscript.value) return
+  try {
+    if (format === 'epub') {
+      const { data, filename } = await exportProjectEpub(project.value)
+      downloadBlob(filename, new Blob([data as BlobPart], { type: 'application/epub+zip' }))
+      toast.success('EPUB exported')
+      return
+    }
+
+    const { content, filename } = exportProject(project.value, format)
+    const mime = format === 'markdown' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8'
+    downloadBlob(filename, new Blob([content], { type: mime }))
+    toast.success('Manuscript exported')
+  } catch (error: any) {
+    toast.error(error?.message || 'Export failed')
+  }
+}
 
 async function generateNextStep() {
   if (!project.value) return
@@ -87,15 +142,41 @@ function cancelGeneration() {
           <Loader2 v-if="stage.isActive" :size="10" class="animate-spin" />
           <CheckCircle2 v-else-if="stage.done" :size="10" />
           <Circle v-else :size="10" />
-          <span>{{ stage.label }}</span>
+          <span>{{ tr(stage.label) }}</span>
         </div>
       </div>
 
       <!-- Actions -->
       <div class="flex items-center gap-2">
         <BaseTag v-if="genStore.isGenerating" variant="warning" size="sm">
-          {{ genStore.progressMessage || 'Generating...' }}
+          {{ tr(genStore.progressMessage || 'Generating...') }}
         </BaseTag>
+
+        <div
+          v-if="!genStore.isGenerating"
+          class="group relative hidden md:flex items-center gap-1 rounded-md border border-surface-4 bg-surface-2 p-0.5"
+          :aria-label="exportDisabledReason || tr('Export manuscript')"
+        >
+          <BaseButton variant="ghost" size="sm" :disabled="!canExportManuscript" @click="exportManuscript('markdown')">
+            <Download :size="13" />
+            <span>MD</span>
+          </BaseButton>
+          <BaseButton variant="ghost" size="sm" :disabled="!canExportManuscript" @click="exportManuscript('plaintext')">
+            <Download :size="13" />
+            <span>TXT</span>
+          </BaseButton>
+          <BaseButton variant="ghost" size="sm" :disabled="!canExportManuscript" @click="exportManuscript('epub')">
+            <Download :size="13" />
+            <span>EPUB</span>
+          </BaseButton>
+          <div
+            v-if="!canExportManuscript"
+            class="pointer-events-none absolute right-0 top-full z-50 mt-2 w-72 rounded-md border border-surface-4 bg-surface-1 px-3 py-2 text-xs leading-relaxed text-text-secondary opacity-0 shadow-xl transition-opacity duration-100 group-hover:opacity-100"
+          >
+            <p class="font-medium text-text-primary">{{ tr('Export unavailable') }}</p>
+            <p class="mt-1">{{ tr(exportDisabledReason) }}</p>
+          </div>
+        </div>
 
         <BaseButton
           v-if="!genStore.isGenerating"
@@ -105,7 +186,7 @@ function cancelGeneration() {
           @click="generateNextStep"
         >
           <ArrowRight :size="14" />
-          <span>Next Step</span>
+          <span>{{ tr('Next Step') }}</span>
         </BaseButton>
 
         <BaseButton
@@ -115,7 +196,7 @@ function cancelGeneration() {
           @click="startGeneration"
         >
           <Play :size="14" />
-          <span>Generate All</span>
+          <span>{{ tr('Generate All') }}</span>
         </BaseButton>
 
         <BaseButton
@@ -125,7 +206,7 @@ function cancelGeneration() {
           @click="cancelGeneration"
         >
           <Square :size="14" />
-          <span>Stop</span>
+          <span>{{ tr('Stop') }}</span>
         </BaseButton>
       </div>
     </div>

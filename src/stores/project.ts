@@ -35,13 +35,19 @@ function migrateProjectStyle(project: any): StoryProject {
   }
   if (Array.isArray(project.chapters)) {
     project.chapters = project.chapters.map((chapter: any) => {
-      const content = typeof chapter?.content === 'string' ? chapter.content : ''
+      const polishedContent = typeof chapter?.polishedContent === 'string' ? chapter.polishedContent : ''
+      const content = polishedContent.trim()
+        ? polishedContent
+        : typeof chapter?.content === 'string'
+          ? chapter.content
+          : ''
       return {
         ...chapter,
         content,
         proofreadingIssues: Array.isArray(chapter?.proofreadingIssues) ? chapter.proofreadingIssues : [],
         proofreadingIssuesStale: Boolean(chapter?.proofreadingIssuesStale),
         contentVersions: Array.isArray(chapter?.contentVersions) ? chapter.contentVersions : [],
+        polishedContent: '',
       }
     })
   }

@@ -2,9 +2,11 @@
 import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { estimateTokens } from '@/services/knowledge/chunker'
+import { translatePhrase } from '@/i18n'
 import { FileText, Users, BookOpen, PenTool } from 'lucide-vue-next'
 
 const projectStore = useProjectStore()
+const tr = translatePhrase
 const project = computed(() => projectStore.activeProject)
 
 interface StatItem {
@@ -19,12 +21,12 @@ const stats = computed<StatItem[]>(() => {
   if (!p) return []
 
   const totalTokens = p.chapters.reduce((sum, ch) => {
-    const content = ch.polishedContent || ch.content
+    const content = ch.content
     return sum + estimateTokens(content)
   }, 0)
 
   const completedChapters = p.chapters.filter(ch =>
-    ch.polishedContent || ch.content
+    ch.content
   ).length
 
   return [
@@ -32,13 +34,13 @@ const stats = computed<StatItem[]>(() => {
       label: 'Chapters',
       value: p.chapters.length,
       icon: FileText,
-      detail: `${completedChapters} written`,
+      detail: `${completedChapters} ${tr('written')}`,
     },
     {
       label: 'Characters',
       value: p.characters.length,
       icon: Users,
-      detail: `${p.characters.filter(c => c.role === 'protagonist').length} protagonist`,
+      detail: `${p.characters.filter(c => c.role === 'protagonist').length} ${tr('protagonist')}`,
     },
     {
       label: 'Tokens',
@@ -65,7 +67,7 @@ function formatNumber(num: number): string {
 
 <template>
   <div v-if="project" class="space-y-3">
-    <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">Project Stats</h3>
+    <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{{ tr('Project Stats') }}</h3>
     <div class="grid grid-cols-2 gap-2">
       <div
         v-for="stat in stats"
@@ -74,10 +76,10 @@ function formatNumber(num: number): string {
       >
         <div class="flex items-center gap-2 mb-1">
           <component :is="stat.icon" :size="12" class="text-text-muted" />
-          <span class="text-2xs text-text-muted">{{ stat.label }}</span>
+          <span class="text-2xs text-text-muted">{{ tr(stat.label) }}</span>
         </div>
         <div class="text-lg font-semibold text-text-primary">{{ stat.value }}</div>
-        <div v-if="stat.detail" class="text-2xs text-text-muted mt-0.5">{{ stat.detail }}</div>
+        <div v-if="stat.detail" class="text-2xs text-text-muted mt-0.5">{{ tr(stat.detail) }}</div>
       </div>
     </div>
   </div>

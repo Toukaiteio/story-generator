@@ -45,6 +45,10 @@ const ui = useUiStore()
 const providerStore = useProviderStore()
 const toast = useToast()
 
+function tr(value: string) {
+  return ui.text(value)
+}
+
 onMounted(() => {
   ui.navigateTo('providers')
   void syncProviderModels()
@@ -60,7 +64,7 @@ const testEmbeddingLoading = ref(false)
 const testEmbeddingResult = ref<{ ok: boolean; dimensions?: number; error?: string; modelLabel?: string } | null>(null)
 
 const newProvider = ref({
-  type: 'openai' as 'openai' | 'anthropic' | 'google',
+  type: 'openai' as ProviderType,
   name: '',
   apiKey: '',
   baseUrl: '',
@@ -68,7 +72,7 @@ const newProvider = ref({
 
 const editingProviderForm = ref({
   providerId: '',
-  type: 'openai' as 'openai' | 'anthropic' | 'google',
+  type: 'openai' as ProviderType,
   name: '',
   apiKey: '',
   baseUrl: '',
@@ -106,6 +110,7 @@ const customModelForm = reactive({
 
 const providerTypeOptions = [
   { label: 'OpenAI', value: 'openai' },
+  { label: 'OpenAI Responses', value: 'openai-responses' },
   { label: 'Anthropic', value: 'anthropic' },
   { label: 'Google GenAI', value: 'google' },
 ]
@@ -724,9 +729,9 @@ function formatSyncedTime(value?: string | null) {
   <div class="h-full flex flex-col overflow-hidden">
     <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">Providers</h1>
+        <h1 class="text-lg font-semibold text-text-primary">{{ tr('Providers') }}</h1>
         <p class="text-xs text-text-secondary mt-0.5">
-          Configure providers, sync model lists, and bind models to each Agent role
+          {{ tr('Configure providers, sync model lists, and bind models to each Agent role') }}
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -738,11 +743,11 @@ function formatSyncedTime(value?: string | null) {
           @click="syncProviderModels()"
         >
           <RefreshCw :size="14" />
-          <span>Sync Models</span>
+          <span>{{ tr('Sync Models') }}</span>
         </BaseButton>
         <BaseButton variant="primary" size="sm" @click="showAddDrawer = true">
           <Plus :size="14" />
-          <span>Add Provider</span>
+          <span>{{ tr('Add Provider') }}</span>
         </BaseButton>
       </div>
     </div>
@@ -753,17 +758,17 @@ function formatSyncedTime(value?: string | null) {
           v-if="providerStore.providerWarnings.length"
           class="rounded-lg border border-warning/30 bg-warning-subtle/60 px-4 py-3 text-xs text-warning"
         >
-          <p class="font-medium">Duplicate provider IDs were detected and renamed automatically.</p>
+          <p class="font-medium">{{ tr('Duplicate provider IDs were detected and renamed automatically.') }}</p>
           <p class="mt-1">
-            Model labels use `ProviderID/Model`, so the affected providers were adjusted to keep labels unique.
+            {{ tr('Model labels use `ProviderID/Model`, so the affected providers were adjusted to keep labels unique.') }}
           </p>
         </div>
 
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="text-sm font-semibold text-text-primary">Provider Center</h2>
+            <h2 class="text-sm font-semibold text-text-primary">{{ tr('Provider Center') }}</h2>
             <p class="text-xs text-text-secondary mt-0.5">
-              Keep provider setup and Agent bindings in separate views.
+              {{ tr('Keep provider setup and Agent bindings in separate views.') }}
             </p>
           </div>
           <div class="flex items-center gap-2 rounded-xl border border-surface-4 bg-surface-2 p-1">
@@ -777,8 +782,8 @@ function formatSyncedTime(value?: string | null) {
                 : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary'"
               @click="activeProviderTab = tab.id as 'providers' | 'mapping'"
             >
-              <div class="text-sm font-medium">{{ tab.label }}</div>
-              <div class="text-2xs mt-0.5 opacity-80">{{ tab.description }}</div>
+              <div class="text-sm font-medium">{{ tr(tab.label) }}</div>
+              <div class="text-2xs mt-0.5 opacity-80">{{ tr(tab.description) }}</div>
             </button>
           </div>
         </div>
@@ -786,12 +791,12 @@ function formatSyncedTime(value?: string | null) {
         <BaseCard v-if="activeProviderTab === 'mapping'" padding="md">
           <div class="flex items-center justify-between gap-3 mb-4">
             <div>
-              <h2 class="text-sm font-semibold text-text-primary">Agent Model Mapping</h2>
+              <h2 class="text-sm font-semibold text-text-primary">{{ tr('Agent Model Mapping') }}</h2>
               <p class="text-xs text-text-secondary mt-0.5">
-                Bind a specific model to each Agent role. These settings are saved automatically.
+                {{ tr('Bind a specific model to each Agent role. These settings are saved automatically.') }}
               </p>
             </div>
-            <BaseTag variant="accent" size="sm">Role-level configuration</BaseTag>
+            <BaseTag variant="accent" size="sm">{{ tr('Role-level configuration') }}</BaseTag>
           </div>
 
           <div v-if="providerStore.providers.length" class="space-y-3">
@@ -805,8 +810,8 @@ function formatSyncedTime(value?: string | null) {
                   <component :is="role.icon" :size="16" class="text-accent" />
                 </div>
                 <div>
-                  <h3 class="text-sm font-medium text-text-primary">{{ role.label }}</h3>
-                  <p class="text-xs text-text-secondary mt-0.5">{{ role.description }}</p>
+                  <h3 class="text-sm font-medium text-text-primary">{{ tr(role.label) }}</h3>
+                  <p class="text-xs text-text-secondary mt-0.5">{{ tr(role.description) }}</p>
                 </div>
               </div>
               <BaseSelect
@@ -821,12 +826,12 @@ function formatSyncedTime(value?: string | null) {
             <div class="mt-5 rounded-lg border border-surface-4 bg-surface-1 p-4">
               <div class="flex items-center justify-between gap-3 mb-3">
                 <div>
-                  <h3 class="text-sm font-semibold text-text-primary">Embedding Model</h3>
+                  <h3 class="text-sm font-semibold text-text-primary">{{ tr('Embedding Model') }}</h3>
                   <p class="text-xs text-text-secondary mt-0.5">
-                    Used as the default embedding model for Knowledge Base vector and hybrid modes.
+                    {{ tr('Used as the default embedding model for Knowledge Base vector and hybrid modes.') }}
                   </p>
                 </div>
-                <BaseTag variant="accent" size="sm">Global default</BaseTag>
+                <BaseTag variant="accent" size="sm">{{ tr('Global default') }}</BaseTag>
               </div>
 
               <BaseSelect
@@ -848,7 +853,7 @@ function formatSyncedTime(value?: string | null) {
                   <template v-if="!testEmbeddingLoading">
                     <Zap :size="14" />
                   </template>
-                  <span>Test</span>
+                  <span>{{ tr('Test') }}</span>
                 </BaseButton>
 
                 <div v-if="testEmbeddingResult" class="flex items-center gap-2 text-2xs">
@@ -871,7 +876,7 @@ function formatSyncedTime(value?: string | null) {
               </div>
 
               <p class="text-2xs text-text-muted mt-2">
-                Only models marked as embedding-capable are shown here.
+                {{ tr('Only models marked as embedding-capable are shown here.') }}
               </p>
             </div>
           </div>
@@ -885,7 +890,7 @@ function formatSyncedTime(value?: string | null) {
             <template #action>
               <BaseButton variant="primary" size="sm" @click="showAddDrawer = true">
                 <Plus :size="14" />
-                <span>Add Provider</span>
+                <span>{{ tr('Add Provider') }}</span>
               </BaseButton>
             </template>
           </EmptyState>
@@ -901,7 +906,7 @@ function formatSyncedTime(value?: string | null) {
             <template #action>
               <BaseButton variant="primary" size="sm" @click="showAddDrawer = true">
                 <Plus :size="14" />
-                <span>Add Provider</span>
+                <span>{{ tr('Add Provider') }}</span>
               </BaseButton>
             </template>
           </EmptyState>
@@ -936,7 +941,7 @@ function formatSyncedTime(value?: string | null) {
                 </div>
                 <div class="flex items-center gap-2">
                   <BaseTag :variant="provider.isActive ? 'success' : 'default'" size="sm">
-                    {{ provider.isActive ? 'Active' : 'Inactive' }}
+                    {{ tr(provider.isActive ? 'Active' : 'Inactive') }}
                   </BaseTag>
                   <BaseButton
                     variant="secondary"
@@ -945,7 +950,7 @@ function formatSyncedTime(value?: string | null) {
                     @click="refreshProvider(provider.id)"
                   >
                     <RefreshCw :size="14" />
-                    <span>Sync</span>
+                    <span>{{ tr('Sync') }}</span>
                   </BaseButton>
                   <BaseButton
                     variant="secondary"
@@ -953,7 +958,7 @@ function formatSyncedTime(value?: string | null) {
                     @click="openEditProviderDrawer(provider.id)"
                   >
                     <Pencil :size="14" />
-                    <span>Edit Config</span>
+                    <span>{{ tr('Edit Config') }}</span>
                   </BaseButton>
                   <BaseButton
                     variant="secondary"
@@ -961,7 +966,7 @@ function formatSyncedTime(value?: string | null) {
                     @click="openCustomModelDrawer(provider.id)"
                   >
                     <Plus :size="14" />
-                    <span>Custom Model</span>
+                    <span>{{ tr('Custom Model') }}</span>
                   </BaseButton>
                   <button
                     class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
@@ -1032,7 +1037,7 @@ function formatSyncedTime(value?: string | null) {
                     </div>
                     <div v-else class="flex items-center justify-between gap-2">
                       <div class="flex items-center gap-1.5">
-                        <span class="text-2xs text-text-muted">Context:</span>
+                        <span class="text-2xs text-text-muted">{{ tr('Context') }}:</span>
                         <span class="text-2xs font-medium text-text-primary">
                           {{ formatContextTokens(model.contextTokens) }}
                         </span>
@@ -1050,7 +1055,7 @@ function formatSyncedTime(value?: string | null) {
                           class="text-2xs text-accent hover:underline"
                           @click="startEditContext(provider.id, model.id, model.contextTokens)"
                         >
-                          Edit
+                          {{ tr('Edit') }}
                         </button>
                         <button
                           type="button"
@@ -1058,7 +1063,7 @@ function formatSyncedTime(value?: string | null) {
                           class="text-2xs text-text-muted hover:text-text-secondary hover:underline"
                           @click="revertContextToAuto(provider.id, model.id)"
                         >
-                          Auto
+                          {{ tr('Auto') }}
                         </button>
                       </div>
                     </div>
@@ -1066,7 +1071,7 @@ function formatSyncedTime(value?: string | null) {
 
                   <!-- Embedding Dimensions Row -->
                   <div v-if="model.supportsEmbeddings && model.embeddingDimensions" class="mt-1.5 flex items-center gap-1.5">
-                    <span class="text-2xs text-text-muted">Dimensions:</span>
+                    <span class="text-2xs text-text-muted">{{ tr('Dimensions') }}:</span>
                     <span class="text-2xs font-medium text-text-primary">{{ model.embeddingDimensions }}</span>
                   </div>
                 </div>
@@ -1091,7 +1096,7 @@ function formatSyncedTime(value?: string | null) {
             class="absolute right-0 top-0 h-full w-[400px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
-              <h2 class="text-base font-semibold text-text-primary">Add Provider</h2>
+              <h2 class="text-base font-semibold text-text-primary">{{ tr('Add Provider') }}</h2>
               <button
                 class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
                 @click="showAddDrawer = false"
@@ -1111,11 +1116,11 @@ function formatSyncedTime(value?: string | null) {
                 placeholder="e.g. Production OpenAI"
               />
               <p class="text-xs text-text-muted -mt-2">
-                Required. Generated Provider ID:
+                {{ tr('Required. Generated Provider ID:') }}
                 <span class="font-mono text-text-primary">{{ previewProviderId }}</span>
               </p>
               <p v-if="providerIdCollision" class="text-xs text-warning -mt-2 leading-relaxed">
-                This ID already exists, so a suffix will be appended automatically to keep model labels unique.
+                {{ tr('This ID already exists, so a suffix will be appended automatically to keep model labels unique.') }}
               </p>
               <BaseInput
                 v-model="newProvider.apiKey"
@@ -1130,27 +1135,27 @@ function formatSyncedTime(value?: string | null) {
                 :placeholder="defaultBaseUrls[newProvider.type] || ''"
               />
               <p
-                v-if="newProvider.type === 'openai' && newProvider.baseUrl && !newProvider.baseUrl.includes('/v1')"
+                v-if="(newProvider.type === 'openai' || newProvider.type === 'openai-responses') && newProvider.baseUrl && !newProvider.baseUrl.includes('/v1')"
                 class="text-xs text-warning leading-relaxed"
               >
-                Reminder: this URL does not contain /v1. Keep it unchanged if your provider or proxy uses a root-level API.
+                {{ tr('Reminder: this URL does not contain /v1. Keep it unchanged if your provider or proxy uses a root-level API.') }}
               </p>
               <div class="mt-1 flex-1 min-h-0 flex flex-col">
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
-                    <p class="text-xs font-medium text-text-secondary">Model Drafts</p>
+                    <p class="text-xs font-medium text-text-secondary">{{ tr('Model Drafts') }}</p>
                     <p class="text-2xs text-text-muted mt-0.5">
-                      Auto-sync a first draft, then edit the actual models you want to save.
+                      {{ tr('Auto-sync a first draft, then edit the actual models you want to save.') }}
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
                     <BaseButton variant="secondary" size="sm" @click="syncDraftModels">
                       <RefreshCw :size="14" />
-                      <span>Sync</span>
+                      <span>{{ tr('Sync') }}</span>
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" @click="addDraftModel">
                       <Plus :size="14" />
-                      <span>Add</span>
+                      <span>{{ tr('Add') }}</span>
                     </BaseButton>
                   </div>
                 </div>
@@ -1164,10 +1169,10 @@ function formatSyncedTime(value?: string | null) {
                     <div class="flex items-start justify-between gap-2 mb-3">
                       <div>
                         <p class="text-sm font-medium text-text-primary">
-                          {{ model.name || model.id || 'New model' }}
+                          {{ model.name || model.id || tr('New model') }}
                         </p>
                         <p class="text-xs text-text-muted mt-0.5">
-                          {{ model.id || 'Model ID required' }}
+                          {{ model.id || tr('Model ID required') }}
                         </p>
                       </div>
                       <button
@@ -1196,7 +1201,7 @@ function formatSyncedTime(value?: string | null) {
                     </div>
 
                     <div class="mt-2">
-                      <p class="text-xs font-medium text-text-secondary mb-1.5">Streaming</p>
+                      <p class="text-xs font-medium text-text-secondary mb-1.5">{{ tr('Streaming') }}</p>
                       <div class="flex gap-2">
                         <button
                           type="button"
@@ -1206,7 +1211,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsStreaming = true"
                         >
-                          Supported
+                          {{ tr('Supported') }}
                         </button>
                         <button
                           type="button"
@@ -1216,13 +1221,13 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsStreaming = false"
                         >
-                          Disabled
+                          {{ tr('Disabled') }}
                         </button>
                       </div>
                     </div>
 
                     <div class="mt-2">
-                      <p class="text-xs font-medium text-text-secondary mb-1.5">Embedding</p>
+                      <p class="text-xs font-medium text-text-secondary mb-1.5">{{ tr('Embedding') }}</p>
                       <div class="flex gap-2">
                         <button
                           type="button"
@@ -1232,7 +1237,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsEmbeddings = true"
                         >
-                          Supported
+                          {{ tr('Supported') }}
                         </button>
                         <button
                           type="button"
@@ -1242,7 +1247,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsEmbeddings = false"
                         >
-                          Disabled
+                          {{ tr('Disabled') }}
                         </button>
                       </div>
                       <BaseInput
@@ -1259,9 +1264,9 @@ function formatSyncedTime(value?: string | null) {
                     <div class="mt-3 rounded-md border border-surface-4 bg-surface-1 p-3">
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
-                          <p class="text-xs font-medium text-text-secondary">Reasoning</p>
+                          <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
                           <p class="text-2xs text-text-muted mt-0.5">
-                            Optional reasoning profile for this model.
+                            {{ tr('Optional reasoning profile for this model.') }}
                           </p>
                         </div>
                         <button
@@ -1272,7 +1277,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.reasoning.enabled = !model.reasoning.enabled"
                         >
-                          {{ model.reasoning.enabled ? 'Enabled' : 'Disabled' }}
+                          {{ tr(model.reasoning.enabled ? 'Enabled' : 'Disabled') }}
                         </button>
                       </div>
 
@@ -1301,14 +1306,14 @@ function formatSyncedTime(value?: string | null) {
               </div>
             </div>
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="showAddDrawer = false">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="showAddDrawer = false">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
                 size="sm"
                 :disabled="!newProvider.name.trim()"
                 @click="addProvider"
               >
-                Add Provider
+                {{ tr('Add Provider') }}
               </BaseButton>
             </div>
           </div>
@@ -1329,7 +1334,7 @@ function formatSyncedTime(value?: string | null) {
             class="absolute right-0 top-0 h-full w-[400px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
-              <h2 class="text-base font-semibold text-text-primary">Edit Provider</h2>
+              <h2 class="text-base font-semibold text-text-primary">{{ tr('Edit Provider') }}</h2>
               <button
                 class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
                 @click="cancelEditProviderDrawer"
@@ -1349,7 +1354,7 @@ function formatSyncedTime(value?: string | null) {
                 placeholder="e.g. Production OpenAI"
               />
               <p class="text-xs text-text-muted -mt-2">
-                Provider ID:
+                {{ tr('Provider ID:') }}
                 <span class="font-mono text-text-primary">{{ editingProviderForm.providerId }}</span>
               </p>
               <BaseInput
@@ -1365,27 +1370,27 @@ function formatSyncedTime(value?: string | null) {
                 :placeholder="defaultBaseUrls[editingProviderForm.type] || ''"
               />
               <p
-                v-if="editingProviderForm.type === 'openai' && editingProviderForm.baseUrl && !editingProviderForm.baseUrl.includes('/v1')"
+                v-if="(editingProviderForm.type === 'openai' || editingProviderForm.type === 'openai-responses') && editingProviderForm.baseUrl && !editingProviderForm.baseUrl.includes('/v1')"
                 class="text-xs text-warning leading-relaxed"
               >
-                Reminder: this URL does not contain /v1. Keep it unchanged if your provider or proxy uses a root-level API.
+                {{ tr('Reminder: this URL does not contain /v1. Keep it unchanged if your provider or proxy uses a root-level API.') }}
               </p>
               <div class="mt-1 flex-1 min-h-0 flex flex-col">
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
-                    <p class="text-xs font-medium text-text-secondary">Model Drafts</p>
+                    <p class="text-xs font-medium text-text-secondary">{{ tr('Model Drafts') }}</p>
                     <p class="text-2xs text-text-muted mt-0.5">
-                      Edit the provider's actual models and sync new ones if needed.
+                      {{ tr("Edit the provider's actual models and sync new ones if needed.") }}
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
                     <BaseButton variant="secondary" size="sm" @click="syncEditDraftModels">
                       <RefreshCw :size="14" />
-                      <span>Sync</span>
+                      <span>{{ tr('Sync') }}</span>
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" @click="addDraftModel(editingProviderForm.type)">
                       <Plus :size="14" />
-                      <span>Add</span>
+                      <span>{{ tr('Add') }}</span>
                     </BaseButton>
                   </div>
                 </div>
@@ -1399,10 +1404,10 @@ function formatSyncedTime(value?: string | null) {
                     <div class="flex items-start justify-between gap-2 mb-3">
                       <div>
                         <p class="text-sm font-medium text-text-primary">
-                          {{ model.name || model.id || 'New model' }}
+                          {{ model.name || model.id || tr('New model') }}
                         </p>
                         <p class="text-xs text-text-muted mt-0.5">
-                          {{ model.id || 'Model ID required' }}
+                          {{ model.id || tr('Model ID required') }}
                         </p>
                       </div>
                       <button
@@ -1431,7 +1436,7 @@ function formatSyncedTime(value?: string | null) {
                     </div>
 
                     <div class="mt-2">
-                      <p class="text-xs font-medium text-text-secondary mb-1.5">Streaming</p>
+                      <p class="text-xs font-medium text-text-secondary mb-1.5">{{ tr('Streaming') }}</p>
                       <div class="flex gap-2">
                         <button
                           type="button"
@@ -1441,7 +1446,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsStreaming = true"
                         >
-                          Supported
+                          {{ tr('Supported') }}
                         </button>
                         <button
                           type="button"
@@ -1451,13 +1456,13 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsStreaming = false"
                         >
-                          Disabled
+                          {{ tr('Disabled') }}
                         </button>
                       </div>
                     </div>
 
                     <div class="mt-2">
-                      <p class="text-xs font-medium text-text-secondary mb-1.5">Embedding</p>
+                      <p class="text-xs font-medium text-text-secondary mb-1.5">{{ tr('Embedding') }}</p>
                       <div class="flex gap-2">
                         <button
                           type="button"
@@ -1467,7 +1472,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsEmbeddings = true"
                         >
-                          Supported
+                          {{ tr('Supported') }}
                         </button>
                         <button
                           type="button"
@@ -1477,7 +1482,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.supportsEmbeddings = false"
                         >
-                          Disabled
+                          {{ tr('Disabled') }}
                         </button>
                       </div>
                       <BaseInput
@@ -1494,9 +1499,9 @@ function formatSyncedTime(value?: string | null) {
                     <div class="mt-3 rounded-md border border-surface-4 bg-surface-1 p-3">
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
-                          <p class="text-xs font-medium text-text-secondary">Reasoning</p>
+                          <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
                           <p class="text-2xs text-text-muted mt-0.5">
-                            Optional reasoning profile for this model.
+                            {{ tr('Optional reasoning profile for this model.') }}
                           </p>
                         </div>
                         <button
@@ -1507,7 +1512,7 @@ function formatSyncedTime(value?: string | null) {
                             : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                           @click="model.reasoning.enabled = !model.reasoning.enabled"
                         >
-                          {{ model.reasoning.enabled ? 'Enabled' : 'Disabled' }}
+                          {{ tr(model.reasoning.enabled ? 'Enabled' : 'Disabled') }}
                         </button>
                       </div>
 
@@ -1536,14 +1541,14 @@ function formatSyncedTime(value?: string | null) {
               </div>
             </div>
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="cancelEditProviderDrawer">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="cancelEditProviderDrawer">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
                 size="sm"
                 :disabled="!editingProviderForm.name.trim()"
                 @click="saveEditedProvider"
               >
-                Save Changes
+                {{ tr('Save Changes') }}
               </BaseButton>
             </div>
           </div>
@@ -1564,7 +1569,7 @@ function formatSyncedTime(value?: string | null) {
             class="absolute right-0 top-0 h-full w-[420px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
-              <h2 class="text-base font-semibold text-text-primary">Add Custom Model</h2>
+              <h2 class="text-base font-semibold text-text-primary">{{ tr('Add Custom Model') }}</h2>
               <button
                 class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
                 @click="showCustomModelDrawer = false"
@@ -1605,7 +1610,7 @@ function formatSyncedTime(value?: string | null) {
                 min="1"
               />
               <div class="flex flex-col gap-1.5">
-                <label class="text-xs font-medium text-text-secondary">Streaming</label>
+                <label class="text-xs font-medium text-text-secondary">{{ tr('Streaming') }}</label>
                 <div class="flex gap-2">
                   <button
                     type="button"
@@ -1615,7 +1620,7 @@ function formatSyncedTime(value?: string | null) {
                       : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                     @click="customModelForm.supportsStreaming = true"
                   >
-                    Supported
+                    {{ tr('Supported') }}
                   </button>
                   <button
                     type="button"
@@ -1625,13 +1630,13 @@ function formatSyncedTime(value?: string | null) {
                       : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                     @click="customModelForm.supportsStreaming = false"
                   >
-                    Disabled
+                    {{ tr('Disabled') }}
                   </button>
                 </div>
               </div>
 
               <div class="flex flex-col gap-1.5">
-                <label class="text-xs font-medium text-text-secondary">Embedding</label>
+                <label class="text-xs font-medium text-text-secondary">{{ tr('Embedding') }}</label>
                 <div class="flex gap-2">
                   <button
                     type="button"
@@ -1641,7 +1646,7 @@ function formatSyncedTime(value?: string | null) {
                       : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                     @click="customModelForm.supportsEmbeddings = true"
                   >
-                    Supported
+                    {{ tr('Supported') }}
                   </button>
                   <button
                     type="button"
@@ -1651,7 +1656,7 @@ function formatSyncedTime(value?: string | null) {
                       : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                     @click="customModelForm.supportsEmbeddings = false"
                   >
-                    Disabled
+                    {{ tr('Disabled') }}
                   </button>
                 </div>
                 <BaseInput
@@ -1667,9 +1672,9 @@ function formatSyncedTime(value?: string | null) {
               <div class="rounded-lg border border-surface-4 bg-surface-2 p-3">
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
-                    <p class="text-xs font-medium text-text-secondary">Reasoning</p>
+                    <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
                     <p class="text-2xs text-text-muted mt-0.5">
-                      Configure an optional reasoning profile for this model.
+                      {{ tr('Configure an optional reasoning profile for this model.') }}
                     </p>
                   </div>
                   <button
@@ -1680,7 +1685,7 @@ function formatSyncedTime(value?: string | null) {
                       : 'border-surface-4 bg-surface-1 text-text-secondary hover:border-surface-5'"
                     @click="customModelForm.reasoningEnabled = !customModelForm.reasoningEnabled"
                   >
-                    {{ customModelForm.reasoningEnabled ? 'Enabled' : 'Disabled' }}
+                    {{ tr(customModelForm.reasoningEnabled ? 'Enabled' : 'Disabled') }}
                   </button>
                 </div>
                 <BaseSelect
@@ -1699,14 +1704,14 @@ function formatSyncedTime(value?: string | null) {
             </div>
 
             <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" @click="showCustomModelDrawer = false">Cancel</BaseButton>
+              <BaseButton variant="ghost" size="sm" @click="showCustomModelDrawer = false">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
                 size="sm"
                 :disabled="!customModelForm.providerId || !customModelForm.id.trim()"
                 @click="saveCustomModel"
               >
-                Save Model
+                {{ tr('Save Model') }}
               </BaseButton>
             </div>
           </div>

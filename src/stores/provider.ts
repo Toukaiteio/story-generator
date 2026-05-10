@@ -88,8 +88,13 @@ function sanitizeModel(model: Partial<ModelConfig> & { id: string }, fallbackSou
   }
 }
 
+function normalizeProviderType(type?: string): ProviderType {
+  if (type === 'anthropic' || type === 'google' || type === 'openai-responses') return type
+  return 'openai'
+}
+
 function sanitizeProvider(provider: Partial<ProviderConfig>): ProviderConfig {
-  const type = provider.type === 'anthropic' ? 'anthropic' : provider.type === 'google' ? 'google' : 'openai'
+  const type = normalizeProviderType(provider.type)
   const builtinIds = new Set(builtinModels[type].map(model => model.id))
   const models = Array.isArray(provider.models) && provider.models.length
     ? provider.models.map(model => sanitizeModel(model, builtinIds.has(model.id) ? 'builtin' : 'custom'))
@@ -304,7 +309,24 @@ function buildModelListEndpoints(provider: ProviderConfig) {
 function isValidModelRef(providers: ProviderConfig[], ref: ProviderModelRef | null) {
   if (!ref) return false
   const provider = providers.find(item => item.id === ref.providerId && item.isActive)
-  return !!provider?.models.some(model => model.id === ref.modelId)
+  return !!provider && !!findModelForRef(provider, ref)
+}
+
+function isUsableChatModelRef(providers: ProviderConfig[], ref: ProviderModelRef | null) {
+  if (!ref) return false
+  const provider = providers.find(item => item.id === ref.providerId && item.isActive)
+  const model = provider ? findModelForRef(provider, ref) : null
+  return !!model && !model.supportsEmbeddings
+}
+
+function findModelForRef(provider: ProviderConfig, ref: ProviderModelRef | null) {
+  if (!ref) return null
+  return provider.models.find(model =>
+    model.id === ref.modelId ||
+    model.id === `${ref.providerId}/${ref.modelId}` ||
+    (ref.modelId.includes('/') && model.id === ref.modelId.split('/').pop()) ||
+    model.id.split('/').pop() === ref.modelId
+  ) ?? null
 }
 
 function isValidEmbeddingModelRef(providers: ProviderConfig[], ref: ProviderModelRef | null) {
@@ -352,7 +374,7 @@ async function fetchDirectModelList(provider: ProviderConfig) {
     'Content-Type': 'application/json',
   }
 
-  if (provider.type === 'openai' && provider.apiKey) {
+  if ((provider.type === 'openai' || provider.type === 'openai-responses') && provider.apiKey) {
     headers.Authorization = `Bearer ${provider.apiKey}`
   } else if (provider.type === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01'
@@ -607,7 +629,7 @@ export const useProviderStore = defineStore('provider', () => {
     if (!ref) return null
     const provider = getProviderById(ref.providerId)
     if (!provider) return null
-    const model = provider.models.find(item => item.id === ref.modelId)
+    const model = findModelForRef(provider, ref)
     if (!model) return null
     return { provider, model }
   }
@@ -616,6 +638,10 @@ export const useProviderStore = defineStore('provider', () => {
     const match = getModelByRef(ref)
     if (!match) return ''
     return formatModelLabel(match.provider.id, match.model.name)
+  }
+
+  function isActiveChatModelRef(ref: ProviderModelRef | null) {
+    return isUsableChatModelRef(providers.value, ref)
   }
 
   function getAgentModelBinding(role: AgentType) {
@@ -688,7 +714,7 @@ export const useProviderStore = defineStore('provider', () => {
   }
 
   async function previewModelList(request: { type: ProviderType; apiKey?: string | null; baseUrl: string }) {
-    const type = request.type === 'anthropic' ? 'anthropic' : request.type === 'google' ? 'google' : 'openai'
+    const type = normalizeProviderType(request.type)
     const provider: ProviderConfig = {
       id: 'preview-provider',
       type,
@@ -768,17 +794,28 @@ export const useProviderStore = defineStore('provider', () => {
     return pickModelRefForRole(providers.value, role)
   }
 
-  function requireAgentModelRef(role: AgentType) {
+  function getAvailableModelRefForRole(role: AgentType, preferred?: ProviderModelRef | null) {
+    if (isUsableChatModelRef(providers.value, preferred ?? null)) {
+      return preferred ?? null
+    }
+
     const binding = getAgentModelBinding(role)
-    if (binding) {
-      const match = getModelByRef(binding)
-      if (!match) {
-        throw new Error(`Configured model for ${role} is unavailable: ${binding.providerId}/${binding.modelId}. Refresh the provider model list or select another model.`)
-      }
+    if (isUsableChatModelRef(providers.value, binding)) {
       return binding
     }
 
-    const fallback = getDefaultModelRefForRole(role)
+    return getDefaultModelRefForRole(role)
+  }
+
+  function requireAgentModelRef(role: AgentType) {
+    const binding = getAgentModelBinding(role)
+    if (binding && !isUsableChatModelRef(providers.value, binding)) {
+      const fallback = getDefaultModelRefForRole(role)
+      if (fallback) return fallback
+      throw new Error(`Configured model for ${role} is unavailable or inactive: ${binding.providerId}/${binding.modelId}. Enable the provider, refresh the provider model list, or select another model.`)
+    }
+
+    const fallback = binding ?? getDefaultModelRefForRole(role)
     if (!fallback) {
       throw new Error(`No model available for ${role}. Please configure a provider first.`)
     }
@@ -825,7 +862,7 @@ export const useProviderStore = defineStore('provider', () => {
       console.debug('[providerStore] clearModelContextTokens', { providerId, modelId })
     }
     // Revert to fallback
-    const fallback = provider.type === 'anthropic' || provider.type === 'openai' || provider.type === 'google'
+    const fallback = provider.type === 'anthropic' || provider.type === 'openai' || provider.type === 'openai-responses' || provider.type === 'google'
       ? inferContextTokensForModel(provider.type, modelId)
       : null
     delete modelContextOverrides.value[contextOverrideKey(providerId, modelId)]
@@ -869,9 +906,9 @@ export const useProviderStore = defineStore('provider', () => {
       'gemini-2.0-flash': 1048576, 'gemini-2.0-flash-lite': 1048576,
       'gemini-1.5-pro': 2097152, 'gemini-1.5-flash': 1048576,
     }
-    const table = providerType === 'openai' ? openaiTable : providerType === 'google' ? googleTable : anthropicTable
+    const table = providerType === 'openai' || providerType === 'openai-responses' ? openaiTable : providerType === 'google' ? googleTable : anthropicTable
     if (table[id]) return table[id]
-    if (providerType === 'openai') {
+    if (providerType === 'openai' || providerType === 'openai-responses') {
       if (id.includes('gpt-4.1') || id.includes('gpt-5')) return 1047576
       if (id.includes('gpt-4o') || id.includes('gpt-4-turbo')) return 128000
       if (id.includes('o1') || id.includes('o3') || id.includes('o4')) return 200000
@@ -905,6 +942,7 @@ export const useProviderStore = defineStore('provider', () => {
     getProviderById,
     getModelByRef,
     getModelLabel,
+    isActiveChatModelRef,
     getAgentModelBinding,
     setAgentModelBinding,
     getEmbeddingModelBinding,
@@ -919,6 +957,7 @@ export const useProviderStore = defineStore('provider', () => {
     previewModelList,
     addCustomModel,
     getDefaultModelRefForRole,
+    getAvailableModelRefForRole,
     requireAgentModelRef,
     resolveModelRef,
     isRefreshingProvider,

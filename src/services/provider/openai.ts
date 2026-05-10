@@ -1,19 +1,59 @@
 import type { ChatMessage } from '@/types/provider'
-import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks } from './types'
+import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
 
 export class OpenAIAdapter implements ProviderAdapter {
-  private normalizeMessages(messages: ChatMessage[]): ChatMessage[] {
-    return messages.map(message => {
-      if (message.role !== 'assistant' || !message.reasoning_content) {
-        return message
+  private normalizeMessages(messages: ChatMessage[]): Array<Record<string, unknown>> {
+    const normalized: Array<Record<string, unknown>> = []
+
+    for (const message of messages) {
+      if (message.role === 'assistant') {
+        const content = typeof message.content === 'string' && message.content.length > 0
+          ? message.content
+          : null
+        const reasoningContent = typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0
+          ? message.reasoning_content
+          : null
+        const toolCalls = (message.tool_calls ?? []).filter(toolCall =>
+          toolCall.id &&
+          toolCall.type === 'function' &&
+          toolCall.function?.name &&
+          typeof toolCall.function.arguments === 'string'
+        )
+
+        if (!content && !reasoningContent && !toolCalls.length) {
+          continue
+        }
+
+        normalized.push({
+          role: 'assistant',
+          content,
+          ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        })
+        continue
       }
 
-      return {
-        ...message,
-        reasoning_content: message.reasoning_content,
+      if (message.role === 'tool') {
+        if (!message.tool_call_id) {
+          continue
+        }
+
+        normalized.push({
+          role: 'tool',
+          tool_call_id: message.tool_call_id,
+          content: message.content ?? '',
+        })
+        continue
       }
-    })
+
+      normalized.push({
+        role: message.role,
+        content: message.content ?? '',
+      })
+    }
+
+    return normalized
   }
 
   private buildHeaders(options: ChatOptions): Record<string, string> {
@@ -34,6 +74,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
+      signal: options.signal,
       body: JSON.stringify({
         model: options.model,
         messages: this.normalizeMessages(messages),
@@ -52,11 +93,12 @@ export class OpenAIAdapter implements ProviderAdapter {
     return data.choices[0]?.message?.content ?? ''
   }
 
-  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[]): Promise<FunctionCallingResponse> {
+  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
     const url = `${this.buildBaseUrl(options)}/chat/completions`
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
+      signal: options.signal,
       body: JSON.stringify({
         model: options.model,
         messages: this.normalizeMessages(messages),
@@ -71,7 +113,7 @@ export class OpenAIAdapter implements ProviderAdapter {
             parameters: tool.parameters,
           },
         })),
-        tool_choice: 'auto',
+        tool_choice: toolOptions?.toolChoice ?? 'auto',
       }),
     })
 
@@ -115,6 +157,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
+      signal: options.signal,
       body: JSON.stringify({
         model: options.model,
         messages: this.normalizeMessages(messages),
@@ -173,11 +216,12 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
   }
 
-  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks): Promise<void> {
+  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks, toolOptions?: ToolCallOptions): Promise<void> {
     const url = `${this.buildBaseUrl(options)}/chat/completions`
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
+      signal: options.signal,
       body: JSON.stringify({
         model: options.model,
         messages: this.normalizeMessages(messages),
@@ -192,7 +236,7 @@ export class OpenAIAdapter implements ProviderAdapter {
             parameters: tool.parameters,
           },
         })),
-        tool_choice: 'auto',
+        tool_choice: toolOptions?.toolChoice ?? 'auto',
       }),
     })
 
@@ -245,6 +289,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
             if (delta?.reasoning_content) {
               reasoningContent += delta.reasoning_content
+              callbacks.onReasoningToken?.(delta.reasoning_content)
             }
 
             if (delta?.tool_calls) {

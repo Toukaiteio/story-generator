@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { translatePhrase } from '@/i18n'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -21,6 +22,10 @@ const emit = defineEmits<{
 
 const focused = ref(false)
 
+const translatedLabel = computed(() => props.label ? translatePhrase(props.label) : '')
+const translatedPlaceholder = computed(() => props.placeholder ? translatePhrase(props.placeholder) : '')
+const translatedError = computed(() => props.error ? translatePhrase(props.error) : '')
+
 const containerClass = computed(() => [
   'flex items-center h-9 px-3 rounded-md border transition-all duration-100',
   'bg-surface-1',
@@ -32,13 +37,13 @@ const containerClass = computed(() => [
 
 <template>
   <div class="flex flex-col gap-1.5">
-    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ label }}</label>
+    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ translatedLabel }}</label>
     <div :class="containerClass">
       <component :is="icon" v-if="icon" :size="16" class="text-text-muted mr-2 shrink-0" />
       <input
         :type="type"
         :value="modelValue"
-        :placeholder="placeholder"
+        :placeholder="translatedPlaceholder"
         :disabled="disabled"
         class="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none min-w-0"
         @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
@@ -46,6 +51,6 @@ const containerClass = computed(() => [
         @blur="focused = false"
       />
     </div>
-    <p v-if="error" class="text-xs text-danger">{{ error }}</p>
+    <p v-if="error" class="text-xs text-danger">{{ translatedError }}</p>
   </div>
 </template>

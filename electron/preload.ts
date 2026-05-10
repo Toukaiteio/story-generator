@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+    setUnsavedChanges: (value: boolean) => ipcRenderer.send('window:set-unsaved-changes', value),
   },
 
   // App info
@@ -25,6 +26,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     load: (id: string, directoryPath?: string) => ipcRenderer.invoke('project:load', id, directoryPath),
     save: (project: any, directoryPath?: string) => ipcRenderer.invoke('project:save', project, directoryPath),
     delete: (id: string) => ipcRenderer.invoke('project:delete', id),
+  },
+
+  vibeChat: {
+    load: (projectId: string, directoryPath: string | undefined, key: string) => ipcRenderer.invoke('vibe-chat:load', { projectId, directoryPath, key }),
+    save: (projectId: string, directoryPath: string | undefined, key: string, payload: any) => ipcRenderer.invoke('vibe-chat:save', { projectId, directoryPath, key, payload }),
   },
 
   // Provider operations

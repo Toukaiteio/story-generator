@@ -8,6 +8,8 @@ import https from 'https'
 declare const __dirname: string
 
 let mainWindow: BrowserWindow | null = null
+let hasUnsavedChanges = false
+let forceClosing = false
 
 const DATA_DIR = join(app.getPath('userData'), 'story-generator')
 const PROJECTS_DIR = join(DATA_DIR, 'projects')
@@ -41,6 +43,26 @@ function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
+
+  mainWindow.on('close', event => {
+    if (!hasUnsavedChanges || forceClosing) return
+    event.preventDefault()
+    const result = dialog.showMessageBoxSync(mainWindow!, {
+      type: 'warning',
+      buttons: ['Cancel', 'Close without saving'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Unsaved changes',
+      message: 'You have unsaved chapter changes.',
+      detail: 'Close the app without saving these chapter changes?',
+      noLink: true,
+    })
+
+    if (result === 1) {
+      forceClosing = true
+      mainWindow?.close()
+    }
+  })
 }
 
 app.whenReady().then(() => {
@@ -72,6 +94,9 @@ ipcMain.on('window:maximize', () => {
 })
 ipcMain.on('window:close', () => mainWindow?.close())
 ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
+ipcMain.on('window:set-unsaved-changes', (_event, value: boolean) => {
+  hasUnsavedChanges = Boolean(value)
+})
 
 // Shell operations
 ipcMain.handle('shell:reveal', (_event, path: string) => {
@@ -106,6 +131,21 @@ function loadFullProject(id: string, folder: string) {
   }
 
   return { ...metadata, chapters, characters, directoryPath: folder }
+}
+
+function resolveProjectFolder(id: string, directoryPath?: string) {
+  if (directoryPath && existsSync(directoryPath)) return directoryPath
+  const linkPath = join(PROJECTS_DIR, `${id}.link`)
+  if (existsSync(linkPath)) {
+    const linked = readFileSync(linkPath, 'utf-8').trim()
+    if (linked && existsSync(linked)) return linked
+  }
+  const legacyPath = join(PROJECTS_DIR, `${id}.json`)
+  return existsSync(legacyPath) ? PROJECTS_DIR : null
+}
+
+function safeVibeChatFileName(key: string) {
+  return `${key.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 180) || 'conversation'}.json`
 }
 
 ipcMain.handle('project:list', () => {
@@ -205,6 +245,28 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
 ipcMain.handle('project:delete', (_event, id: string) => {
   const filePath = join(PROJECTS_DIR, `${id}.json`)
   if (existsSync(filePath)) unlinkSync(filePath)
+  return true
+})
+
+ipcMain.handle('vibe-chat:load', (_event, request: { projectId: string; directoryPath?: string; key: string }) => {
+  if (!request?.projectId || !request?.key) return null
+  const projectFolder = resolveProjectFolder(request.projectId, request.directoryPath)
+  if (!projectFolder) return null
+
+  const chatPath = join(projectFolder, 'vibe-chat', safeVibeChatFileName(request.key))
+  if (!existsSync(chatPath)) return null
+  return JSON.parse(readFileSync(chatPath, 'utf-8'))
+})
+
+ipcMain.handle('vibe-chat:save', (_event, request: { projectId: string; directoryPath?: string; key: string; payload: any }) => {
+  if (!request?.projectId || !request?.key) return false
+  const projectFolder = resolveProjectFolder(request.projectId, request.directoryPath)
+  if (!projectFolder) return false
+
+  const chatDir = join(projectFolder, 'vibe-chat')
+  if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true })
+  const chatPath = join(chatDir, safeVibeChatFileName(request.key))
+  writeFileSync(chatPath, JSON.stringify(request.payload ?? {}, null, 2), 'utf-8')
   return true
 })
 
@@ -316,7 +378,7 @@ function requestJsonPost(endpoint: string, headers: Record<string, string>, body
 }
 
 ipcMain.handle('provider:list-models', async (_event, request: { type: string; apiKey: string; baseUrl: string }) => {
-  const type = request?.type === 'anthropic' ? 'anthropic' : request?.type === 'google' ? 'google' : 'openai'
+  const type = request?.type === 'anthropic' ? 'anthropic' : request?.type === 'google' ? 'google' : request?.type === 'openai-responses' ? 'openai-responses' : 'openai'
   if (!request?.baseUrl) {
     throw new Error('Invalid provider model sync request')
   }
@@ -325,7 +387,7 @@ ipcMain.handle('provider:list-models', async (_event, request: { type: string; a
     'Content-Type': 'application/json',
   }
 
-  if (type === 'openai' && request.apiKey) {
+  if ((type === 'openai' || type === 'openai-responses') && request.apiKey) {
     headers.Authorization = `Bearer ${request.apiKey}`
   } else if (type === 'anthropic') {
     headers['anthropic-version'] = '2023-06-01'
@@ -354,7 +416,7 @@ ipcMain.handle('provider:list-models', async (_event, request: { type: string; a
 })
 
 ipcMain.handle('provider:create-embedding', async (_event, request: { type: string; apiKey: string; baseUrl: string; model: string; text: string }) => {
-  const type = request?.type === 'anthropic' ? 'anthropic' : request?.type === 'google' ? 'google' : 'openai'
+  const type = request?.type === 'anthropic' ? 'anthropic' : request?.type === 'google' ? 'google' : request?.type === 'openai-responses' ? 'openai-responses' : 'openai'
   if (!request?.baseUrl || !request?.model || typeof request?.text !== 'string') {
     throw new Error('Invalid provider embedding request')
   }

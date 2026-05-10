@@ -54,7 +54,7 @@ export function exportToMarkdown(project: StoryProject): string {
       lines.push('')
       lines.push(`## Chapter ${chapter.index + 1}: ${chapter.title}`)
       lines.push('')
-      const content = chapter.polishedContent || chapter.content
+      const content = chapter.content
       lines.push(content || '*No content yet*')
       lines.push('')
     }

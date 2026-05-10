@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type AnthropicSDK from '@anthropic-ai/sdk'
 import type { ChatMessage } from '@/types/provider'
-import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks } from './types'
+import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -10,6 +10,13 @@ export class AnthropicAdapter implements ProviderAdapter {
       apiKey: options.apiKey,
       baseURL: options.baseUrl,
     })
+  }
+
+  private buildToolChoice(toolOptions?: ToolCallOptions): AnthropicSDK.ToolChoice | undefined {
+    const choice = toolOptions?.toolChoice
+    if (!choice || choice === 'auto') return { type: 'auto' }
+    if (choice === 'none') return { type: 'none' }
+    return { type: 'tool', name: choice.function.name }
   }
 
   private buildSystem(messages: ChatMessage[]): string | undefined {
@@ -68,7 +75,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     return block?.type === 'text' ? block.text : ''
   }
 
-  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[]): Promise<FunctionCallingResponse> {
+  async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
     const client = this.getClient(options)
 
     const response = await client.messages.create({
@@ -82,7 +89,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         description: tool.description,
         input_schema: tool.parameters,
       })),
-      tool_choice: { type: 'auto' },
+      tool_choice: this.buildToolChoice(toolOptions),
     })
 
     const toolCalls: ToolCall[] = []
@@ -118,6 +125,8 @@ export class AnthropicAdapter implements ProviderAdapter {
         system: this.buildSystem(messages),
         messages: this.buildMessages(messages),
         stream: true,
+      }, {
+        signal: options.signal,
       })
 
       let fullText = ''
@@ -134,7 +143,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
   }
 
-  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks): Promise<void> {
+  async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks, toolOptions?: ToolCallOptions): Promise<void> {
     const client = this.getClient(options)
 
     try {
@@ -149,7 +158,9 @@ export class AnthropicAdapter implements ProviderAdapter {
           description: tool.description,
           input_schema: tool.parameters,
         })),
-        tool_choice: { type: 'auto' },
+        tool_choice: this.buildToolChoice(toolOptions),
+      }, {
+        signal: options.signal,
       })
 
       stream.on('text', (text) => {
