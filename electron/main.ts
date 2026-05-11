@@ -20,6 +20,8 @@ function ensureDirs() {
 }
 
 function createWindow() {
+  forceClosing = false
+  hasUnsavedChanges = false
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -47,21 +49,11 @@ function createWindow() {
   mainWindow.on('close', event => {
     if (!hasUnsavedChanges || forceClosing) return
     event.preventDefault()
-    const result = dialog.showMessageBoxSync(mainWindow!, {
-      type: 'warning',
-      buttons: ['Cancel', 'Close without saving'],
-      defaultId: 0,
-      cancelId: 0,
-      title: 'Unsaved changes',
-      message: 'You have unsaved chapter changes.',
-      detail: 'Close the app without saving these chapter changes?',
-      noLink: true,
-    })
+    mainWindow?.webContents.send('window:close-requested')
+  })
 
-    if (result === 1) {
-      forceClosing = true
-      mainWindow?.close()
-    }
+  mainWindow.on('closed', () => {
+    mainWindow = null
   })
 }
 
@@ -94,8 +86,18 @@ ipcMain.on('window:maximize', () => {
 })
 ipcMain.on('window:close', () => mainWindow?.close())
 ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
-ipcMain.on('window:set-unsaved-changes', (_event, value: boolean) => {
-  hasUnsavedChanges = Boolean(value)
+ipcMain.on('window:set-unsaved-changes', (_event, payload: boolean | { hasUnsavedChanges?: boolean }) => {
+  hasUnsavedChanges = typeof payload === 'boolean'
+    ? payload
+    : Boolean(payload?.hasUnsavedChanges)
+})
+ipcMain.on('window:close-request-response', (_event, action: 'cancel' | 'discard') => {
+  if (action !== 'discard') return
+  forceClosing = true
+  hasUnsavedChanges = false
+  const target = mainWindow
+  if (!target || target.isDestroyed()) return
+  target.destroy()
 })
 
 // Shell operations
@@ -112,21 +114,33 @@ function loadFullProject(id: string, folder: string) {
   
   const metadata = JSON.parse(readFileSync(metadataPath, 'utf-8'))
   
-  const chapters: any[] = []
   const chaptersDir = join(folder, 'chapters')
+  const chapterIndexPath = join(chaptersDir, 'index.json')
+  const chapters: any[] = []
   if (existsSync(chaptersDir)) {
-    const chapterFiles = readdirSync(chaptersDir).filter(f => f.endsWith('.json') && f !== 'index.json')
-    for (const f of chapterFiles) {
-      chapters.push(JSON.parse(readFileSync(join(chaptersDir, f), 'utf-8')))
+    const chapterIds = existsSync(chapterIndexPath)
+      ? (JSON.parse(readFileSync(chapterIndexPath, 'utf-8')) || []).map((item: any) => String(item?.id || '').trim()).filter(Boolean)
+      : readdirSync(chaptersDir).filter(f => f.endsWith('.json') && f !== 'index.json').map(f => f.replace(/\.json$/, ''))
+
+    for (const chapterId of chapterIds) {
+      const chapterPath = join(chaptersDir, `${chapterId}.json`)
+      if (!existsSync(chapterPath)) continue
+      chapters.push(JSON.parse(readFileSync(chapterPath, 'utf-8')))
     }
   }
 
-  const characters: any[] = []
   const charactersDir = join(folder, 'characters')
+  const characterIndexPath = join(charactersDir, 'index.json')
+  const characters: any[] = []
   if (existsSync(charactersDir)) {
-    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.json') && f !== 'index.json')
-    for (const f of charFiles) {
-      characters.push(JSON.parse(readFileSync(join(charactersDir, f), 'utf-8')))
+    const characterIds = existsSync(characterIndexPath)
+      ? (JSON.parse(readFileSync(characterIndexPath, 'utf-8')) || []).map((item: any) => String(item?.id || '').trim()).filter(Boolean)
+      : readdirSync(charactersDir).filter(f => f.endsWith('.json') && f !== 'index.json').map(f => f.replace(/\.json$/, ''))
+
+    for (const characterId of characterIds) {
+      const characterPath = join(charactersDir, `${characterId}.json`)
+      if (!existsSync(characterPath)) continue
+      characters.push(JSON.parse(readFileSync(characterPath, 'utf-8')))
     }
   }
 
@@ -222,6 +236,11 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   // Save chapters
   const chaptersDir = join(projectFolder, 'chapters')
   if (!existsSync(chaptersDir)) mkdirSync(chaptersDir, { recursive: true })
+  const chapterIds = new Set<string>((chapters || []).map((c: any) => String(c?.id || '').trim()).filter(Boolean))
+  for (const file of readdirSync(chaptersDir).filter(f => f.endsWith('.json') && f !== 'index.json')) {
+    const id = file.replace(/\.json$/, '')
+    if (!chapterIds.has(id)) unlinkSync(join(chaptersDir, file))
+  }
   writeFileSync(join(chaptersDir, 'index.json'), JSON.stringify((chapters || []).map((c: any) => ({ id: c.id, title: c.title })), null, 2), 'utf-8')
   for (const chapter of (chapters || [])) {
     writeFileSync(join(chaptersDir, `${chapter.id}.json`), JSON.stringify(chapter, null, 2), 'utf-8')
@@ -230,6 +249,11 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   // Save characters
   const charactersDir = join(projectFolder, 'characters')
   if (!existsSync(charactersDir)) mkdirSync(charactersDir, { recursive: true })
+  const characterIds = new Set<string>((characters || []).map((c: any) => String(c?.id || '').trim()).filter(Boolean))
+  for (const file of readdirSync(charactersDir).filter(f => f.endsWith('.json') && f !== 'index.json')) {
+    const id = file.replace(/\.json$/, '')
+    if (!characterIds.has(id)) unlinkSync(join(charactersDir, file))
+  }
   writeFileSync(join(charactersDir, 'index.json'), JSON.stringify((characters || []).map((c: any) => ({ id: c.id, name: c.name })), null, 2), 'utf-8')
   for (const char of (characters || [])) {
     writeFileSync(join(charactersDir, `${char.id}.json`), JSON.stringify(char, null, 2), 'utf-8')

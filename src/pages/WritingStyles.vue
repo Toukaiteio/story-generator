@@ -5,6 +5,7 @@ import { useWritingStyleStore } from '@/stores/writingStyle'
 import { useProviderStore } from '@/stores/provider'
 import { useToast } from '@/composables/useToast'
 import { providerManager, type ToolDefinition, type ToolCall } from '@/services/provider'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import type { ChatMessage } from '@/types/provider'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
@@ -410,7 +411,7 @@ async function generateFromReference() {
       const guideMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: 'You are an expert literary analyst. Analyze the reference text and build a writing style draft. Use the provided tool to fill the style name, description, tags, and Style Guide Content. You may set multiple fields in the same tool call. For Style Guide Content, split long output into multiple smaller chunks rather than dumping everything at once. Prefer one section or subsection per chunk. Do not add meta commentary in plain text; use the tool for structured output.',
+          content: injectCustomSystemPrompt('You are an expert literary analyst. Analyze the reference text and build a writing style draft. Use the provided tool to fill the style name, description, tags, and Style Guide Content. You may set multiple fields in the same tool call. For Style Guide Content, split long output into multiple smaller chunks rather than dumping everything at once. Prefer one section or subsection per chunk. Do not add meta commentary in plain text; use the tool for structured output.'),
         },
         {
           role: 'user',
@@ -535,7 +536,7 @@ async function generateFromReference() {
         const legacyGuideMessages: ChatMessage[] = [
           {
             role: 'system',
-            content: 'You are an expert literary analyst. You analyze reference texts and produce detailed writing style guides. Output only the style guide in clean markdown. Do not add meta commentary.',
+            content: injectCustomSystemPrompt('You are an expert literary analyst. You analyze reference texts and produce detailed writing style guides. Output only the style guide in clean markdown. Do not add meta commentary.'),
           },
           {
             role: 'user',
@@ -563,7 +564,7 @@ async function generateFromReference() {
       const sampleMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: 'You are a creative writer. You write strictly following the provided style guide. Output only the sample text, no meta commentary.',
+          content: injectCustomSystemPrompt('You are a creative writer. You write strictly following the provided style guide. Output only the sample text, no meta commentary.'),
         },
         {
           role: 'user',
@@ -581,7 +582,7 @@ async function generateFromReference() {
       const compareMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: 'You are a literary style comparison expert. You compare two texts and determine if they share the same writing style. Respond ONLY with a JSON object: { "match": true/false, "feedback": "brief explanation of similarities and differences" }',
+          content: injectCustomSystemPrompt('You are a literary style comparison expert. You compare two texts and determine if they share the same writing style. Respond ONLY with a JSON object: { "match": true/false, "feedback": "brief explanation of similarities and differences" }'),
         },
         {
           role: 'user',

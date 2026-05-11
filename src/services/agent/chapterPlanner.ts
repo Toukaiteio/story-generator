@@ -1,6 +1,7 @@
 import { BaseAgent, type AgentResult } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { containsMetaCommentary } from './validation'
 
 export class ChapterPlannerExpert extends BaseAgent {
@@ -187,7 +188,7 @@ Call create_chapter_outline now to complete or refine the conflict, keyEvents, c
         : `The previous response was invalid. Issues:\n${lastIssues.join('\n')}\nPlease try again using the tool.`
 
       const messages = [
-        { role: 'system' as const, content: this.getSystemPrompt() },
+        { role: 'system' as const, content: injectCustomSystemPrompt(this.getSystemPrompt()) },
         { role: 'user' as const, content: userPrompt },
       ]
 

@@ -1,6 +1,7 @@
 import { BaseAgent, type AgentResult } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 
 export class ChapterTitlePlannerExpert extends BaseAgent {
   type: AgentType = 'chapterTitlePlanner' as AgentType
@@ -282,7 +283,7 @@ Every chapter must have a concrete title and a concrete objective. Do not includ
         : `The previous response was invalid. Issues:\n${lastIssues.join('\n')}\nPlease try again using the tool.`
 
       const messages = [
-        { role: 'system' as const, content: this.getSystemPrompt(context) },
+        { role: 'system' as const, content: injectCustomSystemPrompt(this.getSystemPrompt(context)) },
         { role: 'user' as const, content: userPrompt },
       ]
 

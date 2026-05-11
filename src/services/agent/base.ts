@@ -4,6 +4,7 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { providerManager } from '@/services/provider'
 import { fitMessagesToContextSmart, fitToContext } from '@/services/context'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { useProviderStore } from '@/stores/provider'
 import type { FunctionCallingResponse } from '@/services/provider/types'
 import { requestToolContinuation } from './toolContinuation'
@@ -125,7 +126,7 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
 
   private prepareMessages(context: Record<string, any>, userPrompt?: string): ChatMessage[] {
     const raw: ChatMessage[] = [
-      { role: 'system', content: this.withBaseToolInstructions(this.getSystemPrompt()) },
+      { role: 'system', content: injectCustomSystemPrompt(this.withBaseToolInstructions(this.getSystemPrompt())) },
       { role: 'user', content: userPrompt ?? this.buildPrompt(context) },
     ]
 
@@ -185,9 +186,10 @@ Base tool available to every agent:
   private ensureBaseToolInstructions(messages: ChatMessage[]) {
     return messages.map((message, index) => {
       if (index !== 0 || message.role !== 'system' || !message.content) return message
-      return message.content.includes('Base tool available to every agent:')
-        ? message
-        : { ...message, content: this.withBaseToolInstructions(message.content) }
+      const content = message.content.includes('Base tool available to every agent:')
+        ? message.content
+        : this.withBaseToolInstructions(message.content)
+      return { ...message, content: injectCustomSystemPrompt(content) }
     })
   }
 

@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { ProviderType } from './types/provider'
+import type { UnsavedChapterLocation } from './services/unsaved'
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
@@ -15,7 +16,9 @@ declare global {
       maximize: () => void
       close: () => void
       isMaximized: () => Promise<boolean>
-      setUnsavedChanges: (value: boolean) => void
+      setUnsavedChanges: (payload: boolean | UnsavedStatePayload) => void
+      onCloseRequested: (callback: () => void) => () => void
+      confirmCloseHandled: (action: 'cancel' | 'discard') => void
     }
     app: {
       getPath: (name: 'documents' | 'downloads' | 'desktop' | 'userData') => Promise<string | null>
@@ -49,6 +52,11 @@ declare global {
       write: (path: string, content: string) => Promise<boolean>
       writeBinary: (path: string, base64: string) => Promise<boolean>
     }
+  }
+
+  interface UnsavedStatePayload {
+    hasUnsavedChanges: boolean
+    entries?: UnsavedChapterLocation[]
   }
 
   interface Window {

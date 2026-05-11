@@ -1,6 +1,7 @@
 import { BaseAgent, type AgentResult } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { containsChapterBreakdown, containsMetaCommentary, countWords, extractJsonPayload } from './validation'
 import { providerManager } from '@/services/provider'
 
@@ -511,7 +512,7 @@ Keep the character concepts intact and do not omit any required fields. The list
         : this.buildRepairPrompt(context, previousResponse, lastIssues)
 
       const messages = [
-        { role: 'system' as const, content: this.getSystemPrompt() },
+        { role: 'system' as const, content: injectCustomSystemPrompt(this.getSystemPrompt()) },
         { role: 'user' as const, content: userPrompt },
       ]
 
@@ -575,7 +576,7 @@ Keep the character concepts intact and do not omit any required fields. The list
         : this.buildRepairPrompt(context, previousResponse, lastIssues)
 
       const messages = [
-        { role: 'system' as const, content: this.getCharacterSystemPrompt() },
+        { role: 'system' as const, content: injectCustomSystemPrompt(this.getCharacterSystemPrompt()) },
         { role: 'user' as const, content: userPrompt },
       ]
 

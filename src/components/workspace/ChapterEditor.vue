@@ -57,7 +57,6 @@ let outlineSaveTimer: ReturnType<typeof setTimeout> | null = null
 let syncingOutline = false
 let syncingChapter = false
 let loadedChapterId = ''
-let lastReportedUnsavedState = false
 
 function createContentVersion(label: string, versionContent: string, issues?: any[]): ChapterContentVersion {
   return {
@@ -202,9 +201,6 @@ async function finishOutlineEdit() {
 }
 
 function setWindowUnsavedState(value: boolean) {
-  const hasAnyDraft = Object.keys(ui.chapterEditorDrafts).length > 0
-  lastReportedUnsavedState = value || hasAnyDraft
-  window.electronAPI?.window?.setUnsavedChanges?.(value || hasAnyDraft)
   const chapterId = loadedChapterId || props.chapterId
   ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, value)
 }
@@ -226,7 +222,6 @@ onBeforeUnmount(() => {
   if (!isDirty.value) {
     const chapterId = loadedChapterId || props.chapterId
     ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
-    if (lastReportedUnsavedState) window.electronAPI?.window?.setUnsavedChanges?.(false)
   }
 })
 
@@ -305,9 +300,6 @@ async function save(options: { silent?: boolean } = {}) {
   }
   ui.clearChapterEditorDraft(chapterId)
   ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
-  const stillHasUnsavedWork = isDirty.value || Object.keys(ui.chapterEditorDrafts).length > 0
-  lastReportedUnsavedState = stillHasUnsavedWork
-  window.electronAPI?.window?.setUnsavedChanges?.(stillHasUnsavedWork)
   if (!options.silent) {
     toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
   }

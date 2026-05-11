@@ -787,13 +787,39 @@ function addCharacter() {
   selectedCharacterId.value = character.id
 }
 
-function removeCharacter(id: string) {
+async function removeCharacter(id: string) {
   const index = charactersDraft.value.findIndex(character => character.id === id)
   if (index === -1) return
-  charactersDraft.value.splice(index, 1)
+  const removed = charactersDraft.value[index]
+  const nextCharacters = charactersDraft.value
+    .filter(character => character.id !== id)
+    .map(character => ({
+      ...character,
+      relations: character.relations.filter(relation => relation.targetId !== id),
+      updatedAt: new Date().toISOString(),
+    }))
+
+  const previousCharacters = cloneCharacters(charactersDraft.value)
+  charactersDraft.value = nextCharacters
   if (selectedCharacterId.value === id) {
     selectedCharacterId.value = charactersDraft.value[0]?.id ?? null
   }
+
+  if (!project.value) return
+
+  const saved = await projectStore.updateProject(project.value.id, {
+    characters: cloneCharacters(nextCharacters),
+  })
+  if (!saved) {
+    charactersDraft.value = previousCharacters
+    if (!charactersDraft.value.some(character => character.id === selectedCharacterId.value)) {
+      selectedCharacterId.value = removed?.id ?? charactersDraft.value[0]?.id ?? null
+    }
+    toast.error('Failed to delete character')
+    return
+  }
+
+  toast.warning(`Character "${removed?.name || 'Unknown'}" deleted`)
 }
 
 function handleDeleteChapter(id: string) {

@@ -6,6 +6,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseTextarea from '@/components/ui/BaseTextarea.vue'
 import { Monitor, Globe, Info, Database, FolderOpen, Wrench } from 'lucide-vue-next'
 
 const ui = useUiStore()
@@ -37,6 +38,10 @@ function handleMinIssueSeverityChange(value: any) {
 
 function handleVibeRewindPointsChange(value: string) {
   ui.setVibeRewindPoints(Number(value))
+}
+
+function handleCustomSystemPromptChange(value: string) {
+  ui.setCustomSystemPrompt(value)
 }
 
 async function handleBrowseStorage() {
@@ -132,6 +137,26 @@ async function handleBrowseStorage() {
             />
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
               {{ ui.text('Default is 1. Before each Vibe AI request, the app saves a small snapshot of the current workspace so you can rewind from that message if the AI makes a bad edit. Older snapshots are replaced when the limit is exceeded. Set 0 to disable rewind snapshots.') }}
+            </p>
+          </div>
+        </section>
+
+        <section class="border-t border-surface-4 pt-6">
+          <div class="flex items-center gap-2 mb-4">
+            <Wrench :size="16" class="text-accent" />
+            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Prepend to System Prompts') }}</h2>
+          </div>
+          <div class="pl-6">
+            <BaseTextarea
+              :model-value="ui.customSystemPrompt"
+              :label="ui.text('Custom prompt prefix')"
+              :rows="8"
+              :auto-resize="true"
+              :placeholder="ui.text('Optional global instructions inserted before each built-in system prompt...')"
+              @update:model-value="handleCustomSystemPromptChange"
+            />
+            <p class="mt-2 text-xs leading-relaxed text-text-muted">
+              {{ ui.text('This text is prepended before every built-in Agent and AI request system prompt. It does not replace the built-in prompt. Leave it empty to disable this behavior.') }}
             </p>
           </div>
         </section>

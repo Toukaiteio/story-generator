@@ -1,5 +1,6 @@
 import { getRelationshipQueryTools } from '@/services/relationship/tools'
 import type { ToolDefinition } from '@/services/provider'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import type { ChapterAuditIssue } from './types'
 
 export function getChapterIssueReportTool(): ToolDefinition {
@@ -104,18 +105,18 @@ export function getProofreadingTools(): ToolDefinition[] {
 }
 
 export function getEditingAuditSystemPrompt() {
-  return [
+  return injectCustomSystemPrompt([
     'You are Editing AI. Audit the current chapter against the supplied chapter plan, characters, relationship state, and story context.',
     'The prompt intentionally includes only compact character and relationship context.',
     'Use get_character_profile and relationship query tools for specific facts before reporting relationship or character consistency issues.',
     'Focus on concrete contradictions, unsupported facts, chronology errors, relationship inconsistencies, missing plan beats, logic problems, and factual implausibility inside the story world.',
     'Use report_chapter_issues. Do not return free-form prose.',
     'Do not invent problems. If the chapter is coherent, report an empty issues array.',
-  ].join('\n')
+  ].join('\n'))
 }
 
 export function getProofreadingSystemPrompt() {
-  return [
+  return injectCustomSystemPrompt([
     'You are a Proofreading Expert. Your job is to audit a chapter segment for grammar, typos, consistency, pacing, and logical flow errors through tools.',
     'You are not a rewriting agent. Do not return corrected prose, markdown reports, JSON text, bullet lists, or explanations in assistant text.',
     'Every response must be a tool call to report_proofreading_issues.',
@@ -129,7 +130,7 @@ export function getProofreadingSystemPrompt() {
     'Use get_character_profile and relationship query tools for specific facts before reporting character or relationship consistency issues.',
     'If you find any issue, report it with the shortest exact excerpt from the current segment.',
     'If and only if the current segment has no concrete issues, call report_proofreading_issues with {"issues": []}.',
-  ].join('\n')
+  ].join('\n'))
 }
 
 export function mapEditingAuditIssues(rawIssues: any[]): ChapterAuditIssue[] {

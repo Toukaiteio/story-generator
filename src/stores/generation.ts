@@ -15,6 +15,7 @@ import { generationStageOrder, getNextGenerationAction, isChapterPlanComplete, r
 import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSystemPrompt, getProofreadingTools, getChapterRegion, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
 import { chatWithRelationshipTools, chatWithRelationshipToolsInPlace, getToolCall } from '@/services/generation/toolWorkflow'
 import { fitMessagesToContextSmart, fitToContext } from '@/services/context'
+import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import type { GenerationStage, StoryProject } from '@/types/project'
 import type { ChapterOutline } from '@/types/chapter'
 import type { AgentType } from '@/types/agent'
@@ -835,7 +836,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const modelRef = getUsableAgentModelRef('editingAI', modelOverride)
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: 'You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.' },
+      { role: 'system', content: injectCustomSystemPrompt('You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.') },
       { role: 'user', content: prompt },
     ]
 
@@ -1005,7 +1006,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: [
+        content: injectCustomSystemPrompt([
           'You are Vibe AI inside a chapter editor.',
           'You must use a tool for every successful edit.',
           'For multi-step edits, call update_todolist first and update it as you inspect, edit, and complete the request.',
@@ -1018,7 +1019,7 @@ export const useGenerationStore = defineStore('generation', () => {
           'If you are unsure about the exact targetText, call get_chapter_region first by line, paragraph, or section index.',
           'If a section replacement fails because targetText does not match, use get_chapter_region to inspect the relevant area and retry with exact text.',
           'Do not respond with plain prose when an edit is requested.',
-        ].join('\n'),
+        ].join('\n')),
       },
       { role: 'user', content: prompt },
     ]
@@ -1519,7 +1520,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const messages: ChatMessage[] = [
       {
         role: 'system',
-        content: [
+        content: injectCustomSystemPrompt([
           'You are Vibe AI inside a chapter outline editor.',
           'You must use tools for every successful outline edit.',
           'Use get_chapter_outline before editing if the exact field content matters.',
@@ -1527,7 +1528,7 @@ export const useGenerationStore = defineStore('generation', () => {
           'Use rewrite_chapter_outline when multiple fields need coordinated changes.',
           'Never edit chapter prose. These tools only modify title and outline fields.',
           'Do not reply with the revised outline in plain text. Complete the edit by calling an outline replacement tool.',
-        ].join('\n'),
+        ].join('\n')),
       },
       { role: 'user', content: prompt },
     ]

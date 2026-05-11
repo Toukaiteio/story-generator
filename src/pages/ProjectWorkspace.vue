@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
 import { useGenerationStore } from '@/stores/generation'
+import { buildUnsavedChapterLocations, type UnsavedChapterLocation } from '@/services/unsaved'
 import PanelGroup from '@/components/layout/PanelGroup.vue'
 import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar.vue'
 import StoryConfigPanel from '@/components/workspace/StoryConfigPanel.vue'
@@ -16,7 +17,8 @@ import GenerationControls from '@/components/workspace/GenerationControls.vue'
 import StreamPreview from '@/components/workspace/StreamPreview.vue'
 import KnowledgeBaseSidebar from '@/components/workspace/KnowledgeBaseSidebar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import { PenTool, ArrowLeft, Lock, Loader2 } from 'lucide-vue-next'
+import BaseDialog from '@/components/ui/BaseDialog.vue'
+import { PenTool, ArrowLeft, Lock, Loader2, AlertTriangle, LocateFixed } from 'lucide-vue-next'
 import BaseButton from '@/components/ui/BaseButton.vue'
 
 const route = useRoute()
@@ -25,17 +27,58 @@ const projectStore = useProjectStore()
 const ui = useUiStore()
 const genStore = useGenerationStore()
 const workspaceNodeBeforeFollowing = ref<string | null>(null)
-const hasChapterEditorDrafts = computed(() => Object.keys(ui.chapterEditorDrafts).length > 0)
+const showUnsavedCloseDialog = ref(false)
+let removeCloseRequestListener: (() => void) | null = null
+
+const unsavedScan = computed(() =>
+  buildUnsavedChapterLocations(projectStore.projects, ui.unsavedWorkspaceNodes, ui.chapterEditorDrafts)
+)
+const unsavedEntries = computed(() => unsavedScan.value.entries)
+const staleUnsavedChapterIds = computed(() => unsavedScan.value.staleChapterIds)
+const hasUnsavedWork = computed(() => unsavedEntries.value.length > 0)
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!hasChapterEditorDrafts.value) return
+  if (!hasUnsavedWork.value) return
   event.preventDefault()
   event.returnValue = ''
+}
+
+function formatUnsavedLocation(entry: UnsavedChapterLocation) {
+  const chapterLabel = `${ui.text('Ch')} ${entry.chapterIndex + 1}`
+  const chapterTitle = entry.chapterTitle || ui.text('Untitled')
+  return `${entry.projectName} / ${chapterLabel}: ${chapterTitle}`
+}
+
+async function locateUnsavedEntry(entry: UnsavedChapterLocation) {
+  showUnsavedCloseDialog.value = false
+  if (route.params.id !== entry.projectId) {
+    await router.push({ name: 'Workspace', params: { id: entry.projectId } })
+  }
+  projectStore.setActiveProject(entry.projectId)
+  ui.setWorkspaceNode(entry.workspaceNode)
+}
+
+async function locateFirstUnsavedEntry() {
+  const first = unsavedEntries.value[0]
+  if (!first) return
+  await locateUnsavedEntry(first)
+}
+
+function discardUnsavedAndClose() {
+  showUnsavedCloseDialog.value = false
+  window.electronAPI?.window?.confirmCloseHandled?.('discard')
 }
 
 onMounted(async () => {
   ui.navigateTo('workspace')
   window.addEventListener('beforeunload', handleBeforeUnload)
+  removeCloseRequestListener = window.electronAPI?.window?.onCloseRequested?.(() => {
+    if (!hasUnsavedWork.value) {
+      window.electronAPI?.window?.confirmCloseHandled?.('discard')
+      return
+    }
+    showUnsavedCloseDialog.value = true
+  }) ?? null
   // Ensure projects are loaded before setting active project
   if (projectStore.projects.length === 0) {
     await projectStore.loadProjects()
@@ -48,10 +91,22 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  removeCloseRequestListener?.()
+  removeCloseRequestListener = null
 })
 
-watch(hasChapterEditorDrafts, hasDrafts => {
-  window.electronAPI?.window?.setUnsavedChanges?.(hasDrafts)
+watch(staleUnsavedChapterIds, chapterIds => {
+  for (const chapterId of chapterIds) {
+    ui.clearChapterEditorDraft(chapterId)
+    ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
+  }
+}, { immediate: true })
+
+watch(hasUnsavedWork, hasUnsaved => {
+  window.electronAPI?.window?.setUnsavedChanges?.({
+    hasUnsavedChanges: hasUnsaved,
+    entries: unsavedEntries.value,
+  })
 }, { immediate: true })
 
 watch(() => route.params.id, (id) => {
@@ -196,6 +251,54 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
         </div>
       </div>
     </div>
+
+    <BaseDialog v-model="showUnsavedCloseDialog" :title="ui.text('Unsaved changes')" width="620px">
+      <div class="space-y-4">
+        <div class="flex gap-3 rounded-lg border border-warning/20 bg-warning/8 px-4 py-3">
+          <AlertTriangle :size="18" class="mt-0.5 shrink-0 text-warning" />
+          <div class="space-y-1">
+            <p class="text-sm font-medium text-text-primary">{{ ui.text('You have unsaved chapter drafts.') }}</p>
+            <p class="text-sm leading-relaxed text-text-secondary">{{ ui.text('Review the locations below before closing. You can jump to an unsaved chapter or close the app without saving those drafts.') }}</p>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <p class="text-xs font-semibold uppercase tracking-wider text-text-muted">{{ ui.text('Unsaved locations') }}</p>
+          <button
+            v-for="entry in unsavedEntries"
+            :key="`${entry.projectId}:${entry.chapterId}`"
+            class="flex w-full items-center justify-between gap-3 rounded-lg border border-surface-4 bg-surface-2 px-4 py-3 text-left transition-colors hover:border-accent/30 hover:bg-surface-3"
+            @click="locateUnsavedEntry(entry)"
+          >
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-text-primary">{{ formatUnsavedLocation(entry) }}</p>
+              <p class="mt-1 text-xs text-text-secondary">
+                {{ entry.hasDraftSnapshot ? ui.text('Draft snapshot cached locally and not saved to the project yet.') : ui.text('This chapter is still marked as unsaved.') }}
+              </p>
+            </div>
+            <span class="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-xs font-semibold text-accent">
+              <LocateFixed :size="12" />
+              {{ ui.text('Locate') }}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex items-center justify-end gap-2">
+          <BaseButton variant="ghost" size="sm" @click="showUnsavedCloseDialog = false">
+            {{ ui.text('Cancel') }}
+          </BaseButton>
+          <BaseButton variant="secondary" size="sm" @click="locateFirstUnsavedEntry">
+            <LocateFixed :size="14" />
+            <span>{{ ui.text('Locate First Unsaved') }}</span>
+          </BaseButton>
+          <BaseButton variant="danger" size="sm" @click="discardUnsavedAndClose">
+            {{ ui.text('Close Without Saving') }}
+          </BaseButton>
+        </div>
+      </template>
+    </BaseDialog>
   </div>
 
   <div v-else class="h-full flex items-center justify-center">

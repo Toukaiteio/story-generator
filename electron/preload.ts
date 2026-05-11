@@ -7,7 +7,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
-    setUnsavedChanges: (value: boolean) => ipcRenderer.send('window:set-unsaved-changes', value),
+    setUnsavedChanges: (payload: boolean | { hasUnsavedChanges: boolean; entries?: unknown[] }) => ipcRenderer.send('window:set-unsaved-changes', payload),
+    onCloseRequested: (callback: () => void) => {
+      const listener = () => callback()
+      ipcRenderer.on('window:close-requested', listener)
+      return () => ipcRenderer.removeListener('window:close-requested', listener)
+    },
+    confirmCloseHandled: (action: 'cancel' | 'discard') => ipcRenderer.send('window:close-request-response', action),
   },
 
   // App info
