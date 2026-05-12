@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('project:list'),
     load: (id: string, directoryPath?: string) => ipcRenderer.invoke('project:load', id, directoryPath),
     save: (project: any, directoryPath?: string) => ipcRenderer.invoke('project:save', project, directoryPath),
-    delete: (id: string) => ipcRenderer.invoke('project:delete', id),
+    delete: (id: string, directoryPath?: string) => ipcRenderer.invoke('project:delete', id, directoryPath),
   },
 
   vibeChat: {

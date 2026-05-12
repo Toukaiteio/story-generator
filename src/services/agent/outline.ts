@@ -167,6 +167,28 @@ Keep the refined blueprint concise and story-level. Do not write chapter-by-chap
 Write everything in ${language || 'English'}.`
     }
 
+    if (planningMode === 'review') {
+      return `${basePrompt}
+
+This is a quick self-review pass. Check the current outline for obvious logic errors, missing stakes, role mismatches, or accidental chapter-level leakage.
+
+Current title:
+${title || 'Not provided'}
+
+Current synopsis:
+${synopsis || 'Not provided'}
+
+Current outline:
+${context.outline || 'Not provided'}
+
+Characters:
+${characters || 'No characters yet.'}
+
+If the outline is already sound, use refine_outline with the same structure and make only minimal clarity fixes.
+If you spot an obvious problem, use refine_outline to correct it without expanding into chapter-by-chapter detail.
+Keep the result compact and story-level.`
+    }
+
     return `${basePrompt}
 
 Use the create_outline tool to provide the story blueprint in ${language || 'English'}.
@@ -214,7 +236,7 @@ Do not break the story into chapters or scenes. Keep the result story-level, not
       return issues
     }
 
-    if (planningMode === 'refine' || !planningMode) {
+    if (planningMode === 'refine' || planningMode === 'review' || !planningMode) {
       if (countWords(text) < 40 && compactLength < 180) issues.push('Outline is too short; expand it into a compact story blueprint')
       if (countWords(text) > 220 || compactLength > 1200) issues.push('Outline is too detailed; keep it at the story blueprint level and leave chapters to Chapter Agent')
       if (hasChapterBreakdown) {
@@ -276,6 +298,31 @@ ${previousResponse}
 Use the refine_outline tool to rewrite the outline as a polished story blueprint only.
 Keep the cast aligned with the story-level beats and omit any Character Signals section.
 Do not add chapter-by-chapter detail or scene lists.`
+    }
+
+    if (planningMode === 'review') {
+      return `The previous outline self-review still found an issue.
+
+Issues:
+${issues.map(issue => `- ${issue}`).join('\n')}
+
+Working title:
+${title || 'Not provided'}
+
+Working synopsis:
+${synopsis || 'Not provided'}
+
+Confirmed characters:
+${characters || 'No characters yet.'}
+
+Original task:
+${this.buildPrompt(context)}
+
+Previous response:
+${previousResponse}
+
+Use the refine_outline tool to make only the minimal correction needed to remove the obvious issue.
+Keep the outline compact, story-level, and free of chapter-by-chapter detail or scene lists.`
     }
 
     return `The previous outline was incomplete or invalid.

@@ -11,6 +11,9 @@ export class OpenAIAdapter implements ProviderAdapter {
         const content = typeof message.content === 'string' && message.content.trim().length > 0
           ? message.content
           : undefined
+        const reasoningContent = typeof message.reasoning_content === 'string' && message.reasoning_content.trim().length > 0
+          ? message.reasoning_content
+          : undefined
         const toolCalls = (message.tool_calls ?? []).filter(toolCall =>
           toolCall.id &&
           toolCall.type === 'function' &&
@@ -18,14 +21,15 @@ export class OpenAIAdapter implements ProviderAdapter {
           typeof toolCall.function.arguments === 'string'
         )
 
-        if (!content && !toolCalls.length) {
+        if (!content && !toolCalls.length && !reasoningContent) {
           continue
         }
 
         const assistantMessage: Record<string, unknown> = {
           role: 'assistant',
         }
-        if (content) assistantMessage.content = content
+        assistantMessage.content = content ?? ''
+        if (reasoningContent) assistantMessage.reasoning_content = reasoningContent
         if (toolCalls.length) assistantMessage.tool_calls = toolCalls
         normalized.push(assistantMessage)
         continue

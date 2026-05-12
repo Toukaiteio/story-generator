@@ -781,10 +781,28 @@ async function generateAllChapterDrafts() {
   }
 }
 
-function addCharacter() {
+async function addCharacter() {
   const character = createEmptyCharacter()
+  const previousCharacters = cloneCharacters(charactersDraft.value)
   charactersDraft.value.push(character)
   selectedCharacterId.value = character.id
+
+  if (!project.value) {
+    toast.warning('New character added. Regenerate the outline so the story blueprint matches the updated cast.')
+    return
+  }
+
+  const saved = await projectStore.updateProject(project.value.id, {
+    characters: cloneCharacters(charactersDraft.value),
+  })
+  if (!saved) {
+    charactersDraft.value = previousCharacters
+    selectedCharacterId.value = previousCharacters[0]?.id ?? null
+    toast.error('Failed to add character')
+    return
+  }
+
+  toast.warning('New character added. Regenerate the outline so the story blueprint matches the updated cast.')
 }
 
 async function removeCharacter(id: string) {

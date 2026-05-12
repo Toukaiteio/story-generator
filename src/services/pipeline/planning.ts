@@ -269,6 +269,28 @@ export function parseCharacterArray(items: any[], now: string): Character[] {
   return characters
 }
 
+function validateCharacterRoleComposition(items: any[]): string[] {
+  const issues: string[] = []
+  let protagonistCount = 0
+  let antagonistCount = 0
+
+  for (const item of items) {
+    const role = typeof item?.role === 'string' ? item.role.trim().toLowerCase() : ''
+    if (role === 'protagonist') protagonistCount += 1
+    if (role === 'antagonist') antagonistCount += 1
+  }
+
+  if (protagonistCount !== 1) {
+    issues.push(`Character set must contain exactly one protagonist; found ${protagonistCount}.`)
+  }
+
+  if (antagonistCount < 1) {
+    issues.push('Character set must contain at least one antagonist or opposing force.')
+  }
+
+  return issues
+}
+
 export function resolveCharacterIdByName(characters: Character[], name: string): string | null {
   const normalized = name.trim().toLowerCase()
   if (!normalized) return null
@@ -544,8 +566,25 @@ async function runOutlineFirstStoryPlanningWorkflow(
   const refinedResult = await outlineAgent.execute(refinedContext, onToken)
   const refinedOutline = refinedContext._outlineData?.outline || refinedResult.content.trim()
 
-  return {
+  onProgress?.('Quickly reviewing the blueprint for obvious issues...')
+  const reviewContext: Record<string, any> = {
+    ...refinedContext,
+    planningMode: 'review',
+    title: draft.title || refinedContext.title || 'Untitled',
+    synopsis: draft.synopsis || refinedContext.synopsis || '',
     outline: refinedOutline,
+    characters: buildCharacterContextForTask(characters.length ? characters : project.characters, 'outlining'),
+  }
+  delete reviewContext._outlineData
+  const reviewResult = await outlineAgent.execute(reviewContext)
+  const reviewedOutline = reviewContext._outlineData?.outline || reviewResult.content.trim() || refinedOutline
+
+  if (reviewedOutline && reviewedOutline !== refinedOutline) {
+    await onIntermediateSave?.({ outline: reviewedOutline })
+  }
+
+  return {
+    outline: reviewedOutline || refinedOutline,
     characters,
   }
 }
@@ -580,7 +619,7 @@ export async function generateOutline(project: StoryProject) {
     customRequirements: project.customRequirements,
     outline: project.outline,
   })
-  const outlineResult = await outlineAgent.execute({
+  const outlineContext: Record<string, any> = {
     theme: project.theme,
     genre: project.genre,
     targetReader: project.targetReader,
@@ -590,8 +629,23 @@ export async function generateOutline(project: StoryProject) {
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     knowledgeContext,
-  })
-  return outlineResult.content
+  }
+  const outlineResult = await outlineAgent.execute(outlineContext)
+  const draft = outlineContext._outlineData || parsePlanningDraft(outlineResult.content)
+  const candidateOutline = typeof draft.outline === 'string' ? draft.outline : outlineResult.content
+
+  const reviewContext: Record<string, any> = {
+    ...outlineContext,
+    planningMode: 'review',
+    title: draft.title || 'Untitled',
+    synopsis: draft.synopsis || '',
+    outline: candidateOutline,
+    characters: buildCharacterContextForTask(project.characters, 'outlining'),
+  }
+  delete reviewContext._outlineData
+  const reviewResult = await outlineAgent.execute(reviewContext)
+
+  return reviewContext._outlineData?.outline || reviewResult.content.trim() || candidateOutline
 }
 
 export async function generateCharacters(

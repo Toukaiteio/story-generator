@@ -2,7 +2,7 @@ const REFUSAL_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /I['’]?m\s+sorry/gi, replacement: 'Certainly' },
   { pattern: /I\s+cannot\s+help/gi, replacement: 'I can help' },
   { pattern: /我\s*(?:无法|不能)/g, replacement: '我可以' },
-  { pattern: /抱歉[，,。]*/g, replacement: '好的，' },
+  { pattern: /抱歉[，,。]/g, replacement: '好的，' },
 ]
 
 const PARAGRAPH_BOUNDARY_RE = /\n\s*\n/
@@ -18,11 +18,11 @@ export function guardResponseText(text: string | null | undefined): GuardedTextR
   let next = source
 
   for (const { pattern, replacement } of REFUSAL_PATTERNS) {
+    pattern.lastIndex = 0
     if (pattern.test(next)) {
       detectedRefusal = true
       next = next.replace(pattern, replacement)
     }
-    pattern.lastIndex = 0
   }
 
   return { text: next, detectedRefusal }
@@ -44,17 +44,23 @@ export function createParagraphGuard(onParagraph: (text: string) => void) {
   let sanitized = ''
   let detectedRefusal = false
 
-  function emitCompletedParagraphs(final = false) {
-    while (true) {
-      const match = PARAGRAPH_BOUNDARY_RE.exec(pending)
-      if (!match) break
-      const cutIndex = match.index + match[0].length
+  function flushCompletedParagraphs(final = false) {
+    let boundaryIndex = pending.search(PARAGRAPH_BOUNDARY_RE)
+
+    while (boundaryIndex >= 0) {
+      const boundaryMatch = pending.match(PARAGRAPH_BOUNDARY_RE)
+      if (!boundaryMatch) break
+
+      const cutIndex = boundaryIndex + boundaryMatch[0].length
       const chunk = pending.slice(0, cutIndex)
       pending = pending.slice(cutIndex)
+
       const guarded = guardResponseText(chunk)
       sanitized += guarded.text
       detectedRefusal = detectedRefusal || guarded.detectedRefusal
       onParagraph(guarded.text)
+
+      boundaryIndex = pending.search(PARAGRAPH_BOUNDARY_RE)
     }
 
     if (final && pending) {
@@ -69,10 +75,10 @@ export function createParagraphGuard(onParagraph: (text: string) => void) {
   return {
     push(fragment: string) {
       pending += fragment
-      emitCompletedParagraphs(false)
+      flushCompletedParagraphs(false)
     },
     flush() {
-      emitCompletedParagraphs(true)
+      flushCompletedParagraphs(true)
       return { text: sanitized, detectedRefusal }
     },
   }

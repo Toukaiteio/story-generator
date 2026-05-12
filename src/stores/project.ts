@@ -276,12 +276,18 @@ function normalizeIdList(value: any): string[] {
     : []
 }
 
-function normalizeImportedProject(data: any): StoryProject {
+function normalizeProjectDirectoryPath(value: any): string {
+  return typeof value === 'string'
+    ? value.trim().replace(/[\\/]+$/, '').toLowerCase()
+    : ''
+}
+
+function normalizeImportedProject(data: any, id = generateId()): StoryProject {
   const now = new Date().toISOString()
   const migrated = migrateProjectStyle(data ?? {})
 
   return {
-    id: generateId(),
+    id,
     name: typeof migrated.name === 'string' && migrated.name.trim() ? migrated.name.trim() : 'Imported Project',
     directoryPath: typeof migrated.directoryPath === 'string' ? migrated.directoryPath : '',
     theme: typeof migrated.theme === 'string' ? migrated.theme : '',
@@ -544,6 +550,34 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function importProject(data: any) {
+    const sourceId = typeof data?.id === 'string' ? data.id.trim() : ''
+    const sourceDirectory = normalizeProjectDirectoryPath(data?.directoryPath)
+    const existingIndex = projects.value.findIndex(project =>
+      (sourceId && project.id === sourceId)
+      || (sourceDirectory && normalizeProjectDirectoryPath(project.directoryPath) === sourceDirectory)
+    )
+
+    if (existingIndex >= 0) {
+      const existing = projects.value[existingIndex]
+      const imported = normalizeImportedProject(data, existing.id)
+      const merged: StoryProject = {
+        ...existing,
+        ...imported,
+        id: existing.id,
+        createdAt: existing.createdAt,
+        updatedAt: new Date().toISOString(),
+        directoryPath: imported.directoryPath || existing.directoryPath,
+      }
+      projects.value[existingIndex] = merged
+      const saved = await saveToDisk(merged)
+      if (!saved) {
+        projects.value[existingIndex] = existing
+        persistLocalCache()
+        throw new Error('Failed to update imported project')
+      }
+      return merged
+    }
+
     const project = normalizeImportedProject(data)
     projects.value.push(project)
     const saved = await saveToDisk(project)
@@ -571,18 +605,34 @@ export const useProjectStore = defineStore('project', () => {
     return saveToDisk(projects.value[index])
   }
 
-  function deleteProject(id: string) {
+  async function deleteProject(id: string) {
     const index = projects.value.findIndex(p => p.id === id)
-    if (index === -1) return
+    if (index === -1) return false
+    const project = projects.value[index]
+    const previousProjects = [...projects.value]
+    const previousActiveProjectId = activeProjectId.value
+    const previousBinding = exportBindings.value[id]
+    const previousBuffer = exportBuffers.value[id]
     clearProjectExportSyncTimer(id)
     delete exportBindings.value[id]
     delete exportBuffers.value[id]
     projects.value.splice(index, 1)
     if (activeProjectId.value === id) activeProjectId.value = null
-    window.electronAPI?.project?.delete(id)
+    const deleted = await window.electronAPI?.project?.delete(id, project.directoryPath)
+    if (deleted === false) {
+      projects.value = previousProjects
+      activeProjectId.value = previousActiveProjectId
+      if (previousBinding) exportBindings.value[id] = previousBinding
+      if (previousBuffer) exportBuffers.value[id] = previousBuffer
+      persistExportBindings()
+      persistExportBuffers()
+      persistLocalCache()
+      return false
+    }
     persistExportBindings()
     persistExportBuffers()
     persistLocalCache()
+    return deleted ?? true
   }
 
   function setActiveProject(id: string | null) {

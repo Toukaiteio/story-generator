@@ -14,6 +14,12 @@ let forceClosing = false
 const DATA_DIR = join(app.getPath('userData'), 'story-generator')
 const PROJECTS_DIR = join(DATA_DIR, 'projects')
 
+function normalizeFsPath(value: string | null | undefined) {
+  return typeof value === 'string'
+    ? value.trim().replace(/[\\/]+$/, '').toLowerCase()
+    : ''
+}
+
 function ensureDirs() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   if (!existsSync(PROJECTS_DIR)) mkdirSync(PROJECTS_DIR, { recursive: true })
@@ -166,6 +172,7 @@ ipcMain.handle('project:list', () => {
   if (!existsSync(PROJECTS_DIR)) return []
   
   const projects: any[] = []
+  const seenKeys = new Set<string>()
 
   // Load new split projects via links
   const links = readdirSync(PROJECTS_DIR).filter(f => f.endsWith('.link'))
@@ -173,7 +180,11 @@ ipcMain.handle('project:list', () => {
     const id = link.replace('.link', '')
     const folder = readFileSync(join(PROJECTS_DIR, link), 'utf-8').trim()
     const project = loadFullProject(id, folder)
-    if (project) projects.push(project)
+    if (!project) continue
+    const dedupeKey = normalizeFsPath(project.directoryPath) || `id:${String(project.id || '').trim()}`
+    if (seenKeys.has(dedupeKey)) continue
+    seenKeys.add(dedupeKey)
+    projects.push(project)
   }
 
   // Load legacy projects
@@ -182,7 +193,11 @@ ipcMain.handle('project:list', () => {
     const id = f.replace('.json', '')
     if (links.some(l => l.startsWith(id))) continue // Skip if already loaded via link
     const content = readFileSync(join(PROJECTS_DIR, f), 'utf-8')
-    projects.push(JSON.parse(content))
+    const project = JSON.parse(content)
+    const dedupeKey = normalizeFsPath(project?.directoryPath) || `id:${String(project?.id || '').trim()}`
+    if (seenKeys.has(dedupeKey)) continue
+    seenKeys.add(dedupeKey)
+    projects.push(project)
   }
 
   return projects
@@ -266,9 +281,24 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   return { ...metadata, chapters: chapters || [], characters: characters || [], directoryPath: projectFolder }
 })
 
-ipcMain.handle('project:delete', (_event, id: string) => {
+ipcMain.handle('project:delete', (_event, id: string, directoryPath?: string) => {
   const filePath = join(PROJECTS_DIR, `${id}.json`)
   if (existsSync(filePath)) unlinkSync(filePath)
+
+  const normalizedDirectory = normalizeFsPath(directoryPath)
+  const linkFiles = readdirSync(PROJECTS_DIR).filter(file => file.endsWith('.link'))
+  for (const linkFile of linkFiles) {
+    const linkId = linkFile.replace(/\.link$/, '')
+    const linkPath = join(PROJECTS_DIR, linkFile)
+    const linkedDirectory = existsSync(linkPath) ? readFileSync(linkPath, 'utf-8').trim() : ''
+    const shouldDeleteLink = linkId === id
+      || (normalizedDirectory && normalizeFsPath(linkedDirectory) === normalizedDirectory)
+
+    if (shouldDeleteLink && existsSync(linkPath)) {
+      unlinkSync(linkPath)
+    }
+  }
+
   return true
 })
 

@@ -3,7 +3,6 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { containsChapterBreakdown, containsMetaCommentary, countWords, extractJsonPayload } from './validation'
-import { providerManager } from '@/services/provider'
 
 export class StoryPlannerExpert extends BaseAgent {
   type: AgentType = 'storyPlanner'
@@ -163,6 +162,20 @@ export class StoryPlannerExpert extends BaseAgent {
           }),
         }
       }
+
+      const roleIssues = this.validateCharacterRoleComposition(characters)
+      if (roleIssues.length) {
+        return {
+          tool_call_id: toolCall.id,
+          content: JSON.stringify({
+            error: roleIssues.join(' '),
+            issues: roleIssues,
+            totalCharacters: characters.length,
+            targetCharacters: targetCount,
+          }),
+        }
+      }
+
       context._charactersData = toolCall.arguments.characters
       if (typeof context._onCharactersUpdated === 'function') {
         await context._onCharactersUpdated(context._charactersData)
@@ -190,6 +203,7 @@ The outline should:
 
 Use the create_story_outline tool to create the story outline.
 Then use the create_characters tool to create the exact requested number of main characters with interconnected relationships.
+The character set must include exactly one protagonist and at least one antagonist or opposing force.
 
 Do not omit any fields. Do not add meta commentary or code fences outside the tools.`
   }
@@ -218,6 +232,8 @@ The characters should:
 - Possess distinct voices and personalities
 - Have meaningful relationships with other characters
 - Drive the plot through their choices and growth
+- Include exactly one protagonist and at least one antagonist or opposing force
+- Treat the remaining main cast as supporting characters with clear story functions, not filler
 
 Use the create_characters tool to provide the characters.
 
@@ -267,11 +283,12 @@ Write everything in ${language || 'English'}.`
 
 Use the create_characters tool once with exactly ${targetCount} character objects that:
 - Fit naturally into the story outline
-- Have clear roles (protagonist, antagonist, supporting, or minor)
+- Have explicit roles (protagonist, antagonist, supporting, or minor)
 - Have 3-5 distinct personality traits each
 - Have meaningful relationships with other characters
 - Drive the plot through their choices and growth
-- Include a balanced cast with at least one protagonist, one antagonist or opposing force, and supporting characters for subplots
+- Include a balanced cast with exactly one protagonist, at least one antagonist or opposing force, and supporting characters that cover subplots, pressure, or contrast
+- Make every main character's function obvious and avoid leaving any main cast member role-ambiguous
 
 Character names must be unique. Each character needs all required fields filled out.
 Write everything in ${language || 'English'}.`
@@ -373,6 +390,8 @@ Write everything in ${language || 'English'}.`
       issues.push(`Characters array must contain exactly ${targetCount} entries`)
     }
 
+    issues.push(...this.validateCharacterRoleComposition(parsed.characters))
+
     const allowedRoles = new Set(['protagonist', 'antagonist', 'supporting', 'minor'])
     const seenNames = new Set<string>()
 
@@ -435,6 +454,28 @@ Write everything in ${language || 'English'}.`
     return issues
   }
 
+  private validateCharacterRoleComposition(items: any[]): string[] {
+    const issues: string[] = []
+    let protagonistCount = 0
+    let antagonistCount = 0
+
+    for (const item of items) {
+      const role = typeof item?.role === 'string' ? item.role.trim().toLowerCase() : ''
+      if (role === 'protagonist') protagonistCount += 1
+      if (role === 'antagonist') antagonistCount += 1
+    }
+
+    if (protagonistCount !== 1) {
+      issues.push(`Character set must contain exactly one protagonist; found ${protagonistCount}.`)
+    }
+
+    if (antagonistCount < 1) {
+      issues.push('Character set must contain at least one antagonist or opposing force.')
+    }
+
+    return issues
+  }
+
   protected buildRepairPrompt(context: Record<string, any>, previousResponse: string, issues: string[]): string {
     // If we're repairing an outline (no outline data generated yet)
     if (!context._outlineData || previousResponse.includes('title')) {
@@ -470,7 +511,7 @@ Previous output:
 ${previousResponse}
 
 Use the create_characters tool to provide a corrected character list.
-Keep the character concepts intact and do not omit any required fields. The list must contain exactly ${this.getTargetCharacterCount(context)} characters.`
+Keep the character concepts intact and do not omit any required fields. The list must contain exactly ${this.getTargetCharacterCount(context)} characters, with exactly one protagonist and at least one antagonist or opposing force.`
   }
 
   async execute(context: Record<string, any>, onToken?: (token: string) => void): Promise<AgentResult> {

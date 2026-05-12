@@ -242,7 +242,8 @@ export class ProviderManager {
             },
           }, toolOptions)
 
-          if (!completedResponse) {
+          const response = completedResponse as FunctionCallingResponse | null
+          if (!response) {
             throw new Error('Stream with tools failed to complete')
           }
 
@@ -252,10 +253,10 @@ export class ProviderManager {
               ? `${aggregateText}\n\n${guarded.text}`
               : aggregateText
             : guarded.text
-          completedResponse.content = nextAggregate || null
+          response.content = nextAggregate || null
 
-          if (completedResponse.tool_calls.length > 0 || !guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
-            return completedResponse
+          if (response.tool_calls.length > 0 || !guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
+            return response
           }
 
           return runStreamWithTools(

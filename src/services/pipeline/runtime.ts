@@ -111,7 +111,7 @@ export function preparePlanningRuntime(): PlanningRuntime {
   const characterAgent = getAgent('character')
   const storyPlannerAgent = getAgent('storyPlanner')
 
-  outlineAgent.setModel(planningModel, 1536, 0.6, getContextTokens(providerStore, planningModel))
+  outlineAgent.setModel(planningModel, 2048, 0.55, getContextTokens(providerStore, planningModel))
   storyPlannerAgent.setModel(planningModel, 3072, 0.6, getContextTokens(providerStore, planningModel))
 
   const characterModel = providerStore.getAgentModelBinding('character') ?? providerStore.getDefaultModelRefForRole('character')

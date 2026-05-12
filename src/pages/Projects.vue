@@ -68,10 +68,14 @@ function handleDeleteRequest(id: string) {
   showDeleteConfirm.value = true
 }
 
-function handleDeleteConfirm() {
+async function handleDeleteConfirm() {
   if (pendingDeleteId.value) {
     const project = projectStore.projects.find(p => p.id === pendingDeleteId.value)
-    projectStore.deleteProject(pendingDeleteId.value)
+    const deleted = await projectStore.deleteProject(pendingDeleteId.value)
+    if (!deleted) {
+      toast.error('Failed to delete project')
+      return
+    }
     toast.success(`Project "${project?.name}" deleted`)
     pendingDeleteId.value = null
   }
@@ -194,9 +198,17 @@ async function handleImportProjectFile() {
 
   try {
     const raw = parseProjectFile(content)
+    const existing = projectStore.projects.find(project =>
+      (typeof raw?.id === 'string' && raw.id.trim() && project.id === raw.id.trim())
+      || (
+        typeof raw?.directoryPath === 'string'
+        && raw.directoryPath.trim()
+        && project.directoryPath.trim().replace(/[\\/]+$/, '').toLowerCase() === raw.directoryPath.trim().replace(/[\\/]+$/, '').toLowerCase()
+      )
+    )
     const project = await projectStore.importProject(raw)
     projectStore.setActiveProject(project.id)
-    toast.success(`Imported project "${project.name}"`)
+    toast.success(existing ? `Updated imported project "${project.name}"` : `Imported project "${project.name}"`)
     router.push(`/workspace/${project.id}`)
   } catch (error: any) {
     toast.error(error?.message || 'Import failed')

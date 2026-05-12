@@ -30,7 +30,7 @@ declare global {
       list: () => Promise<any[]>
       load: (id: string, directoryPath?: string) => Promise<any | null>
       save: (project: any, directoryPath?: string) => Promise<any>
-      delete: (id: string) => Promise<boolean>
+      delete: (id: string, directoryPath?: string) => Promise<boolean>
     }
     vibeChat: {
       load: (projectId: string, directoryPath: string | undefined, key: string) => Promise<any | null>
