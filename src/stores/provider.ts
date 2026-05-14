@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { AgentType } from '@/types/agent'
 import type { ModelConfig, ProviderConfig, ProviderModelRef, ProviderType } from '@/types/provider'
+import { readJsonStorage, writeJsonStorage } from '@/lib/storage'
 import {
   builtinModels,
   defaultBaseUrls,
@@ -36,30 +37,8 @@ const roleDefaults: Record<AgentType, 'expert' | 'standard'> = {
   proofreader: 'standard',
   polisher: 'standard',
   relationshipTracker: 'standard',
-}
-
-function canUseStorage() {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
-}
-
-function readStorage<T>(key: string, fallback: T): T {
-  if (!canUseStorage()) return fallback
-  try {
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return fallback
-    return JSON.parse(raw) as T
-  } catch {
-    return fallback
-  }
-}
-
-function writeStorage(key: string, value: unknown) {
-  if (!canUseStorage()) return
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Ignore storage write failures in constrained environments.
-  }
+  skillAgent: 'expert',
+  proposerAgent: 'expert',
 }
 
 function cloneModel(model: ModelConfig): ModelConfig {
@@ -143,13 +122,13 @@ function normalizeLoadedProviders(rawProviders: ProviderConfig[]) {
 }
 
 function loadProviders() {
-  const raw = readStorage<Partial<ProviderConfig>[]>(PROVIDER_STORAGE_KEY, [])
+  const raw = readJsonStorage<Partial<ProviderConfig>[]>(PROVIDER_STORAGE_KEY, [])
   const sanitized = raw.map(provider => sanitizeProvider(provider))
   return normalizeLoadedProviders(sanitized)
 }
 
 function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
-  const raw = readStorage<Record<string, ProviderModelRef | string | null>>(AGENT_MODEL_STORAGE_KEY, {
+  const raw = readJsonStorage<Record<string, ProviderModelRef | string | null>>(AGENT_MODEL_STORAGE_KEY, {
     outline: null,
     detailer: null,
     character: null,
@@ -162,6 +141,8 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
     proofreader: null,
     polisher: null,
     relationshipTracker: null,
+    skillAgent: null,
+    proposerAgent: null,
   })
 
   return {
@@ -186,11 +167,13 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
     relationshipTracker: typeof raw.relationshipTracker === 'string'
       ? decodeProviderModelRef(raw.relationshipTracker)
       : raw.relationshipTracker ?? null,
+    skillAgent: typeof raw.skillAgent === 'string' ? decodeProviderModelRef(raw.skillAgent) : raw.skillAgent ?? null,
+    proposerAgent: typeof raw.proposerAgent === 'string' ? decodeProviderModelRef(raw.proposerAgent) : raw.proposerAgent ?? null,
   }
 }
 
 function loadEmbeddingModelBinding(): ProviderModelRef | null {
-  const raw = readStorage<ProviderModelRef | string | null>(EMBEDDING_MODEL_STORAGE_KEY, null)
+  const raw = readJsonStorage<ProviderModelRef | string | null>(EMBEDDING_MODEL_STORAGE_KEY, null)
   if (typeof raw === 'string') {
     return decodeProviderModelRef(raw)
   }
@@ -198,7 +181,7 @@ function loadEmbeddingModelBinding(): ProviderModelRef | null {
 }
 
 function loadModelContextOverrides(): Record<string, number> {
-  const raw = readStorage<Record<string, number | string | null>>(MODEL_CONTEXT_STORAGE_KEY, {})
+  const raw = readJsonStorage<Record<string, number | string | null>>(MODEL_CONTEXT_STORAGE_KEY, {})
   const overrides: Record<string, number> = {}
 
   for (const [key, value] of Object.entries(raw)) {
@@ -222,7 +205,7 @@ function normalizeIssueSeverityThreshold(value: unknown): IssueSeverityThreshold
 }
 
 function loadToolWorkflowSettings() {
-  const raw = readStorage<{ maxToolCallRounds?: number | string; minIssueSeverity?: string }>(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, {})
+  const raw = readJsonStorage<{ maxToolCallRounds?: number | string; minIssueSeverity?: string }>(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, {})
   return {
     maxToolCallRounds: normalizeMaxToolCallRounds(raw.maxToolCallRounds),
     minIssueSeverity: normalizeIssueSeverityThreshold(raw.minIssueSeverity),
@@ -468,11 +451,11 @@ export const useProviderStore = defineStore('provider', () => {
     modelOptions.value.filter(option => option.supportsEmbeddings)
   )
 
-  watch(providers, value => writeStorage(PROVIDER_STORAGE_KEY, value), { deep: true })
-  watch(agentModelBindings, value => writeStorage(AGENT_MODEL_STORAGE_KEY, value), { deep: true })
-  watch(embeddingModelBinding, value => writeStorage(EMBEDDING_MODEL_STORAGE_KEY, value), { deep: true })
-  watch(modelContextOverrides, value => writeStorage(MODEL_CONTEXT_STORAGE_KEY, value), { deep: true })
-  watch(toolWorkflowSettings, value => writeStorage(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, value), { deep: true })
+  watch(providers, value => writeJsonStorage(PROVIDER_STORAGE_KEY, value), { deep: true, flush: 'sync' })
+  watch(agentModelBindings, value => writeJsonStorage(AGENT_MODEL_STORAGE_KEY, value), { deep: true, flush: 'sync' })
+  watch(embeddingModelBinding, value => writeJsonStorage(EMBEDDING_MODEL_STORAGE_KEY, value), { deep: true, flush: 'sync' })
+  watch(modelContextOverrides, value => writeJsonStorage(MODEL_CONTEXT_STORAGE_KEY, value), { deep: true, flush: 'sync' })
+  watch(toolWorkflowSettings, value => writeJsonStorage(TOOL_WORKFLOW_SETTINGS_STORAGE_KEY, value), { deep: true, flush: 'sync' })
 
   function applyModelContextOverridesToProvider(provider: ProviderConfig) {
     pruneModelContextOverridesForProvider(
@@ -670,7 +653,7 @@ export const useProviderStore = defineStore('provider', () => {
     }
 
     if (changed) {
-      writeStorage(AGENT_MODEL_STORAGE_KEY, agentModelBindings.value)
+      writeJsonStorage(AGENT_MODEL_STORAGE_KEY, agentModelBindings.value)
     }
   }
 
@@ -680,7 +663,7 @@ export const useProviderStore = defineStore('provider', () => {
     }
 
     embeddingModelBinding.value = pickEmbeddingModelRef(providers.value)
-    writeStorage(EMBEDDING_MODEL_STORAGE_KEY, embeddingModelBinding.value)
+    writeJsonStorage(EMBEDDING_MODEL_STORAGE_KEY, embeddingModelBinding.value)
   }
 
   function getModelOptionsForRole(role: AgentType) {

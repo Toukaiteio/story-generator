@@ -182,6 +182,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
     const decoder = new TextDecoder()
     let fullText = ''
+    let reasoningContent = ''
     let buffer = ''
 
     try {
@@ -204,6 +205,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             if (content) {
               fullText += content
               callbacks.onToken(content)
+            }
+
+            const reasoningDelta = json.choices?.[0]?.delta?.reasoning_content
+            if (reasoningDelta) {
+              reasoningContent += reasoningDelta
+              callbacks.onReasoningToken?.(reasoningDelta)
             }
           } catch {
             // Skip malformed JSON lines

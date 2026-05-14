@@ -36,6 +36,9 @@ export default {
     settings: '设置',
   },
   phrases: {
+    'Update story outline after creating characters': '创建角色后自动更新故事大纲',
+    'After characters are generated, automatically refine the master outline so it fits the new cast.': '角色生成后，自动根据新的角色阵容调整主故事大纲。',
+    'Characters generated and outline updated': '角色已生成，并已更新故事大纲',
     'Dark': '深色',
     'Not set': '未设置',
     'Select...': '请选择...',
@@ -227,7 +230,6 @@ export default {
     'No project selected': '未选择项目',
     'Select a project from the Projects page to start working.': '从项目页选择一个项目开始工作。',
     'Back to Projects': '返回项目',
-    'Following Generate All': '正在跟随全部生成',
     'Workflow is running...': '工作流运行中...',
     'AI Tool Workflow': 'AI 工具工作流',
     'Maximum tool call rounds': '最大工具调用轮数',

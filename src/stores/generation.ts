@@ -6,18 +6,19 @@ import { buildPreviousSummary, buildCharacterContextForTask } from '@/services/p
 import { useProjectStore } from '@/stores/project'
 import { useProviderStore } from '@/stores/provider'
 import { providerManager } from '@/services/provider'
-import { getRelationshipQueryTools } from '@/services/relationship/tools'
+import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import { setToolContinuationHandler } from '@/services/agent/toolContinuation'
 import { clearAgentTodoList, getTodoListTool, handleTodoListToolCall, isTodoListTool, type AgentTodoListState } from '@/services/agent/todolist'
 import { countWords } from '@/services/agent/validation'
 import { buildProofreadingSegments, buildSegmentedProofreadingPrompts } from '@/services/proofreading/chunking'
-import { generationStageOrder, getNextGenerationAction, isChapterPlanComplete, resolveChapterIndexById, resolveNextChapterIndex } from '@/services/generation/flow'
+import { getNextGenerationAction, resolveChapterIndexById, resolveNextChapterIndex } from '@/services/generation/flow'
 import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSystemPrompt, getProofreadingTools, getChapterRegion, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
 import { chatWithRelationshipTools, chatWithRelationshipToolsInPlace, getToolCall } from '@/services/generation/toolWorkflow'
 import { fitMessagesToContextSmart, fitToContext } from '@/services/context'
 import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import type { GenerationStage, StoryProject } from '@/types/project'
 import type { ChapterOutline } from '@/types/chapter'
+import type { Character, CharacterRole } from '@/types/character'
 import type { AgentType } from '@/types/agent'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
@@ -43,6 +44,13 @@ interface ToolContinuationRequest {
   stop: () => void
 }
 
+interface VibePlanningResult {
+  outline?: string
+  characters?: Character[]
+  summary: string
+  toolName: string
+}
+
 export const useGenerationStore = defineStore('generation', () => {
   const isGenerating = ref(false)
   const currentStage = ref<GenerationStage>('idle')
@@ -50,34 +58,26 @@ export const useGenerationStore = defineStore('generation', () => {
   const streamContent = ref('')
   const errors = ref<GenerationError[]>([])
   const cancelled = ref(false)
-  const currentProjectId = ref<string | null>(null)
-  const isFollowingMode = ref(false)
   const currentChapterIndex = ref<number | null>(null)
   const toolContinuationRequest = ref<ToolContinuationRequest | null>(null)
 
   let errorCounter = 0
   let pipeline: StoryPipeline | null = null
+  let activeAbortController: AbortController | null = null
 
   setToolContinuationHandler(waitForToolContinuation)
 
-  const completedStages = ref<Set<string>>(new Set())
-
-  function isStageComplete(stage: string): boolean {
-    return completedStages.value.has(stage)
-  }
-
-  function resetRunState(projectId: string, follow = false) {
+  function resetRunState(projectId: string) {
     isGenerating.value = true
-    isFollowingMode.value = follow
     cancelled.value = false
     errors.value = []
-    currentProjectId.value = projectId
     progressMessage.value = ''
     streamContent.value = ''
     clearAgentTodoList()
     currentStage.value = 'idle'
     currentChapterIndex.value = null
     pipeline = new StoryPipeline()
+    activeAbortController = new AbortController()
   }
 
   function appendStreamToken(token: string) {
@@ -86,10 +86,14 @@ export const useGenerationStore = defineStore('generation', () => {
 
   function finishRun() {
     isGenerating.value = false
-    isFollowingMode.value = false
     progressMessage.value = ''
     currentChapterIndex.value = null
     pipeline = null
+    activeAbortController = null
+  }
+
+  function activeSignal() {
+    return activeAbortController?.signal
   }
 
   function addError(stage: string, message: string) {
@@ -102,14 +106,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function markCompleted(stage: GenerationStage) {
-    completedStages.value = new Set([...completedStages.value, stage])
-  }
-
-  function markCompletedThrough(stage: GenerationStage) {
-    for (const item of generationStageOrder) {
-      markCompleted(item)
-      if (item === stage) break
-    }
+    currentStage.value = stage
   }
 
   const getNextAction = getNextGenerationAction
@@ -128,297 +125,6 @@ export const useGenerationStore = defineStore('generation', () => {
     const project = projectStore.projects.find(item => item.id === projectId)
     if (!project) throw new Error('Project not found')
     return project
-  }
-
-  async function generateOutline(projectId: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    try {
-      currentStage.value = 'planning'
-      progressMessage.value = 'Generating story outline...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateOutline(project)
-      await applyProjectUpdate(projectId, {
-        outline: generated,
-        generationStage: 'chapter-outline',
-      })
-      markCompletedThrough('planning')
-      currentStage.value = 'chapter-outline'
-      return generated
-    } catch (error: any) {
-      addError('planning', error?.message || 'Outline generation failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateCharacters(projectId: string, options: { preferredCount?: number; characterRequirements?: string } = {}) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    try {
-      currentStage.value = 'planning'
-      progressMessage.value = 'Generating characters...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateCharacters(project, options)
-      await applyProjectUpdate(projectId, {
-        characters: generated,
-        generationStage: 'chapter-outline',
-      })
-      markCompletedThrough('planning')
-      currentStage.value = 'chapter-outline'
-      return generated
-    } catch (error: any) {
-      addError('planning', error?.message || 'Character generation failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateStoryPlan(projectId: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    try {
-      currentStage.value = 'planning'
-      progressMessage.value = 'Planning story outline and characters...'
-      const result = await (pipeline ?? new StoryPipeline()).generateStoryPlan(
-        project,
-        appendStreamToken,
-        message => { progressMessage.value = message },
-        error => { addError('planning', error) },
-        async updates => { await applyProjectUpdate(projectId, updates) }
-      )
-      await applyProjectUpdate(projectId, {
-        outline: result.outline,
-        characters: result.characters,
-        generationStage: 'chapter-outline',
-      })
-      markCompletedThrough('planning')
-      currentStage.value = 'chapter-outline'
-      return result
-    } catch (error: any) {
-      addError('planning', error?.message || 'Story planning failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateChapterPlan(projectId: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    try {
-      currentStage.value = 'chapter-outline'
-      progressMessage.value = 'Planning chapter outlines...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateChapterPlan(
-        project,
-        appendStreamToken,
-        message => { progressMessage.value = message },
-        error => { addError('chapter-outline', error) },
-        async updates => { await applyProjectUpdate(projectId, updates) }
-      )
-      await applyProjectUpdate(projectId, {
-        chapters: generated,
-        generationStage: 'writing',
-      })
-      markCompletedThrough('chapter-outline')
-      currentStage.value = 'writing'
-      return generated
-    } catch (error: any) {
-      addError('chapter-outline', error?.message || 'Chapter plan generation failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateAdditionalChapterPlan(projectId: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    try {
-      currentStage.value = 'chapter-outline'
-      progressMessage.value = 'Planning additional chapter outline...'
-      const generated = await (pipeline ?? new StoryPipeline()).generateAdditionalChapterPlan(
-        project,
-        appendStreamToken,
-        message => { progressMessage.value = message },
-        error => { addError('chapter-outline', error) },
-        async updates => { await applyProjectUpdate(projectId, updates) }
-      )
-      await applyProjectUpdate(projectId, {
-        chapters: generated,
-        generationStage: project.generationStage === 'idle' || project.generationStage === 'planning'
-          ? 'chapter-outline'
-          : project.generationStage,
-      })
-      markCompleted('chapter-outline')
-      currentStage.value = 'chapter-outline'
-      return generated
-    } catch (error: any) {
-      addError('chapter-outline', error?.message || 'Additional chapter plan generation failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function completeCurrentChapterPlan(projectId: string, chapterId?: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    const action = getNextGenerationAction(project)
-    const targetChapterIndex = chapterId
-      ? resolveChapterIndexById(project, chapterId)
-      : action.stage === 'chapter-outline' && typeof action.chapterIndex === 'number'
-        ? action.chapterIndex
-        : -1
-
-    if (targetChapterIndex < 0) {
-      throw new Error('No incomplete chapter plan found')
-    }
-
-    const targetChapter = project.chapters[targetChapterIndex]
-    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
-
-    try {
-      currentStage.value = 'chapter-outline'
-      currentChapterIndex.value = targetChapterIndex
-      progressMessage.value = `Completing chapter ${targetChapter.index + 1} outline...`
-      const generated = await (pipeline ?? new StoryPipeline()).completeChapterPlan(
-        project,
-        targetChapterIndex,
-        appendStreamToken,
-        message => { progressMessage.value = message },
-        error => { addError('chapter-outline', error) },
-        async updates => { await applyProjectUpdate(projectId, updates) }
-      )
-      const allPlansComplete = generated.length > 0 && generated.every(isChapterPlanComplete)
-      await applyProjectUpdate(projectId, {
-        chapters: generated,
-        generationStage: allPlansComplete ? 'writing' : 'chapter-outline',
-      })
-      if (allPlansComplete) markCompletedThrough('chapter-outline')
-      else markCompleted('chapter-outline')
-      currentStage.value = allPlansComplete ? 'writing' : 'chapter-outline'
-      currentChapterIndex.value = null
-      return generated
-    } catch (error: any) {
-      addError('chapter-outline', error?.message || 'Chapter plan completion failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function reviewAndRewriteChapterPlan(projectId: string, chapterId: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    const targetChapterIndex = resolveChapterIndexById(project, chapterId)
-    if (targetChapterIndex < 0) {
-      throw new Error('No chapter selected for outline review')
-    }
-
-    const targetChapter = project.chapters[targetChapterIndex]
-    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
-
-    try {
-      currentStage.value = 'chapter-outline'
-      currentChapterIndex.value = targetChapterIndex
-      progressMessage.value = `Reviewing chapter ${targetChapter.index + 1} outline...`
-      const result = await (pipeline ?? new StoryPipeline()).reviewAndRewriteChapterPlan(
-        project,
-        targetChapterIndex,
-        appendStreamToken,
-        message => { progressMessage.value = message },
-        error => { addError('chapter-outline', error) },
-        async updates => { await applyProjectUpdate(projectId, updates) }
-      )
-      await applyProjectUpdate(projectId, {
-        chapters: result.chapters,
-        generationStage: result.chapters.every(isChapterPlanComplete) ? 'writing' : 'chapter-outline',
-      })
-      markCompleted('chapter-outline')
-      currentStage.value = 'chapter-outline'
-      currentChapterIndex.value = null
-      return result
-    } catch (error: any) {
-      addError('chapter-outline', error?.message || 'Chapter outline review failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateChapterDraftAt(projectId: string, targetChapterIndex: number) {
-    const project = validateProject(projectId)
-    const targetChapter = project.chapters[targetChapterIndex]
-    if (!targetChapter) throw new Error(`Chapter at position ${targetChapterIndex + 1} not found`)
-
-    currentStage.value = 'writing'
-    currentChapterIndex.value = targetChapterIndex
-    progressMessage.value = `Writing chapter ${targetChapter.index + 1}...`
-
-    const generated = await (pipeline ?? new StoryPipeline()).generateChapterDraft(
-      project,
-      targetChapterIndex,
-      appendStreamToken,
-      async (intermediateChapter) => {
-        const latestProject = validateProject(projectId)
-        const chapters = latestProject.chapters.map((chapter) =>
-          chapter.id === targetChapter.id ? intermediateChapter : chapter
-        )
-        await applyProjectUpdate(projectId, { chapters })
-      }
-    )
-    const latestProject = validateProject(projectId)
-    const chapters = latestProject.chapters.map((chapter) => chapter.id === targetChapter.id ? generated : chapter)
-    const nextAction = getNextAction({ ...latestProject, chapters })
-    await applyProjectUpdate(projectId, {
-      chapters,
-      generationStage: nextAction.stage === 'done' ? 'done' : nextAction.stage,
-    })
-    markCompleted('writing')
-    currentStage.value = nextAction.stage
-    currentChapterIndex.value = null
-    return generated
-  }
-
-  async function generateChapterDraft(projectId: string, chapterId?: string) {
-    resetRunState(projectId)
-    const project = validateProject(projectId)
-    const targetChapterIndex = chapterId
-      ? resolveChapterIndexById(project, chapterId)
-      : resolveChapterIndex(project, 'writing')
-    if (targetChapterIndex < 0) {
-      finishRun()
-      throw new Error('No chapter is currently ready for writing')
-    }
-
-    try {
-      return await generateChapterDraftAt(projectId, targetChapterIndex)
-    } catch (error: any) {
-      addError('writing', error?.message || 'Writing failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateAllChapterDrafts(projectId: string) {
-    resetRunState(projectId)
-    try {
-      while (!cancelled.value) {
-        const project = validateProject(projectId)
-        const action = getNextAction(project)
-        if (action.stage !== 'writing') return project
-        streamContent.value = ''
-        await generateChapterDraftAt(projectId, action.chapterIndex)
-      }
-      return validateProject(projectId)
-    } catch (error: any) {
-      addError('writing', error?.message || 'Writing failed')
-      throw error
-    } finally {
-      finishRun()
-    }
   }
 
   async function proofreadChapter(projectId: string, chapterId?: string) {
@@ -662,93 +368,17 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
-  async function generateAll(projectId: string) {
-    resetRunState(projectId, true)
-    const projectStore = useProjectStore()
-    const project = validateProject(projectId)
-    const initialAction = getNextAction(project)
-    if (initialAction.stage !== 'done') {
-      currentStage.value = initialAction.stage
-      currentChapterIndex.value = 'chapterIndex' in initialAction && typeof initialAction.chapterIndex === 'number' ? initialAction.chapterIndex : null
-    }
-    try {
-      const currentPipeline = pipeline ?? new StoryPipeline()
-      pipeline = currentPipeline
-      const updated = await currentPipeline.run(project, {
-        onStageChange: stage => {
-          currentStage.value = stage as GenerationStage
-          streamContent.value = ''
-          currentChapterIndex.value = null
-          if (stage !== 'done') markCompleted(stage as GenerationStage)
-        },
-        onProgress: message => {
-          progressMessage.value = message
-        },
-        onError: error => {
-          addError(currentStage.value, error)
-        },
-        onChapterStart: index => {
-          currentChapterIndex.value = index
-          streamContent.value = ''
-        },
-        onChapterComplete: () => {},
-        onToken: token => {
-          streamContent.value += token
-        },
-        onIntermediateSave: async (partial) => {
-          await projectStore.updateProject(projectId, partial)
-        },
-      })
-      const saved = await projectStore.updateProject(projectId, updated)
-      if (!saved) {
-        throw new Error('Failed to persist generated project')
-      }
-      if (!cancelled.value && getNextAction(updated).stage === 'done') {
-        completedStages.value = new Set(generationStageOrder)
-        currentStage.value = 'done'
-      }
-      currentChapterIndex.value = null
-      return updated
-    } finally {
-      finishRun()
-    }
-  }
-
-  async function generateNextStage(projectId: string) {
-    const project = validateProject(projectId)
-    const action = getNextAction(project)
-
-    if (action.stage === 'done') {
-      return project
-    }
-
-    switch (action.stage) {
-      case 'planning':
-        return generateStoryPlan(projectId)
-      case 'chapter-outline':
-        if (typeof action.chapterIndex === 'number') {
-          return completeCurrentChapterPlan(projectId, project.chapters[action.chapterIndex]?.id)
-        }
-        return generateChapterPlan(projectId)
-      case 'writing':
-        return generateChapterDraft(projectId)
-      case 'proofreading':
-        return proofreadChapter(projectId)
-      case 'polishing':
-        return polishChapter(projectId)
-    }
-  }
-
   function cancelGeneration() {
     cancelled.value = true
+    activeAbortController?.abort()
     pipeline?.cancel()
     isGenerating.value = false
-    isFollowingMode.value = false
     currentStage.value = 'idle'
     currentChapterIndex.value = null
     progressMessage.value = ''
     streamContent.value = ''
     pipeline = null
+    activeAbortController = null
   }
 
   function clearErrors() {
@@ -758,6 +388,7 @@ export const useGenerationStore = defineStore('generation', () => {
   function beginManualTask(stage: GenerationStage, message: string, chapterIndex: number | null = null) {
     isGenerating.value = true
     cancelled.value = false
+    activeAbortController = new AbortController()
     currentStage.value = stage
     progressMessage.value = message
     currentChapterIndex.value = chapterIndex
@@ -772,6 +403,7 @@ export const useGenerationStore = defineStore('generation', () => {
     isGenerating.value = false
     progressMessage.value = ''
     currentChapterIndex.value = null
+    activeAbortController = null
   }
 
   function waitForToolContinuation(request: Omit<ToolContinuationRequest, 'id' | 'continue' | 'stop'>) {
@@ -828,50 +460,251 @@ export const useGenerationStore = defineStore('generation', () => {
     return modelRef
   }
 
+  function normalizeVibeCharacter(raw: any, index: number): Character {
+    const now = new Date().toISOString()
+    const roleValues: CharacterRole[] = ['protagonist', 'antagonist', 'supporting', 'minor']
+    const role = roleValues.includes(raw?.role) ? raw.role : 'supporting'
+    return {
+      id: typeof raw?.id === 'string' && raw.id.trim() ? raw.id.trim() : `vibe-character-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      name: typeof raw?.name === 'string' && raw.name.trim() ? raw.name.trim() : `Character ${index + 1}`,
+      role,
+      personality: Array.isArray(raw?.personality)
+        ? raw.personality.map((item: unknown) => String(item).trim()).filter(Boolean)
+        : typeof raw?.personality === 'string'
+          ? raw.personality.split(/[,，\n]/).map((item: string) => item.trim()).filter(Boolean)
+          : [],
+      appearance: String(raw?.appearance ?? '').trim(),
+      backstory: String(raw?.backstory ?? '').trim(),
+      motivation: String(raw?.motivation ?? '').trim(),
+      goals: String(raw?.goals ?? '').trim(),
+      conflicts: String(raw?.conflicts ?? '').trim(),
+      currentState: String(raw?.currentState ?? '').trim(),
+      relations: Array.isArray(raw?.relations)
+        ? raw.relations.map((relation: any) => ({
+            targetId: String(relation?.targetId ?? relation?.targetName ?? '').trim(),
+            relation: String(relation?.relation ?? '').trim(),
+            description: String(relation?.description ?? '').trim(),
+          })).filter((relation: any) => relation.relation || relation.description)
+        : [],
+      createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : now,
+      updatedAt: now,
+    }
+  }
+
+  function getVibePlanningTools(): ToolDefinition[] {
+    return [
+      getTodoListTool(),
+      {
+        name: 'replace_story_outline',
+        description: 'Replace the current master story outline in the planning workspace.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Optional story title suggestion.' },
+            synopsis: { type: 'string', description: 'Optional short synopsis.' },
+            outline: { type: 'string', description: 'The complete replacement master story outline.' },
+            summary: { type: 'string', description: 'Short summary of the outline change.' },
+          },
+          required: ['outline'],
+        },
+      },
+      {
+        name: 'replace_story_characters',
+        description: 'Replace the planning workspace character list with generated character profiles.',
+        parameters: {
+          type: 'object',
+          properties: {
+            characters: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  role: { type: 'string', enum: ['protagonist', 'antagonist', 'supporting', 'minor'] },
+                  personality: { type: 'array', items: { type: 'string' } },
+                  appearance: { type: 'string' },
+                  backstory: { type: 'string' },
+                  motivation: { type: 'string' },
+                  goals: { type: 'string' },
+                  conflicts: { type: 'string' },
+                  currentState: { type: 'string' },
+                  relations: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        targetId: { type: 'string' },
+                        targetName: { type: 'string' },
+                        relation: { type: 'string' },
+                        description: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+                required: ['name', 'role', 'personality', 'appearance', 'backstory', 'motivation', 'goals', 'conflicts', 'currentState'],
+              },
+            },
+            summary: { type: 'string', description: 'Short summary of the character update.' },
+          },
+          required: ['characters'],
+        },
+      },
+    ]
+  }
+
   async function chatWithAssistant(
     prompt: string,
     modelOverride?: ProviderModelRef | null,
-    callbacks?: { onToken?: (token: string) => void; signal?: AbortSignal }
+    callbacks?: {
+      onToken?: (token: string) => void
+      onReasoningToken?: (token: string) => void
+      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string }) => void
+      onTodoList?: (state: AgentTodoListState) => void
+      onPlanningResult?: (result: VibePlanningResult) => void
+      signal?: AbortSignal
+    }
   ): Promise<string> {
     const modelRef = getUsableAgentModelRef('editingAI', modelOverride)
+    const tools = getVibePlanningTools()
 
     const messages: ChatMessage[] = [
       { role: 'system', content: injectCustomSystemPrompt('You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.') },
       { role: 'user', content: prompt },
     ]
 
-    const fittedMessages = fitMessagesForModel(messages, modelRef, 2048)
-
     try {
-      if (callbacks?.onToken) {
-        let streamed = ''
-        await providerManager.stream(
-          fittedMessages,
-          modelRef,
-          {
-            onToken: token => {
-              streamed += token
-              callbacks.onToken?.(token)
+      const currentMessages = fitToolMessagesForModel(messages, modelRef, 4096)
+      const toolContext: Record<string, any> = {}
+      let latestPlanningResult: VibePlanningResult | null = null
+      let streamed = ''
+
+      for (let round = 0; round < 4; round++) {
+        streamed = ''
+        const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
+          providerManager.streamWithTools(
+            currentMessages,
+            modelRef,
+            tools,
+            {
+              onToken: token => {
+                streamed += token
+                callbacks?.onToken?.(token)
+              },
+              onReasoningToken: token => callbacks?.onReasoningToken?.(token),
+              onToolCall: toolCall => callbacks?.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
+              onToolResult: () => {},
+              onComplete: result => resolve(result),
+              onError: error => reject(error),
             },
-            onComplete: text => {
-              streamed = text
+            4096,
+            0.7,
+            undefined,
+            callbacks?.signal
+          ).catch(reject)
+        })
+
+        const content = response.content || streamed
+
+        if (!response.tool_calls.length) {
+          return content || ''
+        }
+
+        currentMessages.push({
+          role: 'assistant',
+          content: content || null,
+          reasoning_content: response.reasoning_content ?? null,
+          tool_calls: response.tool_calls.map(toolCall => ({
+            id: toolCall.id,
+            type: 'function',
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.arguments),
             },
-            onError: error => { throw error },
-          },
-          2048,
-          0.7,
-          callbacks.signal
-        )
-        return streamed
+          })),
+        })
+
+        for (const toolCall of response.tool_calls) {
+          if (isTodoListTool(toolCall.name)) {
+            const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+            let detail = 'Todo list updated.'
+            try {
+              const parsed = JSON.parse(result.content)
+              if (parsed?.error) detail = parsed.error
+              else if (typeof parsed?.done === 'number' && typeof parsed?.total === 'number') detail = `${parsed.done}/${parsed.total} complete.`
+            } catch {
+              // keep fallback detail
+            }
+            callbacks?.onToolStatus?.({
+              name: toolCall.name,
+              status: result.content.includes('"ok":false') ? 'error' : 'success',
+              detail,
+            })
+            callbacks?.onTodoList?.({
+              agent: 'Vibe AI',
+              updatedAt: new Date().toISOString(),
+              items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
+            })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.content,
+            })
+            continue
+          }
+
+          if (toolCall.name === 'replace_story_outline') {
+            const outline = String(toolCall.arguments?.outline ?? '').trim()
+            const title = String(toolCall.arguments?.title ?? '').trim()
+            const synopsis = String(toolCall.arguments?.synopsis ?? '').trim()
+            const summary = String(toolCall.arguments?.summary ?? '').trim() || 'Updated story outline.'
+            if (!outline) {
+              const result = { ok: false, error: 'outline is required.' }
+              callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+              continue
+            }
+            const nextOutline = [title ? `Title: ${title}` : '', synopsis ? `Synopsis: ${synopsis}` : '', outline].filter(Boolean).join('\n\n')
+            latestPlanningResult = { outline: nextOutline, summary, toolName: toolCall.name }
+            callbacks?.onPlanningResult?.(latestPlanningResult)
+            callbacks?.onToolStatus?.({ name: toolCall.name, status: 'success', detail: summary })
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, summary }) })
+            continue
+          }
+
+          if (toolCall.name === 'replace_story_characters') {
+            const rawCharacters = Array.isArray(toolCall.arguments?.characters) ? toolCall.arguments.characters : []
+            const characters = rawCharacters.map(normalizeVibeCharacter)
+            const summary = String(toolCall.arguments?.summary ?? '').trim() || `Updated ${characters.length} character profiles.`
+            if (!characters.length) {
+              const result = { ok: false, error: 'characters must contain at least one character.' }
+              callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+              continue
+            }
+            latestPlanningResult = { characters, summary, toolName: toolCall.name }
+            callbacks?.onPlanningResult?.(latestPlanningResult)
+            callbacks?.onToolStatus?.({ name: toolCall.name, status: 'success', detail: summary })
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, totalCharacters: characters.length, summary }) })
+            continue
+          }
+
+          const result = { ok: false, error: `Unsupported tool: ${toolCall.name}` }
+          callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+          currentMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result),
+          })
+        }
+
+        currentMessages.push({
+          role: 'user',
+          content: 'Continue from the updated todolist. If the checklist is ready, complete the user request and provide the final response.',
+        })
       }
 
-      const response = await providerManager.chat(
-        fittedMessages,
-        modelRef,
-        2048,
-        0.7
-      )
-      return response
+      return latestPlanningResult?.summary || streamed
     } catch (error: any) {
       throw new Error(`Assistant error: ${error?.message || 'Unknown error'}`)
     }
@@ -1031,6 +864,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const toolContext: Record<string, any> = {
         _onTodoListUpdated: options.onTodoList,
       }
+      const activeProject = useProjectStore().activeProject
       const maxRounds = 6
       let pendingFinalResult: { content: string; summary: string; toolName: string } | null = null
 
@@ -1157,6 +991,19 @@ export const useGenerationStore = defineStore('generation', () => {
               role: 'tool',
               tool_call_id: toolCall.id,
               content: result.content,
+            })
+            continue
+          }
+
+          const relationshipResult = activeProject
+            ? await handleRelationshipQueryTool(toolCall, activeProject)
+            : null
+          if (relationshipResult) {
+            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: relationshipResult.content,
             })
             continue
           }
@@ -1458,6 +1305,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
     const tools: ToolDefinition[] = [
       getTodoListTool(),
+      ...getRelationshipQueryTools(),
       {
         name: 'get_chapter_outline',
         description: 'Read the current chapter outline or one specific outline field before editing it.',
@@ -1538,6 +1386,7 @@ export const useGenerationStore = defineStore('generation', () => {
       const toolContext: Record<string, any> = {
         _onTodoListUpdated: options.onTodoList,
       }
+      const activeProject = useProjectStore().activeProject
       const getOpenTodos = () => {
         const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
         return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
@@ -1617,6 +1466,15 @@ export const useGenerationStore = defineStore('generation', () => {
             await publishTodoList()
             options.onToolStatus?.({ name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: result.content })
+            continue
+          }
+
+          const relationshipResult = activeProject
+            ? await handleRelationshipQueryTool(toolCall, activeProject)
+            : null
+          if (relationshipResult) {
+            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: relationshipResult.content })
             continue
           }
 
@@ -1744,6 +1602,7 @@ export const useGenerationStore = defineStore('generation', () => {
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        signal: activeSignal(),
         requestContinuation: waitForToolContinuation,
       })
       const toolCall = getToolCall(response.tool_calls, 'report_chapter_issues')
@@ -1773,6 +1632,7 @@ export const useGenerationStore = defineStore('generation', () => {
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        signal: activeSignal(),
         requestContinuation: waitForToolContinuation,
       })
       const toolCall = getToolCall(response.tool_calls, 'report_proofreading_issues')
@@ -1883,6 +1743,7 @@ export const useGenerationStore = defineStore('generation', () => {
         maxTokens: 4096,
         temperature: 0.2,
         maxRounds: useProviderStore().toolWorkflowSettings.maxToolCallRounds,
+        signal: activeSignal(),
         requestContinuation: waitForToolContinuation,
         finalToolResultContent: toolCall => JSON.stringify({
           ok: true,
@@ -1942,25 +1803,11 @@ export const useGenerationStore = defineStore('generation', () => {
     progressMessage,
     streamContent,
     errors,
-    isFollowingMode,
     currentChapterIndex,
     toolContinuationRequest,
-    completedStages,
-    isStageComplete,
     getNextAction,
-    generateOutline,
-    generateCharacters,
-    generateStoryPlan,
-    generateChapterPlan,
-    generateAdditionalChapterPlan,
-    completeCurrentChapterPlan,
-    reviewAndRewriteChapterPlan,
-    generateChapterDraft,
-    generateAllChapterDrafts,
     proofreadChapter,
     polishChapter,
-    generateAll,
-    generateNextStage,
     cancelGeneration,
     clearErrors,
     beginManualTask,
@@ -1977,6 +1824,6 @@ export const useGenerationStore = defineStore('generation', () => {
     proofreadAllChapters,
     polishAllChapters,
     markCompleted,
-    markCompletedThrough,
   }
 })
+

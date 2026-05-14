@@ -34,7 +34,6 @@ const form = reactive({
   styleId: 'default',
   writingFormat: 'plaintext' as WritingFormat,
   chapterCount: '8',
-  maxChapters: '8',
   customRequirements: '',
 })
 
@@ -63,6 +62,16 @@ const writingFormatOptions = [
   { label: 'Markdown', value: 'markdown' },
 ]
 
+const projectStyleOption = computed(() => {
+  const snapshot = project.value?.writingStyleSnapshot
+  if (!snapshot || !snapshot.id || snapshot.id === 'default') return null
+  if (writingStyleStore.styles.some(style => style.id === snapshot.id)) return null
+  return {
+    label: `${snapshot.name || 'Project Writing Style'} (Project)`,
+    value: snapshot.id,
+  }
+})
+
 watch(
   project,
   (p) => {
@@ -75,7 +84,6 @@ watch(
       form.styleId = p.styleId || 'default'
       form.writingFormat = p.writingFormat || 'plaintext'
       form.chapterCount = String(p.chapterCount || 8)
-      form.maxChapters = String(p.chapterConfig?.maxChapters || p.chapterCount || 8)
       form.customRequirements = p.customRequirements
       requiredElementsText.value = p.constraints.required.join('\n')
       forbiddenElementsText.value = p.constraints.forbidden.join('\n')
@@ -90,7 +98,6 @@ watch(
     form.language = 'English'
     form.styleId = 'default'
     form.chapterCount = '8'
-    form.maxChapters = '8'
     form.customRequirements = ''
     requiredElementsText.value = ''
     forbiddenElementsText.value = ''
@@ -100,8 +107,34 @@ watch(
 
 const styleOptions = computed(() => [
   { label: 'Default (No Reference)', value: 'default' },
+  ...(projectStyleOption.value ? [projectStyleOption.value] : []),
   ...writingStyleStore.styles.map(s => ({ label: s.name, value: s.id })),
 ])
+
+function buildWritingStyleSnapshot(styleId: string, content: string) {
+  const selectedStyle = writingStyleStore.getStyleById(styleId)
+  if (selectedStyle) {
+    return {
+      id: selectedStyle.id,
+      name: selectedStyle.name,
+      description: selectedStyle.description,
+      content: selectedStyle.content,
+      tags: [...selectedStyle.tags],
+      capturedAt: new Date().toISOString(),
+    }
+  }
+
+  const existingSnapshot = project.value?.writingStyleSnapshot
+  if (existingSnapshot?.id === styleId && content.trim()) {
+    return {
+      ...existingSnapshot,
+      content,
+      capturedAt: existingSnapshot.capturedAt || new Date().toISOString(),
+    }
+  }
+
+  return null
+}
 
 const resolvedGenre = computed(() =>
   form.genre === 'custom'
@@ -124,11 +157,6 @@ function normalizeTextValue(value: unknown) {
 function normalizedChapterCount() {
   const parsed = Number(form.chapterCount)
   return Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.trunc(parsed))) : 8
-}
-
-function normalizedMaxChapters() {
-  const parsed = Number(form.maxChapters)
-  return Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.trunc(parsed))) : normalizedChapterCount()
 }
 
 function setGenreValue(value: unknown) {
@@ -176,7 +204,6 @@ function applyConfigPatch(payload: Record<string, any>) {
   const nextTargetReader = normalizeTextValue(payload.targetReader)
   const nextLanguage = normalizeTextValue(payload.language)
   const nextChapterCount = Number(payload.chapterCount)
-  const nextMaxChapters = Number(payload.maxChapters ?? payload.chapterConfig?.maxChapters)
   const nextCustomRequirements = normalizeTextValue(payload.customRequirements)
 
   if (nextName) form.name = nextName
@@ -185,7 +212,6 @@ function applyConfigPatch(payload: Record<string, any>) {
   if (nextTargetReader) form.targetReader = nextTargetReader
   if (nextLanguage) form.language = nextLanguage
   if (Number.isFinite(nextChapterCount)) form.chapterCount = String(Math.max(1, Math.min(9999, Math.trunc(nextChapterCount))))
-  if (Number.isFinite(nextMaxChapters)) form.maxChapters = String(Math.max(1, Math.min(9999, Math.trunc(nextMaxChapters))))
   if (nextCustomRequirements) form.customRequirements = nextCustomRequirements
 
   if (payload.constraints && typeof payload.constraints === 'object') {
@@ -200,7 +226,10 @@ function applyConfigPatch(payload: Record<string, any>) {
 
 async function save(showToast = true) {
   if (!project.value) return
-  const resolvedStyle = writingStyleStore.resolveStyleContent(form.styleId)
+  const fallbackProjectStyle = project.value.writingStyleSnapshot?.id === form.styleId
+    ? project.value.writingStyleSnapshot.content
+    : ''
+  const resolvedStyle = writingStyleStore.resolveStyleContent(form.styleId) || fallbackProjectStyle
   const resolvedLanguage = form.language.trim() || 'English'
   const saved = await projectStore.updateProject(project.value.id, {
     name: form.name,
@@ -210,10 +239,11 @@ async function save(showToast = true) {
     language: resolvedLanguage,
     style: resolvedStyle,
     styleId: form.styleId,
+    writingStyleSnapshot: buildWritingStyleSnapshot(form.styleId, resolvedStyle),
     writingFormat: form.writingFormat,
     chapterCount: normalizedChapterCount(),
     chapterConfig: {
-      maxChapters: normalizedMaxChapters(),
+      maxChapters: normalizedChapterCount(),
     },
     constraints: {
       required: splitListInput(requiredElementsText.value),
@@ -259,7 +289,6 @@ async function optimizeWithDetailer() {
       targetReader: form.targetReader,
       language: form.language.trim() || 'English',
       chapterCount: normalizedChapterCount(),
-      maxChapters: normalizedMaxChapters(),
       customRequirements: form.customRequirements,
       constraints: {
         required: splitListInput(requiredElementsText.value),
@@ -317,10 +346,9 @@ async function optimizeWithDetailer() {
           :auto-resize="true"
         />
 
-        <div class="grid grid-cols-3 gap-3">
+        <div class="grid grid-cols-2 gap-3">
           <BaseSelect v-model="form.genre" label="Genre" :options="genreOptions" />
           <BaseInput v-model="form.chapterCount" label="Chapters" type="number" placeholder="8" min="1" max="9999" step="1" />
-          <BaseInput v-model="form.maxChapters" label="Max Chapters" type="number" placeholder="8" min="1" max="9999" step="1" />
         </div>
 
         <BaseInput

@@ -4,6 +4,7 @@ import type { NextGenerationAction } from './types'
 export const generationStageOrder: GenerationStage[] = [
   'planning',
   'chapter-outline',
+  'chapter-outline-review',
   'writing',
   'proofreading',
   'polishing',
@@ -73,7 +74,7 @@ export function getNextGenerationAction(project: StoryProject): NextGenerationAc
 
 export function resolveNextChapterIndex(
   project: StoryProject,
-  stage: Exclude<NextGenerationAction['stage'], 'planning' | 'chapter-outline' | 'done'>
+  stage: Exclude<NextGenerationAction['stage'], 'planning' | 'chapter-outline' | 'chapter-outline-review' | 'done'>
 ) {
   const action = getNextGenerationAction(project)
   return action.stage === stage ? action.chapterIndex : -1

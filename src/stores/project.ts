@@ -14,7 +14,7 @@ import {
   type ProjectExportBuffer,
   PROJECT_EXPORT_SYNC_DELAY_MS,
 } from '@/services/projectExportSync'
-import type { ChapterConfig, StoryProject, WritingFormat } from '@/types/project'
+import type { ChapterConfig, ProjectReviewAgentSettings, StoryProject, WritingFormat } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import type { Character, CharacterRole } from '@/types/character'
 
@@ -54,6 +54,33 @@ function normalizeChapterOutline(value: any): Chapter['outline'] {
   }
 }
 
+function normalizeReviewAgentSettings(value: any): ProjectReviewAgentSettings | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const agents = value.agents && typeof value.agents === 'object' ? value.agents : {}
+  const normalizedAgents = Object.fromEntries(
+    Object.entries(agents)
+      .filter(([, settings]: any) => settings && typeof settings === 'object')
+      .map(([agentId, settings]: any) => [
+        agentId,
+        {
+          name: typeof settings.name === 'string' ? settings.name : undefined,
+          role: typeof settings.role === 'string' ? settings.role : undefined,
+          brief: typeof settings.brief === 'string' ? settings.brief : undefined,
+          defaultModelRole: settings.defaultModelRole === 'proofreader' ? 'proofreader' : settings.defaultModelRole === 'chapterPlanner' ? 'chapterPlanner' : undefined,
+          modelValue: typeof settings.modelValue === 'string' ? settings.modelValue : undefined,
+          systemPrompt: typeof settings.systemPrompt === 'string' ? settings.systemPrompt : undefined,
+          customSystemPrompt: typeof settings.customSystemPrompt === 'string'
+            ? settings.customSystemPrompt
+            : undefined,
+          disabled: Boolean(settings.disabled),
+          deleted: Boolean(settings.deleted),
+          custom: Boolean(settings.custom),
+        },
+      ])
+  )
+  return { agents: normalizedAgents }
+}
+
 function chapterQualityScore(chapter: Chapter) {
   const outline = chapter.outline
   const statusRank: Record<string, number> = {
@@ -67,7 +94,7 @@ function chapterQualityScore(chapter: Chapter) {
   }
   return [
     (statusRank[chapter.status] ?? 0) * 1_000_000,
-    chapter.content.trim().length * 100,
+    Math.max(chapter.content.trim().length, chapter.polishedContent.trim().length) * 100,
     chapter.summary.trim().length * 10,
     chapter.title.trim() && !/^chapter\s+\d+$/i.test(chapter.title.trim()) ? 500 : 0,
     outline.objective.trim() ? 80 : 0,
@@ -88,16 +115,12 @@ function normalizeChapter(raw: any, fallbackIndex: number, usedIds: Set<string>)
     : generateId()
   usedIds.add(id)
 
+  const content = typeof raw?.content === 'string' ? raw.content : ''
   const polishedContent = typeof raw?.polishedContent === 'string' ? raw.polishedContent : ''
-  const content = polishedContent.trim()
-    ? polishedContent
-    : typeof raw?.content === 'string'
-      ? raw.content
-      : ''
 
   const status = ['outline', 'writing', 'draft', 'proofreading', 'proofread', 'polishing', 'polished'].includes(raw?.status)
     ? raw.status
-    : content.trim()
+    : (content.trim() || polishedContent.trim())
       ? 'draft'
       : 'outline'
 
@@ -110,7 +133,7 @@ function normalizeChapter(raw: any, fallbackIndex: number, usedIds: Set<string>)
     proofreadingIssues: Array.isArray(raw?.proofreadingIssues) ? raw.proofreadingIssues : [],
     proofreadingIssuesStale: Boolean(raw?.proofreadingIssuesStale),
     contentVersions: Array.isArray(raw?.contentVersions) ? raw.contentVersions : [],
-    polishedContent: '',
+    polishedContent,
     status,
     summary: typeof raw?.summary === 'string' ? raw.summary : '',
     characterStateUpdates: raw?.characterStateUpdates && typeof raw.characterStateUpdates === 'object' ? raw.characterStateUpdates : {},
@@ -282,20 +305,57 @@ function normalizeProjectDirectoryPath(value: any): string {
     : ''
 }
 
-function normalizeImportedProject(data: any, id = generateId()): StoryProject {
+function normalizeWritingStyleSnapshot(value: any, styleId: string, style: string): StoryProject['writingStyleSnapshot'] {
+  if (value && typeof value === 'object') {
+    const snapshotId = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : styleId
+    const content = typeof value.content === 'string' ? value.content : style
+    if (snapshotId && snapshotId !== 'default' && content.trim()) {
+      return {
+        id: snapshotId,
+        name: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'Project Writing Style',
+        description: typeof value.description === 'string' ? value.description : '',
+        content,
+        tags: Array.isArray(value.tags) ? value.tags.map((item: any) => String(item).trim()).filter(Boolean) : [],
+        capturedAt: typeof value.capturedAt === 'string' ? value.capturedAt : new Date().toISOString(),
+      }
+    }
+  }
+
+  if (styleId && styleId !== 'default' && style.trim()) {
+    return {
+      id: styleId,
+      name: 'Project Writing Style',
+      description: '',
+      content: style,
+      tags: [],
+      capturedAt: new Date().toISOString(),
+    }
+  }
+
+  return null
+}
+
+function getImportedProjectId(data: any): string {
+  return typeof data?.id === 'string' && data.id.trim() ? data.id.trim() : generateId()
+}
+
+function normalizeImportedProject(data: any, id = getImportedProjectId(data), options: { preserveDirectoryPath?: boolean } = {}): StoryProject {
   const now = new Date().toISOString()
   const migrated = migrateProjectStyle(data ?? {})
+  const style = typeof migrated.style === 'string' ? migrated.style : ''
+  const styleId = typeof migrated.styleId === 'string' && migrated.styleId.trim() ? migrated.styleId : 'default'
 
   return {
     id,
     name: typeof migrated.name === 'string' && migrated.name.trim() ? migrated.name.trim() : 'Imported Project',
-    directoryPath: typeof migrated.directoryPath === 'string' ? migrated.directoryPath : '',
+    directoryPath: options.preserveDirectoryPath && typeof migrated.directoryPath === 'string' ? migrated.directoryPath : '',
     theme: typeof migrated.theme === 'string' ? migrated.theme : '',
     genre: typeof migrated.genre === 'string' ? migrated.genre : '',
     targetReader: typeof migrated.targetReader === 'string' ? migrated.targetReader : '',
     language: typeof migrated.language === 'string' && migrated.language.trim() ? migrated.language.trim() : 'English',
-    style: typeof migrated.style === 'string' ? migrated.style : '',
-    styleId: typeof migrated.styleId === 'string' && migrated.styleId.trim() ? migrated.styleId : 'default',
+    style,
+    styleId,
+    writingStyleSnapshot: normalizeWritingStyleSnapshot(migrated.writingStyleSnapshot, styleId, style),
     writingFormat: migrated.writingFormat === 'markdown' ? 'markdown' : 'plaintext',
     chapterCount: normalizeChapterCount(migrated.chapterCount, migrated.length, migrated.chapters),
     chapterConfig: normalizeChapterConfig(migrated.chapterConfig, migrated.chapterCount, migrated.length, migrated.chapters),
@@ -317,6 +377,7 @@ function normalizeImportedProject(data: any, id = generateId()): StoryProject {
     generationStage: migrated.generationStage || 'idle',
     outline: typeof migrated.outline === 'string' ? migrated.outline : '',
     summary: typeof migrated.summary === 'string' ? migrated.summary : '',
+    reviewAgentSettings: normalizeReviewAgentSettings(migrated.reviewAgentSettings),
     createdAt: typeof migrated.createdAt === 'string' ? migrated.createdAt : now,
     updatedAt: now,
   }
@@ -516,6 +577,7 @@ export const useProjectStore = defineStore('project', () => {
     language: string
     style: string
     styleId: string
+    writingStyleSnapshot?: StoryProject['writingStyleSnapshot']
     writingFormat: WritingFormat
     chapterCount: number
     constraints: { required: string[]; forbidden: string[] }
@@ -532,10 +594,12 @@ export const useProjectStore = defineStore('project', () => {
       characters: [],
       relationshipEvents: [],
       knowledgeBaseIds: [],
+      writingStyleSnapshot: normalizeWritingStyleSnapshot(data.writingStyleSnapshot, data.styleId, data.style),
       status: 'draft',
       generationStage: 'idle',
       outline: '',
       summary: '',
+      reviewAgentSettings: { agents: {} },
       createdAt: now,
       updatedAt: now,
     }
@@ -558,24 +622,7 @@ export const useProjectStore = defineStore('project', () => {
     )
 
     if (existingIndex >= 0) {
-      const existing = projects.value[existingIndex]
-      const imported = normalizeImportedProject(data, existing.id)
-      const merged: StoryProject = {
-        ...existing,
-        ...imported,
-        id: existing.id,
-        createdAt: existing.createdAt,
-        updatedAt: new Date().toISOString(),
-        directoryPath: imported.directoryPath || existing.directoryPath,
-      }
-      projects.value[existingIndex] = merged
-      const saved = await saveToDisk(merged)
-      if (!saved) {
-        projects.value[existingIndex] = existing
-        persistLocalCache()
-        throw new Error('Failed to update imported project')
-      }
-      return merged
+      return projects.value[existingIndex]
     }
 
     const project = normalizeImportedProject(data)
@@ -592,6 +639,7 @@ export const useProjectStore = defineStore('project', () => {
   async function updateProject(id: string, updates: Partial<StoryProject>) {
     const index = projects.value.findIndex(p => p.id === id)
     if (index === -1) return null
+    const previousProject = cloneProjectSnapshot(projects.value[index])
     const normalizedUpdates = {
       ...updates,
       ...(Array.isArray(updates.chapters) ? { chapters: normalizeChapters(updates.chapters) } : {}),
@@ -602,10 +650,16 @@ export const useProjectStore = defineStore('project', () => {
       ...normalizedUpdates,
       updatedAt: new Date().toISOString(),
     }
-    return saveToDisk(projects.value[index])
+    const saved = await saveToDisk(projects.value[index])
+    if (!saved) {
+      projects.value[index] = previousProject
+      persistLocalCache()
+      return null
+    }
+    return projects.value[index]
   }
 
-  async function deleteProject(id: string) {
+  async function deleteProject(id: string, options: { deleteFiles?: boolean } = {}) {
     const index = projects.value.findIndex(p => p.id === id)
     if (index === -1) return false
     const project = projects.value[index]
@@ -618,7 +672,13 @@ export const useProjectStore = defineStore('project', () => {
     delete exportBuffers.value[id]
     projects.value.splice(index, 1)
     if (activeProjectId.value === id) activeProjectId.value = null
-    const deleted = await window.electronAPI?.project?.delete(id, project.directoryPath)
+    let deleted: boolean | undefined
+    try {
+      deleted = await window.electronAPI?.project?.delete(id, project.directoryPath, options.deleteFiles)
+    } catch (error) {
+      console.error('Failed to delete project:', error)
+      deleted = false
+    }
     if (deleted === false) {
       projects.value = previousProjects
       activeProjectId.value = previousActiveProjectId
@@ -688,16 +748,24 @@ export const useProjectStore = defineStore('project', () => {
           if (window.electronAPI?.project?.save) {
             const savedProject = await window.electronAPI.project.save(snapshot, directoryPath)
             if (savedProject && typeof savedProject === 'object' && typeof savedProject.directoryPath === 'string' && savedProject.directoryPath.trim()) {
-              project.directoryPath = savedProject.directoryPath.trim()
+              const savedDirectoryPath = savedProject.directoryPath.trim()
+              const currentIndex = projects.value.findIndex(item => item.id === snapshot.id)
+              if (currentIndex >= 0) {
+                projects.value[currentIndex] = {
+                  ...projects.value[currentIndex],
+                  directoryPath: savedDirectoryPath,
+                }
+              } else {
+                project.directoryPath = savedDirectoryPath
+              }
             }
           }
-          scheduleProjectExportSyncForProject(project)
+          const currentProject = getProjectById(snapshot.id) ?? project
+          scheduleProjectExportSyncForProject(currentProject)
           persistLocalCache()
-          return project
+          return currentProject
         } catch (e) {
           console.error('Failed to save project:', e)
-          scheduleProjectExportSyncForProject(project)
-          persistLocalCache()
           return null
         }
       })

@@ -6,8 +6,8 @@ import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
 import { Plus, FolderOpen, Upload } from 'lucide-vue-next'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import BaseDialog from '@/components/ui/BaseDialog.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import ProjectCard from '@/components/project/ProjectCard.vue'
 import ProjectCreateDialog from '@/components/project/ProjectCreateDialog.vue'
 import { buildProjectFileName, parseProjectFile, serializeProjectFile } from '@/services/projectFile'
@@ -68,17 +68,25 @@ function handleDeleteRequest(id: string) {
   showDeleteConfirm.value = true
 }
 
-async function handleDeleteConfirm() {
+async function performDeleteProject(deleteFiles: boolean) {
   if (pendingDeleteId.value) {
     const project = projectStore.projects.find(p => p.id === pendingDeleteId.value)
-    const deleted = await projectStore.deleteProject(pendingDeleteId.value)
+    const deleted = await projectStore.deleteProject(pendingDeleteId.value, { deleteFiles })
     if (!deleted) {
       toast.error('Failed to delete project')
       return
     }
-    toast.success(`Project "${project?.name}" deleted`)
+    toast.success(deleteFiles
+      ? `${ui.text('Project and files deleted')}: "${project?.name}"`
+      : `${ui.text('Project removed')}: "${project?.name}"`)
     pendingDeleteId.value = null
+    showDeleteConfirm.value = false
   }
+}
+
+function handleDeleteCancel() {
+  pendingDeleteId.value = null
+  showDeleteConfirm.value = false
 }
 
 function downloadTextFile(filename: string, content: string) {
@@ -208,7 +216,7 @@ async function handleImportProjectFile() {
     )
     const project = await projectStore.importProject(raw)
     projectStore.setActiveProject(project.id)
-    toast.success(existing ? `Updated imported project "${project.name}"` : `Imported project "${project.name}"`)
+    toast.success(existing ? `Project "${project.name}" already exists` : `Imported project "${project.name}"`)
     router.push(`/workspace/${project.id}`)
   } catch (error: any) {
     toast.error(error?.message || 'Import failed')
@@ -280,13 +288,34 @@ async function handleImportProjectFile() {
       @change="handleImportProjectFile"
     />
 
-    <ConfirmDialog
+    <BaseDialog
       v-model="showDeleteConfirm"
       title="Delete Project"
-      message="This will permanently delete this project and all its data. This action cannot be undone."
-      confirm-text="Delete"
-      variant="danger"
-      @confirm="handleDeleteConfirm"
-    />
+      width="520px"
+      @close="handleDeleteCancel"
+    >
+      <div class="space-y-3 text-sm text-text-secondary">
+        <p>
+          {{ ui.text('Choose how to delete this project. Removing the project only will hide it from the project list but keep its local files on disk.') }}
+        </p>
+        <p v-if="pendingDeleteId" class="rounded-lg border border-surface-4 bg-surface-2 px-3 py-2 text-xs text-text-muted break-all">
+          {{ projectStore.projects.find(project => project.id === pendingDeleteId)?.directoryPath || ui.text('Project files are not linked to a local folder.') }}
+        </p>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <BaseButton variant="ghost" size="sm" @click="handleDeleteCancel">
+            {{ ui.text('Cancel') }}
+          </BaseButton>
+          <BaseButton variant="secondary" size="sm" @click="performDeleteProject(false)">
+            {{ ui.text('Remove Project Only') }}
+          </BaseButton>
+          <BaseButton variant="danger" size="sm" @click="performDeleteProject(true)">
+            {{ ui.text('Delete Project and Files') }}
+          </BaseButton>
+        </div>
+      </template>
+    </BaseDialog>
   </div>
 </template>

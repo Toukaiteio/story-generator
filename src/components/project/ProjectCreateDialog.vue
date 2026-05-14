@@ -152,6 +152,7 @@ const writingFormatOptions = [
 ]
 
 function handleCreate() {
+  const selectedStyle = writingStyleStore.getStyleById(form.styleId)
   const resolvedStyle = writingStyleStore.resolveStyleContent(form.styleId)
   const resolvedLanguage = form.language.trim() || 'English'
   emit('create', {
@@ -162,6 +163,16 @@ function handleCreate() {
     language: resolvedLanguage,
     style: resolvedStyle,
     styleId: form.styleId,
+    writingStyleSnapshot: selectedStyle
+      ? {
+        id: selectedStyle.id,
+        name: selectedStyle.name,
+        description: selectedStyle.description,
+        content: selectedStyle.content,
+        tags: [...selectedStyle.tags],
+        capturedAt: new Date().toISOString(),
+      }
+      : null,
     writingFormat: form.writingFormat,
     chapterCount: normalizedChapterCount(),
     constraints: {

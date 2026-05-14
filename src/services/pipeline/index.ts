@@ -1,89 +1,8 @@
 import type { StoryProject } from '@/types/project'
-import type { PipelineCallbacks, PipelineRunOptions } from './types'
-import { generateOutline as generateOutlineWorkflow, generateCharacters as generateCharactersWorkflow, generateStoryPlan as generateStoryPlanWorkflow } from './planning'
-import { completeChapterPlan as completeChapterPlanWorkflow, generateAdditionalChapterPlan as generateAdditionalChapterPlanWorkflow, generateChapterPlan as generateChapterPlanWorkflow, generateChapterDraft as generateChapterDraftWorkflow, proofreadChapter as proofreadChapterWorkflow, polishChapter as polishChapterWorkflow, reviewAndRewriteChapterPlan as reviewAndRewriteChapterPlanWorkflow, run as runWorkflow } from './chapter'
-
-export type { PipelineCallbacks, PipelineRunOptions } from './types'
+import { polishChapter as polishChapterWorkflow } from './chapter'
 
 export class StoryPipeline {
-  private cancelled = false
-
-  cancel() {
-    this.cancelled = true
-  }
-
-  async generateOutline(project: StoryProject) {
-    return generateOutlineWorkflow(project)
-  }
-
-  async generateCharacters(project: StoryProject, options?: { preferredCount?: number; characterRequirements?: string }) {
-    return generateCharactersWorkflow(project, options)
-  }
-
-  async generateStoryPlan(
-    project: StoryProject,
-    onToken?: (token: string) => void,
-    onProgress?: (message: string) => void,
-    onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
-  ) {
-    return generateStoryPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave)
-  }
-
-  async generateChapterPlan(
-    project: StoryProject,
-    onToken?: (token: string) => void,
-    onProgress?: (message: string) => void,
-    onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
-  ) {
-    return generateChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave, () => this.cancelled)
-  }
-
-  async generateAdditionalChapterPlan(
-    project: StoryProject,
-    onToken?: (token: string) => void,
-    onProgress?: (message: string) => void,
-    onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
-  ) {
-    return generateAdditionalChapterPlanWorkflow(project, onToken, onProgress, onError, onIntermediateSave)
-  }
-
-  async completeChapterPlan(
-    project: StoryProject,
-    chapterIndex: number,
-    onToken?: (token: string) => void,
-    onProgress?: (message: string) => void,
-    onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
-  ) {
-    return completeChapterPlanWorkflow(project, chapterIndex, onToken, onProgress, onError, onIntermediateSave)
-  }
-
-  async reviewAndRewriteChapterPlan(
-    project: StoryProject,
-    chapterIndex: number,
-    onToken?: (token: string) => void,
-    onProgress?: (message: string) => void,
-    onError?: (error: string) => void,
-    onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
-  ) {
-    return reviewAndRewriteChapterPlanWorkflow(project, chapterIndex, onToken, onProgress, onError, onIntermediateSave)
-  }
-
-  async generateChapterDraft(
-    project: StoryProject,
-    chapterIndex: number,
-    onToken?: (token: string) => void,
-    onIntermediateChapter?: (chapter: StoryProject['chapters'][number]) => void | Promise<void>
-  ) {
-    return generateChapterDraftWorkflow(project, chapterIndex, onToken, onIntermediateChapter)
-  }
-
-  async proofreadChapter(project: StoryProject, chapterIndex: number, onToken?: (token: string) => void) {
-    return proofreadChapterWorkflow(project, chapterIndex, onToken)
-  }
+  cancel() {}
 
   async polishChapter(
     project: StoryProject,
@@ -93,13 +12,5 @@ export class StoryPipeline {
     onIntermediateChapter?: (chapter: StoryProject['chapters'][number]) => void | Promise<void>
   ) {
     return polishChapterWorkflow(project, chapterIndex, onToken, proofreadingIssues, onIntermediateChapter)
-  }
-
-  async run(
-    project: StoryProject,
-    callbacks: PipelineCallbacks,
-    options: PipelineRunOptions = {}
-  ) {
-    return runWorkflow(project, callbacks, options, () => this.cancelled)
   }
 }

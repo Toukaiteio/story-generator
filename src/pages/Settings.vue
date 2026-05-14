@@ -40,8 +40,16 @@ function handleVibeRewindPointsChange(value: string) {
   ui.setVibeRewindPoints(Number(value))
 }
 
+function handleMaxContextTurnsChange(value: string) {
+  ui.setDefaultMaxContextTurns(Number(value))
+}
+
 function handleCustomSystemPromptChange(value: string) {
   ui.setCustomSystemPrompt(value)
+}
+
+function handleMeetingProposerPromptChange(value: string) {
+  ui.setMeetingProposerPrompt(value)
 }
 
 async function handleBrowseStorage() {
@@ -138,6 +146,18 @@ async function handleBrowseStorage() {
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
               {{ ui.text('Default is 1. Before each Vibe AI request, the app saves a small snapshot of the current workspace so you can rewind from that message if the AI makes a bad edit. Older snapshots are replaced when the limit is exceeded. Set 0 to disable rewind snapshots.') }}
             </p>
+            <div class="mt-4">
+              <BaseInput
+                :model-value="String(ui.defaultMaxContextTurns)"
+                :label="ui.text('Default Meeting Context Limit (Turns)')"
+                type="number"
+                placeholder="15"
+                @update:model-value="handleMaxContextTurnsChange"
+              />
+              <p class="mt-2 text-xs leading-relaxed text-text-muted">
+                {{ ui.text('Default is 15. Automatically compress context after this many turns to save tokens and prevent distraction.') }}
+              </p>
+            </div>
           </div>
         </section>
 
@@ -157,6 +177,26 @@ async function handleBrowseStorage() {
             />
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
               {{ ui.text('This text is prepended before every built-in Agent and AI request system prompt. It does not replace the built-in prompt. Leave it empty to disable this behavior.') }}
+            </p>
+          </div>
+        </section>
+
+        <section class="border-t border-surface-4 pt-6">
+          <div class="flex items-center gap-2 mb-4">
+            <Wrench :size="16" class="text-accent" />
+            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Meeting Proposer Agent') }}</h2>
+          </div>
+          <div class="pl-6">
+            <BaseTextarea
+              :model-value="ui.meetingProposerPrompt"
+              :label="ui.text('Proposer system prompt')"
+              :rows="8"
+              :auto-resize="true"
+              :placeholder="ui.text('Internal meeting proposer instructions...')"
+              @update:model-value="handleMeetingProposerPromptChange"
+            />
+            <p class="mt-2 text-xs leading-relaxed text-text-muted">
+              {{ ui.text('This built-in agent is triggered internally after the first open discussion pass. Its model is configured in Provider > Agent Binding as Meeting Proposer Agent.') }}
             </p>
           </div>
         </section>

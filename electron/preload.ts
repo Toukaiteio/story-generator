@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPath: (name: string) => ipcRenderer.invoke('app:get-path', name),
   },
 
+  // Persistent storage in userData
+  storage: {
+    readJson: (key: string) => ipcRenderer.sendSync('storage:read-json', key),
+    writeJson: (key: string, value: any) => ipcRenderer.sendSync('storage:write-json', key, value),
+    removeJson: (key: string) => ipcRenderer.sendSync('storage:remove-json', key),
+  },
+
   // Shell operations
   shell: {
     reveal: (path: string) => ipcRenderer.invoke('shell:reveal', path),
@@ -31,7 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('project:list'),
     load: (id: string, directoryPath?: string) => ipcRenderer.invoke('project:load', id, directoryPath),
     save: (project: any, directoryPath?: string) => ipcRenderer.invoke('project:save', project, directoryPath),
-    delete: (id: string, directoryPath?: string) => ipcRenderer.invoke('project:delete', id, directoryPath),
+    delete: (id: string, directoryPath?: string, deleteFiles?: boolean) => ipcRenderer.invoke('project:delete', id, directoryPath, deleteFiles),
   },
 
   vibeChat: {

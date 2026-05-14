@@ -11,6 +11,8 @@ import { PolisherExpert } from './polisher'
 import { RelationshipTrackerExpert } from './relationshipTracker'
 import type { AgentType } from '@/types/agent'
 
+type RuntimeAgentType = Exclude<AgentType, 'skillAgent' | 'proposerAgent'>
+
 export { BaseAgent } from './base'
 export type { AgentResult } from './base'
 
@@ -28,7 +30,7 @@ export const agents = {
   relationshipTracker: new RelationshipTrackerExpert(),
 }
 
-export function getAgent(type: AgentType) {
+export function getAgent(type: RuntimeAgentType) {
   return agents[type]
 }
 

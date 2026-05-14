@@ -29,6 +29,7 @@ import {
   XCircle,
   Loader,
   Network,
+  Wrench,
 } from 'lucide-vue-next'
 import type { AgentType } from '@/types/agent'
 import type { ModelSource, ModelConfig, ReasoningEffort, ProviderType } from '@/types/provider'
@@ -145,6 +146,8 @@ const roleOptions: Array<{ id: AgentType; label: string; icon: any; description:
   { id: 'writer', label: 'Writer Agent', icon: PenTool, description: 'Chapter drafting and scene writing' },
   { id: 'editingAI', label: 'Editing AI', icon: Pencil, description: 'Chapter audit and issue repair coordination' },
   { id: 'relationshipTracker', label: 'Relationship Tracker', icon: Network, description: 'Extract chapter-by-chapter relationship changes' },
+  { id: 'skillAgent', label: 'Skill Agent', icon: Wrench, description: 'Plan, normalize, execute, and verify approved meeting tool changes' },
+  { id: 'proposerAgent', label: 'Meeting Proposer Agent', icon: Sparkles, description: 'Internal meeting proposal synthesis and action role' },
   { id: 'proofreader', label: 'Proofreader Agent', icon: RefreshCw, description: 'Consistency and grammar review' },
   { id: 'polisher', label: 'Polisher Agent', icon: Zap, description: 'Language enhancement and final polish' },
 ]
@@ -1149,11 +1152,11 @@ function formatSyncedTime(value?: string | null) {
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
-                    <BaseButton variant="secondary" size="sm" @click="syncDraftModels">
+                    <BaseButton type="button" variant="secondary" size="sm" @click="() => syncDraftModels()">
                       <RefreshCw :size="14" />
                       <span>{{ tr('Sync') }}</span>
                     </BaseButton>
-                    <BaseButton variant="secondary" size="sm" @click="addDraftModel">
+                    <BaseButton type="button" variant="secondary" size="sm" @click="() => addDraftModel()">
                       <Plus :size="14" />
                       <span>{{ tr('Add') }}</span>
                     </BaseButton>
@@ -1384,11 +1387,11 @@ function formatSyncedTime(value?: string | null) {
                     </p>
                   </div>
                   <div class="flex items-center gap-2">
-                    <BaseButton variant="secondary" size="sm" @click="syncEditDraftModels">
+                    <BaseButton type="button" variant="secondary" size="sm" @click="syncEditDraftModels">
                       <RefreshCw :size="14" />
                       <span>{{ tr('Sync') }}</span>
                     </BaseButton>
-                    <BaseButton variant="secondary" size="sm" @click="addDraftModel(editingProviderForm.type)">
+                    <BaseButton type="button" variant="secondary" size="sm" @click="addDraftModel(editingProviderForm.type)">
                       <Plus :size="14" />
                       <span>{{ tr('Add') }}</span>
                     </BaseButton>

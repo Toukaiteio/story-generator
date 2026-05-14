@@ -86,12 +86,25 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
 
   private parseResponse(data: any): FunctionCallingResponse {
     const textParts: string[] = []
+    const reasoningParts: string[] = []
     const toolCalls: ToolCall[] = []
 
     for (const item of data?.output ?? []) {
       if (item?.type === 'message' && Array.isArray(item.content)) {
         for (const content of item.content) {
           if (typeof content?.text === 'string') textParts.push(content.text)
+        }
+      }
+
+      if ((item?.type === 'reasoning' || item?.type === 'reasoning_summary') && Array.isArray(item.summary)) {
+        for (const summary of item.summary) {
+          if (typeof summary?.text === 'string') reasoningParts.push(summary.text)
+        }
+      }
+
+      if (item?.type === 'reasoning' && Array.isArray(item.content)) {
+        for (const content of item.content) {
+          if (typeof content?.text === 'string') reasoningParts.push(content.text)
         }
       }
 
@@ -116,6 +129,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     const incompleteReason = data?.incomplete_details?.reason
     return {
       content: textParts.join('') || data?.output_text || null,
+      reasoning_content: reasoningParts.join('') || null,
       tool_calls: toolCalls.filter(toolCall => toolCall.name),
       finish_reason: toolCalls.length
         ? 'tool_calls'
@@ -224,6 +238,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     const decoder = new TextDecoder()
     const pendingCalls = new Map<string, PendingFunctionCall>()
     const toolCalls: ToolCall[] = []
+    let reasoningContent = ''
     let fullText = ''
     const completed = { response: null as FunctionCallingResponse | null }
     let finishReason: FunctionCallingResponse['finish_reason'] = 'stop'
@@ -242,6 +257,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
         (type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_text.delta') &&
         typeof event.delta === 'string'
       ) {
+        reasoningContent += event.delta
         callbacks.onReasoningToken?.(event.delta)
         return
       }
@@ -343,6 +359,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
       const finalToolCalls = toolCalls.length ? toolCalls : completedResponse?.tool_calls ?? []
       callbacks.onComplete({
         content: fullText || completedResponse?.content || null,
+        reasoning_content: reasoningContent || completedResponse?.reasoning_content || null,
         tool_calls: finalToolCalls,
         finish_reason: finalToolCalls.length ? 'tool_calls' : completedResponse?.finish_reason ?? finishReason,
       })

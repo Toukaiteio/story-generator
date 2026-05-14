@@ -11,6 +11,7 @@ export type GenerationStage =
   | 'idle'
   | 'planning'
   | 'chapter-outline'
+  | 'chapter-outline-review'
   | 'writing'
   | 'proofreading'
   | 'polishing'
@@ -18,6 +19,31 @@ export type GenerationStage =
 
 export interface ChapterConfig {
   maxChapters: number
+}
+
+export interface ProjectWritingStyleSnapshot {
+  id: ID
+  name: string
+  description?: string
+  content: string
+  tags?: string[]
+  capturedAt: string
+}
+
+export interface ProjectReviewAgentSettings {
+  maxContextTurns?: number
+  agents: Record<string, {
+    name?: string
+    role?: string
+    brief?: string
+    defaultModelRole?: 'chapterPlanner' | 'proofreader'
+    modelValue?: string
+    systemPrompt?: string
+    customSystemPrompt?: string
+    disabled?: boolean
+    deleted?: boolean
+    custom?: boolean
+  }>
 }
 
 export interface StoryProject extends Timestamps {
@@ -30,6 +56,7 @@ export interface StoryProject extends Timestamps {
   language: string
   style: string
   styleId: string
+  writingStyleSnapshot?: ProjectWritingStyleSnapshot | null
   writingFormat: WritingFormat
   chapterCount: number
   chapterConfig: ChapterConfig
@@ -47,4 +74,5 @@ export interface StoryProject extends Timestamps {
   generationStage: GenerationStage
   outline: string
   summary: string
+  reviewAgentSettings?: ProjectReviewAgentSettings
 }

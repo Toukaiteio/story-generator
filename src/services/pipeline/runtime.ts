@@ -6,7 +6,7 @@ import { useKnowledgeStore } from '@/stores/knowledge'
 import { providerManager } from '@/services/provider'
 import { buildKnowledgeContextAsync, buildKnowledgeQuery } from '@/services/knowledge/context'
 
-export type PipelineStage = 'planning' | 'chapter-outline' | 'writing' | 'proofreading' | 'polishing'
+export type PipelineStage = 'planning' | 'chapter-outline' | 'chapter-outline-review' | 'writing' | 'proofreading' | 'polishing'
 
 export interface PlanningRuntime {
   providerStore: ReturnType<typeof useProviderStore>
@@ -39,7 +39,7 @@ export function getModelForStage(
 ) {
   const role = stage === 'planning'
     ? 'outline'
-    : stage === 'chapter-outline'
+    : stage === 'chapter-outline' || stage === 'chapter-outline-review'
       ? 'chapterPlanner'
       : stage === 'writing'
         ? 'writer'
@@ -51,7 +51,7 @@ export function getModelForStage(
     return providerStore.requireAgentModelRef(role)
   }
 
-  if (stage === 'chapter-outline') {
+  if (stage === 'chapter-outline' || stage === 'chapter-outline-review') {
     return providerStore.requireAgentModelRef(role)
   }
 

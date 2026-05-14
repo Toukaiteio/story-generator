@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 import { URL } from 'url'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs'
 import http from 'http'
 import https from 'https'
 
@@ -13,6 +13,7 @@ let forceClosing = false
 
 const DATA_DIR = join(app.getPath('userData'), 'story-generator')
 const PROJECTS_DIR = join(DATA_DIR, 'projects')
+const STORAGE_DIR = join(DATA_DIR, 'storage')
 
 function normalizeFsPath(value: string | null | undefined) {
   return typeof value === 'string'
@@ -23,6 +24,15 @@ function normalizeFsPath(value: string | null | undefined) {
 function ensureDirs() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   if (!existsSync(PROJECTS_DIR)) mkdirSync(PROJECTS_DIR, { recursive: true })
+  if (!existsSync(STORAGE_DIR)) mkdirSync(STORAGE_DIR, { recursive: true })
+}
+
+function sanitizeStorageKey(key: string) {
+  return key.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 180) || 'storage'
+}
+
+function getStorageFilePath(key: string) {
+  return join(STORAGE_DIR, `${sanitizeStorageKey(key)}.json`)
 }
 
 function createWindow() {
@@ -82,6 +92,41 @@ ipcMain.handle('app:get-path', (_event, name: any) => {
     return app.getPath(name)
   } catch {
     return null
+  }
+})
+
+ipcMain.on('storage:read-json', (event, key: string) => {
+  try {
+    ensureDirs()
+    const filePath = getStorageFilePath(String(key || ''))
+    if (!existsSync(filePath)) {
+      event.returnValue = null
+      return
+    }
+    event.returnValue = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch {
+    event.returnValue = null
+  }
+})
+
+ipcMain.on('storage:write-json', (event, key: string, value: any) => {
+  try {
+    ensureDirs()
+    const filePath = getStorageFilePath(String(key || ''))
+    writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf-8')
+    event.returnValue = true
+  } catch {
+    event.returnValue = false
+  }
+})
+
+ipcMain.on('storage:remove-json', (event, key: string) => {
+  try {
+    const filePath = getStorageFilePath(String(key || ''))
+    if (existsSync(filePath)) unlinkSync(filePath)
+    event.returnValue = true
+  } catch {
+    event.returnValue = false
   }
 })
 
@@ -225,18 +270,25 @@ ipcMain.handle('project:load', (_event, id: string, directoryPath?: string) => {
 })
 
 ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) => {
-  const isNew = !!directoryPath
+  const explicitBaseDir = typeof directoryPath === 'string' && directoryPath.trim() ? directoryPath.trim() : ''
   const linkPath = join(PROJECTS_DIR, `${project.id}.link`)
-  const linkedDirectoryPath = !isNew && existsSync(linkPath)
+  const linkedDirectoryPath = !explicitBaseDir && existsSync(linkPath)
     ? readFileSync(linkPath, 'utf-8').trim()
     : ''
-  const baseDir = directoryPath || linkedDirectoryPath || project.directoryPath || PROJECTS_DIR
+  const existingFolder = linkedDirectoryPath || project.directoryPath || ''
+  const hasUsableExistingFolder = Boolean(existingFolder) && normalizeFsPath(existingFolder) !== normalizeFsPath(PROJECTS_DIR)
+  const baseDir = explicitBaseDir || (hasUsableExistingFolder ? existingFolder : PROJECTS_DIR)
   
-  // If it's a new project or moving, ensure the project folder exists
-  let projectFolder = baseDir
-  if (isNew) {
+  // If there is no linked project folder yet, create a dedicated folder instead of
+  // writing project.json directly into the shared projects directory.
+  let projectFolder = hasUsableExistingFolder ? existingFolder : baseDir
+  if (explicitBaseDir || !hasUsableExistingFolder) {
     const safeName = project.name.replace(/[\\/:*?"<>|]/g, '_')
-    projectFolder = join(baseDir, `${safeName}_${project.id}`)
+    const preferredFolder = join(baseDir, `${safeName}_${project.id}`)
+    projectFolder = preferredFolder
+    if (!explicitBaseDir && !hasUsableExistingFolder && existsSync(join(preferredFolder, 'project.json'))) {
+      projectFolder = join(baseDir, `${safeName}_${project.id}_${Date.now()}`)
+    }
     project.directoryPath = projectFolder
   }
   if (!existsSync(projectFolder)) mkdirSync(projectFolder, { recursive: true })
@@ -281,11 +333,13 @@ ipcMain.handle('project:save', (_event, project: any, directoryPath?: string) =>
   return { ...metadata, chapters: chapters || [], characters: characters || [], directoryPath: projectFolder }
 })
 
-ipcMain.handle('project:delete', (_event, id: string, directoryPath?: string) => {
+ipcMain.handle('project:delete', (_event, id: string, directoryPath?: string, deleteFiles?: boolean) => {
   const filePath = join(PROJECTS_DIR, `${id}.json`)
   if (existsSync(filePath)) unlinkSync(filePath)
 
   const normalizedDirectory = normalizeFsPath(directoryPath)
+  const candidateFolders = new Set<string>()
+  if (directoryPath && existsSync(directoryPath)) candidateFolders.add(directoryPath)
   const linkFiles = readdirSync(PROJECTS_DIR).filter(file => file.endsWith('.link'))
   for (const linkFile of linkFiles) {
     const linkId = linkFile.replace(/\.link$/, '')
@@ -295,7 +349,21 @@ ipcMain.handle('project:delete', (_event, id: string, directoryPath?: string) =>
       || (normalizedDirectory && normalizeFsPath(linkedDirectory) === normalizedDirectory)
 
     if (shouldDeleteLink && existsSync(linkPath)) {
+      if (linkedDirectory && existsSync(linkedDirectory)) candidateFolders.add(linkedDirectory)
       unlinkSync(linkPath)
+    }
+  }
+
+  if (deleteFiles) {
+    for (const folder of candidateFolders) {
+      const normalizedFolder = normalizeFsPath(folder)
+      if (!normalizedFolder || normalizedFolder === normalizeFsPath(PROJECTS_DIR) || normalizedFolder === normalizeFsPath(DATA_DIR)) {
+        continue
+      }
+      const metadataPath = join(folder, 'project.json')
+      if (existsSync(metadataPath)) {
+        rmSync(folder, { recursive: true, force: true })
+      }
     }
   }
 

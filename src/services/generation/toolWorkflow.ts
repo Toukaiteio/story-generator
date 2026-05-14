@@ -19,6 +19,7 @@ export interface RelationshipToolWorkflowOptions {
   temperature?: number
   maxRounds: number
   contextTokens?: number | null
+  signal?: AbortSignal
   finalToolResultContent?: (toolCall: ToolCall) => string
   requestContinuation: (request: ToolWorkflowContinuationRequest) => Promise<boolean>
 }
@@ -80,7 +81,8 @@ export async function chatWithRelationshipToolsInPlace(
       options.temperature ?? 0.2,
       forcedFinalTool
         ? { toolChoice: { type: 'function', function: { name: forcedFinalTool } } }
-        : undefined
+        : undefined,
+      options.signal
     )
 
     allToolCalls.push(...response.tool_calls)

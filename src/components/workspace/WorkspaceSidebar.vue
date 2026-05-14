@@ -62,6 +62,7 @@ const tree = computed<TreeNode[]>(() => {
       children: [
         { id: 'generation-planning', label: 'Story Planning', icon: List },
         { id: 'generation-chapter-outline', label: 'Chapter Plan', icon: FileText },
+        { id: 'generation-chapter-outline-review', label: 'Meeting', icon: FileText },
         { id: 'generation-writing', label: 'Writing', icon: FileText },
         { id: 'generation-proofreading', label: 'Proofreading', icon: FileText },
         { id: 'generation-polishing', label: 'Polishing', icon: FileText },

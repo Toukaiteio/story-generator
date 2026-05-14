@@ -21,7 +21,8 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import VibeAssistant from './VibeAssistant.vue'
 import ProofreadingAssistant from './ProofreadingAssistant.vue'
-import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, RotateCcw } from 'lucide-vue-next'
+import MultiAgentReviewChat from './MultiAgentReviewChat.vue'
+import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, Square } from 'lucide-vue-next'
 
 type StageKey = Exclude<GenerationStage, 'idle' | 'done'>
 
@@ -30,13 +31,17 @@ const stageTabs: Array<{
   label: string
   icon: any
   description: string
+  optional?: boolean
 }> = [
   { key: 'planning', label: 'Story Planning', icon: Wand2, description: 'Design outline and characters together' },
   { key: 'chapter-outline', label: 'Chapter Plan', icon: BookOpen, description: 'Break the story into editable chapters' },
+  { key: 'chapter-outline-review', label: 'Meeting', icon: Check, description: 'Optional review pass before drafting', optional: true },
   { key: 'writing', label: 'Writing', icon: FileText, description: 'Draft chapters one by one' },
-  { key: 'proofreading', label: 'Proofreading', icon: Check, description: 'Fix continuity and language issues' },
-  { key: 'polishing', label: 'Polishing', icon: Sparkles, description: 'Refine voice and rhythm' },
+  { key: 'proofreading', label: 'Proofreading', icon: Check, description: 'Optional continuity and language check', optional: true },
+  { key: 'polishing', label: 'Polishing', icon: Sparkles, description: 'Optional final voice and rhythm refinement', optional: true },
 ]
+
+const chapterScopedStages: StageKey[] = ['chapter-outline', 'chapter-outline-review', 'writing', 'proofreading', 'polishing']
 
 const roleOptions = [
   { label: 'Protagonist', value: 'protagonist' },
@@ -64,10 +69,10 @@ const showDeleteConfirm = ref(false)
 const showDoubleDeleteConfirm = ref(false)
 const chapterToDeleteId = ref<string | null>(null)
 const showClearConfirm = ref(false)
-const showGenerateBeyondLimitConfirm = ref(false)
 const showGenerateCharactersDialog = ref(false)
 const characterGenerationRequirements = ref('')
 const characterGenerationCount = ref(5)
+const updateOutlineAfterCharacterGeneration = ref(true)
 
 const characterContext = computed(() => {
   if (!project.value?.characters.length) return ''
@@ -81,18 +86,40 @@ const relationshipContext = computed(() => {
   return `Relationship context is not inlined to reduce prompt size. Use relationship query tools for specific character pairs at chapterIndex ${Math.max(-1, selectedChapter.value.index - 1)} when available.`
 })
 
+const projectConfigContext = computed(() => {
+  if (!project.value) return null
+  return {
+    name: project.value.name,
+    theme: project.value.theme,
+    genre: project.value.genre,
+    targetReader: project.value.targetReader,
+    language: project.value.language,
+    writingFormat: project.value.writingFormat,
+    writingStyleId: project.value.styleId,
+    writingStyleName: project.value.writingStyleSnapshot?.name,
+    chapterCount: project.value.chapterCount,
+    maxChapters: project.value.chapterConfig?.maxChapters ?? project.value.chapterCount,
+    length: project.value.length,
+    requiredElements: [...project.value.constraints.required],
+    forbiddenElements: [...project.value.constraints.forbidden],
+    customRequirements: project.value.customRequirements,
+    summary: project.value.summary,
+  }
+})
+
 const vibeContext = computed(() => {
   const ctx: Record<string, any> = {}
   if (project.value) {
     ctx.projectId = project.value.id
     ctx.directoryPath = project.value.directoryPath
+    ctx.projectConfig = projectConfigContext.value
     ctx.workspaceSnapshot = buildVibeWorkspaceSnapshot()
     ctx.outline = outlineDraft.value
     ctx.characters = charactersDraft.value.map(c => `- ${c.name} [id: ${c.id}] (${c.role})`).join('\n')
     ctx.writingFormat = project.value.writingFormat
     ctx.writingStyle = project.value.style
   }
-  if (selectedChapter.value && (activeStage.value === 'chapter-outline' || activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing')) {
+  if (selectedChapter.value && chapterScopedStages.includes(activeStage.value)) {
     ctx.chapter = {
       id: selectedChapter.value.id,
       index: selectedChapter.value.index,
@@ -112,6 +139,8 @@ const proofreadingAssistant = ref<any>(null)
 const chapterTextarea = ref<HTMLTextAreaElement | null>(null)
 const chapterProofreadingIssues = ref<Record<string, any[]>>({})
 const isQuickSubmittingPolish = ref(false)
+const vibeAiLoading = ref(false)
+const activeAiTaskRunning = computed(() => genStore.isGenerating || vibeAiLoading.value || isQuickSubmittingPolish.value)
 
 function handleVibeApply(content: string) {
   if (activeStage.value === 'planning') {
@@ -147,6 +176,20 @@ function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outl
   }
 }
 
+function handleVibePlanningOutline(payload: { outline: string }) {
+  outlineDraft.value = payload.outline
+  toast.success('Story outline updated')
+}
+
+function handleVibePlanningCharacters(payload: { characters: Character[] }) {
+  const nextCharacters = cloneCharacters(payload.characters)
+  if (!nextCharacters.length) return
+  charactersDraft.value = nextCharacters
+  selectedCharacterId.value = nextCharacters[0]?.id ?? null
+  planningSubTab.value = 'characters'
+  toast.success('Characters updated')
+}
+
 function buildVibeWorkspaceSnapshot() {
   if (activeStage.value === 'planning') {
     return {
@@ -158,7 +201,7 @@ function buildVibeWorkspaceSnapshot() {
     }
   }
 
-  if (selectedChapter.value && (activeStage.value === 'chapter-outline' || activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing')) {
+  if (selectedChapter.value && chapterScopedStages.includes(activeStage.value)) {
     return {
       type: 'generation-chapter',
       stage: activeStage.value,
@@ -329,13 +372,12 @@ async function proofreadAllChapters() {
     // Auto-save after scanning all chapters
     await saveChapters()
 
-    // Mark proofreading complete and transition to Polish stage
-    genStore.markCompleted('proofreading')
+    // Move to the optional polish workspace without recording a stage-complete state.
     activeStage.value = 'polishing'
     ui.setWorkspaceNode('generation-polishing')
     selectedChapterId.value = allChapters[0]?.id ?? null
 
-    toast.success('All chapters proofread. Ready to polish.')
+    toast.success('All chapters proofread. Optional polish stage is available.')
   } finally {
     genStore.finishManualTask()
   }
@@ -486,23 +528,9 @@ const editorPlaceholder = computed(() => {
   return 'Start writing...'
 })
 
-const stageStatusMap = computed<Record<StageKey, 'done' | 'todo'>>(() => {
-  const chapters = chaptersDraft.value
-  return {
-    planning: (outlineDraft.value.trim() && charactersDraft.value.length) ? 'done' : 'todo',
-    'chapter-outline': chapters.length > 0 && chapters.every(isChapterPlanComplete) ? 'done' : 'todo',
-    writing: chapters.length > 0 && chapters.every(ch => ch.content.trim()) ? 'done' : 'todo',
-    proofreading: chapters.length > 0 && chapters.every(ch => ['proofread', 'polishing', 'polished'].includes(ch.status)) ? 'done' : 'todo',
-    polishing: chapters.length > 0 && chapters.every(ch => ch.content.trim() && ch.status === 'polished') ? 'done' : 'todo',
-  }
-})
-
-const nextAction = computed(() => project.value ? genStore.getNextAction(project.value) : { stage: 'done' as const })
-const nextActionChapterNumber = computed(() => {
-  const chapterIndex = 'chapterIndex' in nextAction.value ? nextAction.value.chapterIndex : undefined
-  if (!project.value || typeof chapterIndex !== 'number') return null
-  return (project.value.chapters[chapterIndex]?.index ?? chapterIndex) + 1
-})
+const activeStageTab = computed(() =>
+  stageTabs.find(stage => stage.key === activeStage.value) ?? stageTabs[0]
+)
 
 const selectedChapterPlanComplete = computed(() =>
   selectedChapter.value ? isChapterPlanComplete(selectedChapter.value) : false
@@ -556,13 +584,166 @@ const currentChapterPlanActionLabel = computed(() =>
 
 const canGenerateCharactersFromOutline = computed(() => Boolean(outlineDraft.value.trim()))
 
+const requireVibeTodoListToolInstruction = [
+  'Before doing any generation or edit, explicitly use the todolist tool to create a concise checklist for this task.',
+  'Keep at most one todo item in_progress at a time, update the checklist as you work, and mark all completed items done before the final response.',
+  'Treat the Story Configuration in the Context section as mandatory source-of-truth input. Do not ignore theme, genre, target reader, language, chapter count, required elements, forbidden elements, custom requirements, writing format, or writing style.',
+].join('\n')
+
+const vibeGenerationCommands: Record<string, string> = {
+  'generate-story-plan': [
+    requireVibeTodoListToolInstruction,
+    'Generate or rewrite the story plan for this project.',
+    'Update the master outline first. Then propose any character changes needed to support the outline.',
+    'Use the current story configuration, language, genre, theme, constraints, writing format, writing style, and existing characters as source context.',
+    'Relationship query tools are not available in this planning stage. Do not try to look up relationship data; infer only from the current outline and character list.',
+    'If structured editing tools are available for this stage, use them to apply the result directly. Otherwise return a concise plan that can be applied to the current editor.',
+  ].join('\n\n'),
+  'generate-characters': [
+    requireVibeTodoListToolInstruction,
+    'Generate character profiles from the current story outline.',
+    'Respect the project genre, theme, language, constraints, and existing character list.',
+    'Create only characters that are useful to the planned story. Include role, personality, appearance, backstory, motivation, goals, conflicts, current state, and key relationships where relevant.',
+    'If structured character tools are available, apply the generated profiles directly. Otherwise return the generated profiles in a clean editable format.',
+  ].join('\n\n'),
+  'smart-chapter-plan': [
+    requireVibeTodoListToolInstruction,
+    'Generate or complete the currently selected chapter plan.',
+    'Use the project outline, existing chapter list, selected chapter position, character context, and continuity requirements.',
+    'Fill every chapter planning field: title, objective, conflict, plot beats, character actions, reveals, and ending hook.',
+    'Use the chapter outline tools to apply the result directly.',
+  ].join('\n\n'),
+  'generate-all-chapter-plans': [
+    requireVibeTodoListToolInstruction,
+    'Regenerate the full chapter plan for this project.',
+    'Create a coherent chapter-by-chapter structure that fits the configured chapter count and preserves the story outline, character constraints, and required plot logic.',
+    'Use the available outline editing tools to update the selected chapter when applicable. If full-project chapter tools are not available in this Vibe context, explain the proposed full plan clearly instead of silently doing nothing.',
+  ].join('\n\n'),
+  'review-current-chapter-plan': [
+    requireVibeTodoListToolInstruction,
+    'Quickly self-review the selected chapter plan for obvious logic, pacing, continuity, and character-use problems.',
+    'If issues are found, rewrite the selected chapter plan with the chapter outline tools. If no major issue is found, summarize that no rewrite is needed.',
+  ].join('\n\n'),
+  'generate-current-draft': [
+    requireVibeTodoListToolInstruction,
+    'Draft the currently selected chapter from its chapter plan.',
+    'Use the project language, writing format, writing style, story outline, character context, and continuity requirements.',
+    'Return the complete revised chapter content through the chapter editing tool.',
+  ].join('\n\n'),
+  'generate-all-drafts': [
+    requireVibeTodoListToolInstruction,
+    'Generate chapter drafts for the manuscript starting from the selected chapter context.',
+    'If this Vibe context can only edit one chapter at a time, draft the currently selected chapter completely and state which chapter should be sent next.',
+    'Use the project language, writing format, writing style, story outline, chapter plans, characters, and continuity requirements.',
+  ].join('\n\n'),
+  'polish-current': [
+    requireVibeTodoListToolInstruction,
+    'Polish the currently selected chapter.',
+    'Improve prose quality, rhythm, clarity, emotional resonance, and style consistency while preserving plot, facts, character intent, and formatting.',
+    'Return the complete polished chapter through the chapter editing tool.',
+  ].join('\n\n'),
+  'polish-all': [
+    requireVibeTodoListToolInstruction,
+    'Polish the manuscript starting from the selected chapter context.',
+    'If this Vibe context can only edit one chapter at a time, polish the currently selected chapter completely and state which chapter should be sent next.',
+    'Preserve plot, facts, character intent, continuity, and formatting while improving prose quality and style consistency.',
+  ].join('\n\n'),
+}
+
+function formatCommandList(items: string[] | undefined) {
+  return Array.isArray(items) && items.length
+    ? items.map(item => `- ${item}`).join('\n')
+    : 'None'
+}
+
+function buildVisibleVibeCommandContext() {
+  if (!project.value) return ''
+  const config = [
+    'Story Configuration:',
+    `Project Name: ${project.value.name || 'Untitled'}`,
+    `Theme: ${project.value.theme || 'Not set'}`,
+    `Genre: ${project.value.genre || 'Not set'}`,
+    `Target Reader: ${project.value.targetReader || 'Not set'}`,
+    `Primary Language: ${project.value.language || 'English'}`,
+    `Writing Format: ${project.value.writingFormat}`,
+    `Writing Style: ${project.value.writingStyleSnapshot?.name || project.value.styleId || 'default'}`,
+    `Configured Chapters: ${project.value.chapterCount}`,
+    `Max Chapters: ${project.value.chapterConfig?.maxChapters ?? project.value.chapterCount}`,
+    `Required Elements:\n${formatCommandList(project.value.constraints.required)}`,
+    `Forbidden Elements:\n${formatCommandList(project.value.constraints.forbidden)}`,
+    project.value.customRequirements ? `Custom Requirements:\n${project.value.customRequirements}` : 'Custom Requirements: None',
+  ].join('\n')
+
+  const sections = [config]
+  if (outlineDraft.value.trim()) {
+    sections.push(`Current Story Outline:\n${outlineDraft.value.trim()}`)
+  }
+  if (charactersDraft.value.length) {
+    sections.push(`Current Characters:\n${charactersDraft.value.map(character => [
+      `- ${character.name} [${character.role}]`,
+      character.motivation ? `  Motivation: ${character.motivation}` : '',
+      character.goals ? `  Goals: ${character.goals}` : '',
+      character.currentState ? `  Current State: ${character.currentState}` : '',
+    ].filter(Boolean).join('\n')).join('\n')}`)
+  }
+  if (activeStage.value === 'planning') {
+    sections.push('Tool Availability Note:\nRelationship query tools are not available in the planning stage. Use the outline and current characters only.')
+  }
+  if (selectedChapter.value && chapterScopedStages.includes(activeStage.value)) {
+    sections.push([
+      'Selected Chapter:',
+      `Chapter Number: ${selectedChapter.value.index + 1}`,
+      `Title: ${selectedChapter.value.title || 'Untitled'}`,
+      `Outline:\n${JSON.stringify(selectedChapter.value.outline, null, 2)}`,
+    ].join('\n'))
+  }
+
+  return `Context:\n${sections.join('\n\n')}`
+}
+
+async function sendGenerationCommandToVibe(actionId: string) {
+  const command = vibeGenerationCommands[actionId]
+  if (!command) return
+  await nextTick()
+  if (!vibeAssistant.value) {
+    toast.warning('Vibe AI is not available for the current stage.')
+    return
+  }
+  const context = buildVisibleVibeCommandContext()
+  await vibeAssistant.value.submitRequest(context ? `${command}\n\n${context}` : command)
+}
+
+function stopActiveAiTask() {
+  vibeAssistant.value?.cancelCurrentResponse?.()
+  genStore.cancelGeneration()
+  isQuickSubmittingPolish.value = false
+  vibeAiLoading.value = false
+}
+
+function openGenerateCharactersDialog() {
+  if (!canGenerateCharactersFromOutline.value) return
+  characterGenerationCount.value = Math.max(1, Math.min(24, Math.trunc(Number(characterGenerationCount.value) || 5)))
+  showGenerateCharactersDialog.value = true
+}
+
+function targetChapterCount() {
+  if (!project.value) return 1
+  const configuredMax = Number(project.value.chapterConfig?.maxChapters)
+  const configuredCount = Number(project.value.chapterCount)
+  const parsed = Number.isFinite(configuredMax)
+    ? configuredMax
+    : Number.isFinite(configuredCount)
+      ? configuredCount
+      : 1
+  return Math.max(1, Math.min(9999, Math.trunc(parsed)))
+}
+
 function syncFromProject() {
   if (!project.value) return
   outlineDraft.value = project.value.outline
   charactersDraft.value = cloneCharacters(project.value.characters)
-  chaptersDraft.value = project.value.chapters.length
-    ? cloneChapters(project.value.chapters)
-    : [createEmptyChapter(0)]
+  chaptersDraft.value = project.value.chapters.length ? cloneChapters(project.value.chapters) : []
+  ensureChapterCount(Math.max(targetChapterCount(), chaptersDraft.value.length))
 
   if (!selectedCharacterId.value || !charactersDraft.value.some(character => character.id === selectedCharacterId.value)) {
     selectedCharacterId.value = charactersDraft.value[0]?.id ?? null
@@ -574,7 +755,7 @@ function syncFromProject() {
 }
 
 watch(project, () => {
-  if (genStore.isGenerating) syncFromProject()
+  if (genStore.isGenerating || activeStage.value === 'chapter-outline-review') syncFromProject()
 }, { deep: true })
 
 watch(() => project.value?.id, syncFromProject, { immediate: true })
@@ -618,23 +799,20 @@ async function savePlanning() {
 
 async function saveChapters(showToast = true) {
   if (!project.value) return
-  const saved = await projectStore.updateProject(project.value.id, { chapters: cloneChapters(chaptersDraft.value) })
+  const nextChapterCount = Math.max(project.value.chapterCount, chaptersDraft.value.length)
+  const saved = await projectStore.updateProject(project.value.id, {
+    chapters: cloneChapters(chaptersDraft.value),
+    chapterCount: nextChapterCount,
+    chapterConfig: {
+      ...project.value.chapterConfig,
+      maxChapters: Math.max(project.value.chapterConfig?.maxChapters ?? 1, nextChapterCount),
+    },
+  })
   if (!saved) {
     toast.error('Failed to save chapter plan')
     return
   }
   if (showToast) toast.success('Chapter plan saved')
-}
-
-async function generateStoryPlanStage() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.generateStoryPlan(project.value.id)
-    syncFromProject()
-    toast.success('Story plan generated')
-  } catch (error: any) {
-    toast.error(error?.message || 'Story planning failed')
-  }
 }
 
 async function generateCharactersFromOutline() {
@@ -645,139 +823,32 @@ async function generateCharactersFromOutline() {
       outline: outlineDraft.value,
       characters: cloneCharacters(charactersDraft.value),
     })
-    const generated = await genStore.generateCharacters(project.value.id, {
-      preferredCount: count,
-      characterRequirements: characterGenerationRequirements.value,
-    })
-    charactersDraft.value = cloneCharacters(generated)
-    selectedCharacterId.value = charactersDraft.value[0]?.id ?? null
+
+    await nextTick()
+    if (!vibeAssistant.value) {
+      toast.warning('Vibe AI is not available for the current stage.')
+      return
+    }
+
+    const requirements = characterGenerationRequirements.value.trim()
+    const command = [
+      requireVibeTodoListToolInstruction,
+      `Generate exactly ${count} character profiles from the current story outline.`,
+      requirements ? `User character requirements:\n${requirements}` : 'No additional user character requirements were provided.',
+      'Respect the project genre, theme, language, required elements, forbidden elements, writing format, writing style, and existing character list.',
+      'Create only characters that are useful to the planned story. Include role, personality, appearance, backstory, motivation, goals, conflicts, current state, and key relationships where relevant.',
+      'Use replace_story_characters to apply exactly the requested number of generated characters directly to the planning workspace.',
+      updateOutlineAfterCharacterGeneration.value
+        ? 'After applying the characters, use replace_story_outline to update the master outline so it fits the generated cast.'
+        : 'Do not update the master outline in this request; only generate and apply characters.',
+    ].join('\n\n')
+    const context = buildVisibleVibeCommandContext()
+
     planningSubTab.value = 'characters'
     showGenerateCharactersDialog.value = false
-    toast.success('Characters generated')
+    await vibeAssistant.value.submitRequest(context ? `${command}\n\n${context}` : command)
   } catch (error: any) {
-    toast.error(error?.message || 'Character generation failed')
-  }
-}
-
-async function generateChapterPlanStage() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.generateChapterPlan(project.value.id)
-    syncFromProject()
-    toast.success('Chapter plan generated')
-  } catch (error: any) {
-    toast.error(error?.message || 'Chapter plan generation failed')
-  }
-}
-
-async function runAdditionalChapterPlanGeneration() {
-  if (!project.value || genStore.isGenerating) return
-  const beforeCount = project.value.chapters.length
-  await genStore.generateAdditionalChapterPlan(project.value.id)
-  syncFromProject()
-  const addedChapter = chaptersDraft.value[beforeCount]
-  selectedChapterId.value = addedChapter?.id ?? chaptersDraft.value[chaptersDraft.value.length - 1]?.id ?? selectedChapterId.value
-  toast.success('Additional chapter plan generated')
-}
-
-async function requestGenerateAdditionalChapterPlan() {
-  if (!project.value || genStore.isGenerating) return
-  const current = project.value.chapters.length
-  const max = Math.max(1, Math.min(9999, Math.trunc(Number(project.value.chapterConfig?.maxChapters ?? project.value.chapterCount ?? 1))))
-
-  if (current >= 9999 && current >= max) {
-    toast.warning('Maximum chapter limit reached')
-    return
-  }
-
-  if (current >= max) {
-    showGenerateBeyondLimitConfirm.value = true
-    return
-  }
-
-  try {
-    await runAdditionalChapterPlanGeneration()
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to generate additional chapter plan')
-  }
-}
-
-async function requestGenerateCurrentChapterPlan() {
-  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
-  try {
-    await saveChapters(false)
-    await genStore.completeCurrentChapterPlan(project.value.id, selectedChapterId.value)
-    syncFromProject()
-    toast.success(selectedChapterHasPlanInfo.value ? 'Chapter plan completed' : 'Chapter plan generated')
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to complete chapter plan')
-  }
-}
-
-async function requestSmartChapterPlanGeneration() {
-  if (shouldGenerateCurrentChapterPlan.value) {
-    await requestGenerateCurrentChapterPlan()
-    return
-  }
-  await requestGenerateAdditionalChapterPlan()
-}
-
-async function reviewAndRewriteCurrentChapterPlan() {
-  if (!project.value || !selectedChapterId.value || genStore.isGenerating || !selectedChapterPlanComplete.value) return
-  try {
-    await saveChapters(false)
-    const result = await genStore.reviewAndRewriteChapterPlan(project.value.id, selectedChapterId.value)
-    syncFromProject()
-    toast.success(result.issues.length ? 'Chapter plan reviewed and rewritten' : 'Chapter plan reviewed. No qualifying issues found')
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to review chapter plan')
-  }
-}
-
-async function confirmGenerateAdditionalChapterPlan() {
-  if (!project.value || genStore.isGenerating) return
-  const max = Math.max(1, Math.min(9999, Math.trunc(Number(project.value.chapterConfig?.maxChapters ?? project.value.chapterCount ?? 1))))
-  if (max >= 9999) {
-    toast.warning('Maximum chapter limit reached')
-    return
-  }
-
-  const saved = await projectStore.updateProject(project.value.id, {
-    chapterConfig: {
-      maxChapters: max + 1,
-    },
-  })
-  if (!saved) {
-    toast.error('Failed to update chapter limit')
-    return
-  }
-
-  try {
-    await runAdditionalChapterPlanGeneration()
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to generate additional chapter plan')
-  }
-}
-
-async function generateCurrentChapterDraft() {
-  if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
-  try {
-    await genStore.generateChapterDraft(project.value.id, selectedChapterId.value)
-    syncFromProject()
-    toast.success('Chapter draft generated')
-  } catch (error: any) {
-    toast.error(error?.message || 'Writing failed')
-  }
-}
-
-async function generateAllChapterDrafts() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.generateAllChapterDrafts(project.value.id)
-    syncFromProject()
-    toast.success('All chapter drafts generated')
-  } catch (error: any) {
-    toast.error(error?.message || 'Writing failed')
+    toast.error(error?.message || ui.text('Character generation failed'))
   }
 }
 
@@ -901,6 +972,23 @@ function ensureChapterCount(count: number) {
   }
 }
 
+function addChapter() {
+  const max = targetChapterCount()
+  const nextCount = chaptersDraft.value.length + 1
+  ensureChapterCount(nextCount)
+  selectedChapterId.value = chaptersDraft.value[nextCount - 1]?.id ?? selectedChapterId.value
+
+  if (nextCount > max && project.value) {
+    void projectStore.updateProject(project.value.id, {
+      chapterCount: nextCount,
+      chapterConfig: {
+        ...project.value.chapterConfig,
+        maxChapters: nextCount,
+      },
+    })
+  }
+}
+
 function createContentVersion(label: string, versionContent: string, issues?: any[]) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -962,29 +1050,24 @@ function updateCurrentChapterText(text: string) {
               'flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-all duration-200 whitespace-nowrap border',
               activeStage === stage.key
                 ? 'border-accent bg-accent-subtle text-accent shadow-sm'
-                : stageStatusMap[stage.key] === 'done'
-                  ? 'border-success/20 bg-success-subtle/30 text-success hover:bg-success-subtle/50'
-                  : 'border-transparent text-text-secondary hover:bg-surface-3 hover:text-text-primary',
+                : 'border-transparent text-text-secondary hover:bg-surface-3 hover:text-text-primary',
             ]"
+            :title="ui.text(stage.description)"
             @click="selectStage(stage.key)"
           >
             <component :is="stage.icon" :size="12" />
             <span>{{ ui.text(stage.label) }}</span>
-            <Check v-if="stageStatusMap[stage.key] === 'done'" :size="10" class="ml-0.5" />
+            <span v-if="stage.optional" class="rounded-full border border-surface-4 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-text-muted">
+              {{ ui.text('Optional') }}
+            </span>
           </button>
         </div>
 
         <!-- Right: Status and Actions -->
         <div class="flex items-center gap-3 shrink-0">
-          <div v-if="project" class="flex items-center gap-2 px-2 py-1 rounded-full bg-surface-2 border border-surface-4">
-            <div class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></div>
-            <span class="text-[10px] font-bold text-text-secondary uppercase tracking-wider">{{ ui.text('Next:') }}</span>
-            <span class="text-[10px] font-medium text-text-primary">
-              {{ nextAction.stage }}
-              <span v-if="nextActionChapterNumber" class="text-accent ml-0.5">#{{ nextActionChapterNumber }}</span>
-            </span>
-            <div v-if="genStore.progressMessage" class="h-3 w-px bg-surface-4 mx-1"></div>
-            <span v-if="genStore.progressMessage" class="text-[10px] text-text-muted truncate max-w-[120px]">{{ ui.text(genStore.progressMessage) }}</span>
+          <div v-if="project" class="hidden lg:flex items-center gap-2 px-2 py-1 rounded-full bg-surface-2 border border-surface-4">
+            <span class="text-[10px] font-bold text-text-secondary uppercase tracking-wider">{{ ui.text(activeStageTab.label) }}</span>
+            <span class="text-[10px] text-text-muted truncate max-w-[240px]">{{ ui.text(activeStageTab.description) }}</span>
           </div>
           <div class="flex items-center gap-1 border-l border-surface-4 pl-3">
             <BaseButton v-if="project" variant="ghost" size="sm" class="!h-7 !px-2 text-text-secondary hover:text-accent" @click="markProjectDirty">
@@ -1014,10 +1097,10 @@ function updateCurrentChapterText(text: string) {
               </button>
             </div>
             <div class="flex items-center gap-2">
-              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateStoryPlanStage">
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('generate-story-plan')">
                 <Wand2 :size="14" class="mr-1.5" /><span>{{ ui.text('AI Generate') }}</span>
               </BaseButton>
-              <BaseButton v-if="canGenerateCharactersFromOutline" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="showGenerateCharactersDialog = true">
+              <BaseButton v-if="canGenerateCharactersFromOutline" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="openGenerateCharactersDialog">
                 <Users :size="14" class="mr-1.5" /><span>{{ ui.text('Generate Characters') }}</span>
               </BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="savePlanning">
@@ -1122,10 +1205,10 @@ function updateCurrentChapterText(text: string) {
                 </div>
               </div>
               <div class="flex flex-wrap items-center justify-end gap-2">
-              <BaseButton variant="ghost" size="sm" class="!h-8" @click="ensureChapterCount(1)"><Plus :size="14" class="mr-1.5" />{{ ui.text('Add Chapter') }}</BaseButton>
-              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="requestSmartChapterPlanGeneration"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(shouldGenerateCurrentChapterPlan ? currentChapterPlanActionLabel : 'Generate Next Chapter') }}</BaseButton>
-              <BaseButton v-if="selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="reviewAndRewriteCurrentChapterPlan"><CheckCircle2 :size="14" class="mr-1.5" />{{ ui.text('Quick Review & Rewrite') }}</BaseButton>
-              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="generateChapterPlanStage"><Wand2 :size="14" class="mr-1.5" />{{ ui.text('AI Generate') }}</BaseButton>
+              <BaseButton variant="ghost" size="sm" class="!h-8" @click="addChapter"><Plus :size="14" class="mr-1.5" />{{ ui.text('Add Chapter') }}</BaseButton>
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('smart-chapter-plan')"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(shouldGenerateCurrentChapterPlan ? currentChapterPlanActionLabel : 'Generate Next Chapter') }}</BaseButton>
+              <BaseButton v-if="selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('review-current-chapter-plan')"><CheckCircle2 :size="14" class="mr-1.5" />{{ ui.text('Quick Review & Rewrite') }}</BaseButton>
+              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('generate-all-chapter-plans')"><Wand2 :size="14" class="mr-1.5" />{{ ui.text('AI Generate') }}</BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save Chapters') }}</BaseButton>
               </div>
             </div>
@@ -1248,29 +1331,33 @@ function updateCurrentChapterText(text: string) {
         </section>
 
         <!-- Writing Stage -->
-        <section v-else class="h-full flex flex-col overflow-hidden">
+        <section v-else-if="activeStage !== 'chapter-outline-review'" class="h-full flex flex-col overflow-hidden">
           <div class="h-[45px] shrink-0 flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-surface-4">
-            <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ activeStage }}</h3>
+            <div class="flex items-center gap-2">
+              <h3 class="text-xs font-bold text-text-primary uppercase tracking-widest">{{ ui.text(activeStageTab.label) }}</h3>
+              <BaseTag v-if="activeStageTab.optional" variant="default" size="sm">{{ ui.text('Optional') }}</BaseTag>
+              <span v-if="activeStageTab.optional" class="hidden text-xs text-text-muted lg:inline">{{ ui.text(activeStageTab.description) }}</span>
+            </div>
             <div class="flex items-center gap-2">
               <BaseButton
                 variant="secondary"
                 size="sm"
                 class="!h-8"
                 :loading="genStore.isGenerating"
-                @click="activeStage === 'writing' ? generateCurrentChapterDraft() : activeStage === 'proofreading' ? proofreadCurrentChapter() : polishCurrentChapter()"
+                @click="activeStage === 'writing' ? sendGenerationCommandToVibe('generate-current-draft') : activeStage === 'proofreading' ? proofreadCurrentChapter() : sendGenerationCommandToVibe('polish-current')"
               >
                 <Sparkles :size="14" class="mr-1.5" />
                 <span>{{ ui.text(activeStage === 'writing' ? 'Generate Current' : activeStage === 'proofreading' ? 'Proofread Current' : 'Polish Current') }}</span>
               </BaseButton>
               <BaseButton
-                variant="secondary"
+                :variant="activeAiTaskRunning ? 'danger' : 'secondary'"
                 size="sm"
                 class="!h-8"
-                :loading="genStore.isGenerating"
-                @click="activeStage === 'writing' ? generateAllChapterDrafts() : activeStage === 'proofreading' ? proofreadAllChapters() : polishAllChapters()"
+                @click="activeAiTaskRunning ? stopActiveAiTask() : activeStage === 'writing' ? sendGenerationCommandToVibe('generate-all-drafts') : activeStage === 'proofreading' ? proofreadAllChapters() : sendGenerationCommandToVibe('polish-all')"
               >
-                <Sparkles :size="14" class="mr-1.5" />
-                <span>{{ ui.text(activeStage === 'writing' ? 'Generate All' : activeStage === 'proofreading' ? 'Proofread All' : 'Polish All') }}</span>
+                <Square v-if="activeAiTaskRunning" :size="14" class="mr-1.5" />
+                <Sparkles v-else :size="14" class="mr-1.5" />
+                <span>{{ ui.text(activeAiTaskRunning ? 'Stop' : activeStage === 'writing' ? 'Generate All' : activeStage === 'proofreading' ? 'Proofread All' : 'Polish All') }}</span>
               </BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save') }}</BaseButton>
             </div>
@@ -1324,10 +1411,20 @@ function updateCurrentChapterText(text: string) {
             </div>
           </div>
         </section>
+
+        <!-- Chapter Plan Review Stage -->
+        <section v-show="activeStage === 'chapter-outline-review'" class="h-full flex flex-col overflow-hidden">
+          <MultiAgentReviewChat
+            :project="project"
+            :chapter="selectedChapter"
+            :outline="outlineDraft"
+            :characters="characterContext"
+          />
+        </section>
       </div>
 
       <!-- Integrated Assistant Sidebar -->
-      <div class="w-80 lg:w-96 border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block">
+      <div v-if="activeStage !== 'chapter-outline-review'" class="w-80 lg:w-96 border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block">
         <ProofreadingAssistant
           v-if="activeStage === 'proofreading' && selectedChapter"
           ref="proofreadingAssistant"
@@ -1358,7 +1455,10 @@ function updateCurrentChapterText(text: string) {
           :mode="activeStage === 'chapter-outline' ? 'outline-agent' : activeStage === 'writing' || activeStage === 'proofreading' || activeStage === 'polishing' ? 'editor-agent' : 'assistant'"
           @apply="handleVibeApply"
           @apply-outline="handleVibeOutlineApply"
+          @apply-planning-outline="handleVibePlanningOutline"
+          @apply-planning-characters="handleVibePlanningCharacters"
           @rewind="rewindVibeWorkspace"
+          @loading-change="vibeAiLoading = $event"
         />
       </div>
     </div>
@@ -1366,14 +1466,6 @@ function updateCurrentChapterText(text: string) {
     <ConfirmDialog v-model="showClearConfirm" title="Clear Content" message="Clear current stage content?" variant="danger" confirm-text="Clear" @confirm="performClearChapter" />
     <ConfirmDialog v-model="showDeleteConfirm" title="Delete" message="Delete chapter?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
     <ConfirmDialog v-model="showDoubleDeleteConfirm" title="Warning" message="Chapter has content. Delete anyway?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
-    <ConfirmDialog
-      v-model="showGenerateBeyondLimitConfirm"
-      title="Chapter limit reached"
-      message="Continuing beyond the configured chapter limit may reduce generation quality. Increase the chapter limit by 1 and continue?"
-      variant="warning"
-      confirm-text="Continue"
-      @confirm="confirmGenerateAdditionalChapterPlan"
-    />
     <BaseDialog v-model="showGenerateCharactersDialog" title="Generate Characters" width="520px">
       <div class="space-y-5">
         <div>
@@ -1402,6 +1494,19 @@ function updateCurrentChapterText(text: string) {
             <span>24</span>
           </div>
         </div>
+        <label class="flex items-start gap-3 rounded-lg border border-surface-4 bg-surface-2 p-4 text-sm text-text-secondary">
+          <input
+            v-model="updateOutlineAfterCharacterGeneration"
+            type="checkbox"
+            class="mt-0.5 h-4 w-4 rounded border-surface-4 bg-surface-1 text-accent accent-accent"
+          />
+          <span>
+            <span class="block font-semibold text-text-primary">{{ ui.text('Update story outline after creating characters') }}</span>
+            <span class="mt-1 block text-xs leading-relaxed text-text-muted">
+              {{ ui.text('After characters are generated, automatically refine the master outline so it fits the new cast.') }}
+            </span>
+          </span>
+        </label>
       </div>
       <template #footer>
         <div class="flex justify-end gap-2">

@@ -59,7 +59,7 @@ export class ProviderManager {
     return { provider: match.provider, model: match.model }
   }
 
-  async chat(messages: ChatMessage[], model: ProviderModelRef, maxTokens = 4096, temperature = 0.7): Promise<string> {
+  async chat(messages: ChatMessage[], model: ProviderModelRef, maxTokens = 4096, temperature = 0.7, signal?: AbortSignal): Promise<string> {
     const match = this.getProviderForModel(model)
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
@@ -69,6 +69,7 @@ export class ProviderManager {
       temperature,
       apiKey: match.provider.apiKey ?? '',
       baseUrl: match.provider.baseUrl,
+      signal,
     }
 
     let lastError: Error | null = null
@@ -83,10 +84,14 @@ export class ProviderManager {
           if (!guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
             return collected
           }
-          currentMessages = buildContinueMessages(currentMessages, guarded.text)
+          currentMessages = [
+            ...currentMessages,
+            { role: 'user', content: 'Continue.' },
+          ]
         }
         return collected
       } catch (e: any) {
+        if (signal?.aborted || e?.name === 'AbortError') throw e
         lastError = e
         if (attempt < this.maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
@@ -97,7 +102,7 @@ export class ProviderManager {
     throw lastError || new Error('Chat failed after retries')
   }
 
-  async chatWithTools(messages: ChatMessage[], model: ProviderModelRef, tools: ToolDefinition[], maxTokens = 4096, temperature = 0.7, toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
+  async chatWithTools(messages: ChatMessage[], model: ProviderModelRef, tools: ToolDefinition[], maxTokens = 4096, temperature = 0.7, toolOptions?: ToolCallOptions, signal?: AbortSignal): Promise<FunctionCallingResponse> {
     const match = this.getProviderForModel(model)
     if (!match) throw new Error(`No active provider found for model: ${model.providerId}/${model.modelId}`)
 
@@ -107,6 +112,7 @@ export class ProviderManager {
       temperature,
       apiKey: match.provider.apiKey ?? '',
       baseUrl: match.provider.baseUrl,
+      signal,
     }
 
     let lastError: Error | null = null
@@ -127,10 +133,11 @@ export class ProviderManager {
             response.content = combinedContent || response.content
             return response
           }
-          currentMessages = buildContinueMessages(currentMessages, guarded.text)
+          currentMessages = buildContinueMessages(currentMessages, guarded.text, response.reasoning_content)
         }
         return { content: combinedContent || null, tool_calls: [], finish_reason: 'stop' }
       } catch (e: any) {
+        if (signal?.aborted || e?.name === 'AbortError') throw e
         lastError = e
         if (attempt < this.maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000))
@@ -166,10 +173,15 @@ export class ProviderManager {
       try {
         const runStream = async (streamMessages: ChatMessage[], continuation: number, aggregateText = ''): Promise<string> => {
           const paragraphGuard = createParagraphGuard(token => callbacks.onToken(token))
+          let reasoningContent = ''
           await match.adapter.stream(streamMessages, options, {
             ...callbacks,
             onToken: token => {
               paragraphGuard.push(token)
+            },
+            onReasoningToken: token => {
+              reasoningContent += token
+              callbacks.onReasoningToken?.(token)
             },
             onComplete: () => {},
           })
@@ -182,7 +194,7 @@ export class ProviderManager {
           if (!guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
             return nextAggregate
           }
-          return runStream(buildContinueMessages(streamMessages, guarded.text), continuation + 1, nextAggregate)
+          return runStream(buildContinueMessages(streamMessages, guarded.text, reasoningContent), continuation + 1, nextAggregate)
         }
 
         const finalText = await runStream(messages, 0)
@@ -260,7 +272,7 @@ export class ProviderManager {
           }
 
           return runStreamWithTools(
-            buildContinueMessages(streamMessages, guarded.text),
+            buildContinueMessages(streamMessages, guarded.text, response.reasoning_content),
             continuation + 1,
             nextAggregate
           )

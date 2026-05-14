@@ -23,6 +23,11 @@ declare global {
     app: {
       getPath: (name: 'documents' | 'downloads' | 'desktop' | 'userData') => Promise<string | null>
     }
+    storage: {
+      readJson: (key: string) => unknown
+      writeJson: (key: string, value: unknown) => boolean
+      removeJson: (key: string) => boolean
+    }
     shell: {
       reveal: (path: string) => Promise<boolean>
     }
@@ -30,7 +35,7 @@ declare global {
       list: () => Promise<any[]>
       load: (id: string, directoryPath?: string) => Promise<any | null>
       save: (project: any, directoryPath?: string) => Promise<any>
-      delete: (id: string, directoryPath?: string) => Promise<boolean>
+      delete: (id: string, directoryPath?: string, deleteFiles?: boolean) => Promise<boolean>
     }
     vibeChat: {
       load: (projectId: string, directoryPath: string | undefined, key: string) => Promise<any | null>

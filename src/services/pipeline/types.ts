@@ -11,7 +11,7 @@ export interface PipelineCallbacks {
 }
 
 export interface PipelineRunOptions {
-  stopAfterStage?: 'planning' | 'chapter-outline' | 'writing' | 'proofreading' | 'polishing'
+  stopAfterStage?: 'planning' | 'chapter-outline' | 'chapter-outline-review' | 'writing' | 'proofreading' | 'polishing'
 }
 
 export interface PlanningDraft {

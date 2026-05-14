@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
-import { useGenerationStore } from '@/stores/generation'
 import { buildUnsavedChapterLocations, type UnsavedChapterLocation } from '@/services/unsaved'
 import PanelGroup from '@/components/layout/PanelGroup.vue'
 import WorkspaceSidebar from '@/components/workspace/WorkspaceSidebar.vue'
@@ -14,19 +13,16 @@ import ChapterEditor from '@/components/workspace/ChapterEditor.vue'
 import CharacterDetail from '@/components/character/CharacterDetail.vue'
 import StoryPreviewPanel from '@/components/workspace/StoryPreviewPanel.vue'
 import GenerationControls from '@/components/workspace/GenerationControls.vue'
-import StreamPreview from '@/components/workspace/StreamPreview.vue'
 import KnowledgeBaseSidebar from '@/components/workspace/KnowledgeBaseSidebar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import BaseDialog from '@/components/ui/BaseDialog.vue'
-import { PenTool, ArrowLeft, Lock, Loader2, AlertTriangle, LocateFixed } from 'lucide-vue-next'
+import { PenTool, ArrowLeft, AlertTriangle, LocateFixed } from 'lucide-vue-next'
 import BaseButton from '@/components/ui/BaseButton.vue'
 
 const route = useRoute()
 const router = useRouter()
 const projectStore = useProjectStore()
 const ui = useUiStore()
-const genStore = useGenerationStore()
-const workspaceNodeBeforeFollowing = ref<string | null>(null)
 const showUnsavedCloseDialog = ref(false)
 let removeCloseRequestListener: (() => void) | null = null
 
@@ -147,57 +143,15 @@ const activeView = computed(() => {
   return 'config'
 })
 
-const followingNode = computed(() => {
-  const project = projectStore.activeProject
-  if (!project || !genStore.isFollowingMode) return null
-
-  if (
-    (genStore.currentStage === 'writing' ||
-      genStore.currentStage === 'proofreading' ||
-      genStore.currentStage === 'polishing') &&
-    genStore.currentChapterIndex != null
-  ) {
-    const chapter = project.chapters[genStore.currentChapterIndex]
-    return chapter ? `chapter-${chapter.id}` : `generation-${genStore.currentStage}`
-  }
-
-  if (genStore.currentStage === 'planning' || genStore.currentStage === 'chapter-outline') {
-    return `generation-${genStore.currentStage}`
-  }
-
-  return null
-})
-
-watch(followingNode, (node) => {
-  if (node && ui.activeWorkspaceNode !== node) {
-    ui.setWorkspaceNode(node)
-  }
-}, { immediate: true })
-
-watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
-  if (isFollowing) {
-    workspaceNodeBeforeFollowing.value = ui.activeWorkspaceNode
-    return
-  }
-
-  if (wasFollowing && workspaceNodeBeforeFollowing.value) {
-    ui.setWorkspaceNode(workspaceNodeBeforeFollowing.value)
-    workspaceNodeBeforeFollowing.value = null
-  }
-})
 </script>
 
 <template>
   <div v-if="projectStore.activeProject" class="h-full flex flex-col overflow-hidden">
     <Transition name="controls-collapse">
-      <div v-if="activeView !== 'chapter'" class="shrink-0 overflow-hidden">
+      <div v-if="activeView !== 'chapter' && activeView !== 'generation'" class="shrink-0 overflow-hidden">
         <GenerationControls />
       </div>
     </Transition>
-
-    <div class="shrink-0 px-4">
-      <StreamPreview />
-    </div>
 
     <div class="relative flex-1 min-h-0 overflow-hidden">
       <PanelGroup direction="horizontal">
@@ -239,17 +193,6 @@ watch(() => genStore.isFollowingMode, (isFollowing, wasFollowing) => {
         </template>
       </PanelGroup>
 
-      <div
-        v-if="genStore.isFollowingMode"
-        class="absolute inset-0 z-40 flex items-start justify-center bg-surface-0/15 backdrop-blur-[1px] pointer-events-auto"
-      >
-        <div class="mt-4 flex items-center gap-2 rounded-md border border-surface-4 bg-surface-1/95 px-3 py-2 text-xs text-text-secondary shadow-lg">
-          <Lock :size="13" class="text-warning" />
-          <span class="font-medium text-text-primary">{{ ui.text('Following Generate All') }}</span>
-          <span>{{ ui.text(genStore.progressMessage || 'Workflow is running...') }}</span>
-          <Loader2 :size="13" class="animate-spin text-accent" />
-        </div>
-      </div>
     </div>
 
     <BaseDialog v-model="showUnsavedCloseDialog" :title="ui.text('Unsaved changes')" width="620px">

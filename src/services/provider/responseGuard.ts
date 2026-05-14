@@ -28,13 +28,20 @@ export function guardResponseText(text: string | null | undefined): GuardedTextR
   return { text: next, detectedRefusal }
 }
 
-export function buildContinueMessages<T extends { role: string; content: string | null }>(
+export function buildContinueMessages<T extends { role: string; content: string | null; reasoning_content?: string | null }>(
   messages: T[],
-  assistantContent: string
+  assistantContent: string,
+  reasoningContent?: string | null
 ): T[] {
+  const assistantMessage: T = {
+    role: 'assistant',
+    content: assistantContent,
+    ...(reasoningContent?.trim() ? { reasoning_content: reasoningContent } : {}),
+  } as T
+
   return [
     ...messages,
-    { role: 'assistant', content: assistantContent } as T,
+    assistantMessage,
     { role: 'user', content: 'Continue.' } as T,
   ]
 }

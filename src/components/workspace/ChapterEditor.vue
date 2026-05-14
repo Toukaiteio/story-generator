@@ -95,8 +95,37 @@ const isDirty = computed(() => {
 
 const styleOptions = computed(() => [
   { label: 'Default (No Reference)', value: 'default' },
+  ...(project.value?.writingStyleSnapshot?.id
+    && project.value.writingStyleSnapshot.id !== 'default'
+    && !writingStyleStore.styles.some(style => style.id === project.value?.writingStyleSnapshot?.id)
+    ? [{ label: `${project.value.writingStyleSnapshot.name || 'Project Writing Style'} (Project)`, value: project.value.writingStyleSnapshot.id }]
+    : []),
   ...writingStyleStore.styles.map(style => ({ label: style.name, value: style.id })),
 ])
+
+function resolveProjectWritingStyle(styleId: string) {
+  const globalContent = writingStyleStore.resolveStyleContent(styleId)
+  if (globalContent) return globalContent
+  return project.value?.writingStyleSnapshot?.id === styleId ? project.value.writingStyleSnapshot.content : ''
+}
+
+function buildProjectWritingStyleSnapshot(styleId: string, content: string) {
+  const style = writingStyleStore.getStyleById(styleId)
+  if (style) {
+    return {
+      id: style.id,
+      name: style.name,
+      description: style.description,
+      content: style.content,
+      tags: [...style.tags],
+      capturedAt: new Date().toISOString(),
+    }
+  }
+
+  const snapshot = project.value?.writingStyleSnapshot
+  if (snapshot?.id === styleId && content.trim()) return snapshot
+  return null
+}
 
 function listToText(items?: string[]) {
   return Array.isArray(items) ? items.join('\n') : ''
@@ -174,9 +203,11 @@ async function saveOutlineNow() {
 async function updateWritingStyle(styleId: string) {
   if (!project.value) return
   selectedStyleId.value = styleId
+  const resolvedStyle = resolveProjectWritingStyle(styleId)
   const saved = await projectStore.updateProject(project.value.id, {
     styleId,
-    style: writingStyleStore.resolveStyleContent(styleId),
+    style: resolvedStyle,
+    writingStyleSnapshot: buildProjectWritingStyleSnapshot(styleId, resolvedStyle),
   })
   if (!saved) {
     toast.error('Failed to save writing style')
@@ -610,12 +641,13 @@ const chapterOutlineText = computed(() => {
 
 const selectedWritingStyleForVibe = computed(() => {
   const styleId = selectedStyleId.value || project.value?.styleId || 'default'
-  const content = writingStyleStore.resolveStyleContent(styleId).trim()
+  const content = resolveProjectWritingStyle(styleId).trim()
   if (!content) return ''
   const style = writingStyleStore.getStyleById(styleId)
+  const snapshot = project.value?.writingStyleSnapshot?.id === styleId ? project.value.writingStyleSnapshot : null
   return [
-    style?.name ? `Style Name: ${style.name}` : '',
-    style?.description ? `Style Description: ${style.description}` : '',
+    style?.name || snapshot?.name ? `Style Name: ${style?.name || snapshot?.name}` : '',
+    style?.description || snapshot?.description ? `Style Description: ${style?.description || snapshot?.description}` : '',
     `Style Guide:\n${content}`,
   ].filter(Boolean).join('\n\n')
 })

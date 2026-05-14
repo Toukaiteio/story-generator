@@ -21,11 +21,15 @@ export function buildProjectFileName(project: Pick<StoryProject, 'name'>) {
 }
 
 export function serializeProjectFile(project: StoryProject) {
+  const portableProject: StoryProject = {
+    ...project,
+    directoryPath: '',
+  }
   const payload: StoryProjectFileV1 = {
     type: PROJECT_FILE_TYPE,
     version: PROJECT_FILE_VERSION,
     exportedAt: new Date().toISOString(),
-    project,
+    project: portableProject,
   }
 
   return JSON.stringify(payload, null, 2)

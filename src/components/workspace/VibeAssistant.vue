@@ -9,9 +9,9 @@ import { loadVibeConversation, saveVibeConversation, type StoredVibeChatMessage 
 import ToolCallStatus, { type ToolCallStatusItem } from '@/components/ui/ToolCallStatus.vue'
 import TodoListStatus from '@/components/ui/TodoListStatus.vue'
 import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
-import type { AgentTodoItem } from '@/services/agent/todolist'
+import { agentTodoListState, type AgentTodoItem } from '@/services/agent/todolist'
 import type { ChapterOutline } from '@/types/chapter'
-import { AlertTriangle, ArrowUp, LoaderCircle, Square, Sparkles, RotateCcw, User, Check, Copy, Wand2, ChevronDown, Brain } from 'lucide-vue-next'
+import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, RotateCcw, User, Check, Copy, Wand2, ChevronDown, Brain } from 'lucide-vue-next'
 
 interface ChatMessage {
   id: string
@@ -33,7 +33,10 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   apply: [content: string]
   applyOutline: [payload: { title: string; outline: ChapterOutline }]
+  applyPlanningOutline: [payload: { outline: string }]
+  applyPlanningCharacters: [payload: { characters: any[] }]
   rewind: [snapshot: unknown]
+  loadingChange: [loading: boolean]
   close: []
 }>()
 
@@ -45,6 +48,7 @@ const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const isLoading = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
+const generationStreamContainer = ref<HTMLElement | null>(null)
 const inputTextarea = ref<HTMLTextAreaElement | null>(null)
 const autoApplyEdits = ref(true)
 const toolStatuses = ref<ToolCallStatusItem[]>([])
@@ -94,8 +98,9 @@ const shouldShowQuickActions = computed(() =>
 )
 
 const stagePrompts: Record<string, string> = {
-  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. Provide creative suggestions, identify plot holes, and help develop compelling narratives.',
+  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. Provide creative suggestions, identify plot holes, and help develop compelling narratives. Relationship query tools are not available in this stage, so rely on the current outline and characters only.',
   'chapter-outline': 'You are a chapter planning assistant. Help the user structure their chapters effectively. Suggest improvements to chapter flow, pacing, and story beats.',
+  'chapter-outline-review': 'You are a chapter plan review assistant. This optional stage is scaffolded only; provide high-level review notes without mutating chapter data unless the user explicitly asks for an edit.',
   writing: 'You are a writing assistant. Help the user improve their prose, suggest better word choices, enhance descriptions, and maintain consistent voice and style.',
   proofreading: 'You are a proofreading assistant. Help the user identify and fix grammar errors, inconsistencies, plot holes, and continuity issues.',
   polishing: 'You are a polishing assistant. Help the user enhance their prose quality, improve sentence rhythm, strengthen emotional resonance, and elevate the overall writing.',
@@ -105,6 +110,7 @@ const stagePrompts: Record<string, string> = {
 const stageLabels: Record<string, string> = {
   planning: 'Story Architect',
   'chapter-outline': 'Structure Designer',
+  'chapter-outline-review': 'Plan Reviewer',
   writing: 'Prose Draftsman',
   proofreading: 'Continuity Editor',
   polishing: 'Style Polisher',
@@ -127,6 +133,28 @@ const outlineQuickActions = [
 
 const activeQuickActions = computed(() =>
   props.mode === 'outline-agent' ? outlineQuickActions : quickActions
+)
+
+const globalGenerationStageLabel = computed(() => {
+  const labels: Record<string, string> = {
+    planning: 'Planning Story',
+    'chapter-outline': 'Planning Chapters',
+    'chapter-outline-review': 'Reviewing Chapter Plan',
+    writing: 'Writing Chapter',
+    proofreading: 'Proofreading',
+    polishing: 'Polishing',
+  }
+  return labels[genStore.currentStage] ?? 'Processing'
+})
+
+const globalGenerationProgressText = computed(() => {
+  if (!genStore.isGenerating) return ''
+  if (genStore.progressMessage) return genStore.progressMessage
+  return genStore.streamContent ? 'Generating...' : 'Starting...'
+})
+
+const showGlobalGenerationPanel = computed(() =>
+  genStore.isGenerating || Boolean(genStore.streamContent) || agentTodoListState.value.items.length > 0
 )
 
 function greetingContent() {
@@ -410,13 +438,42 @@ function buildChapterContentContext(content: string | undefined, mode: string): 
   ].join('\n')
 }
 
+function formatListContext(label: string, value: unknown) {
+  if (!Array.isArray(value) || !value.length) return ''
+  return `${label}:\n${value.map(item => `- ${String(item)}`).join('\n')}`
+}
+
+function buildProjectConfigContext(config: any): string {
+  if (!config || typeof config !== 'object') return ''
+  return [
+    'Story Configuration:',
+    config.name ? `Project Name: ${config.name}` : '',
+    config.theme ? `Theme: ${config.theme}` : '',
+    config.genre ? `Genre: ${config.genre}` : '',
+    config.targetReader ? `Target Reader: ${config.targetReader}` : '',
+    config.language ? `Primary Language: ${config.language}` : '',
+    config.writingFormat ? `Writing Format: ${config.writingFormat}` : '',
+    config.writingStyleName || config.writingStyleId ? `Writing Style: ${config.writingStyleName || config.writingStyleId}` : '',
+    config.chapterCount ? `Configured Chapters: ${config.chapterCount}` : '',
+    config.maxChapters ? `Max Chapters: ${config.maxChapters}` : '',
+    config.length ? `Story Length: ${config.length}` : '',
+    formatListContext('Required Elements', config.requiredElements),
+    formatListContext('Forbidden Elements', config.forbiddenElements),
+    config.customRequirements ? `Custom Requirements:\n${config.customRequirements}` : '',
+    config.summary ? `Current Summary:\n${config.summary}` : '',
+  ].filter(Boolean).join('\n')
+}
+
 function buildContextPrompt(): string {
   const ctx = props.context || {}
   const parts: string[] = []
+  const projectConfig = buildProjectConfigContext(ctx.projectConfig)
+  if (projectConfig) parts.push(projectConfig)
   if (ctx.outline) parts.push(`Outline:\n${ctx.outline}`)
   if (ctx.writingStyle) {
     parts.push(`Writing Style Guide (higher priority than Content Format):\n${ctx.writingStyle}`)
   }
+  if (ctx.characters) parts.push(`Characters:\n${ctx.characters}`)
   if (ctx.chapter) {
     if (props.mode === 'outline-agent') {
       parts.push([
@@ -502,6 +559,7 @@ async function sendMessage() {
   removeInitialGreeting()
   addMessage('user', userMessage, '', workspaceSnapshot ?? undefined)
   isLoading.value = true
+  emit('loadingChange', true)
   toolStatuses.value = []
   todoItems.value = []
   currentReasoning.value = ''
@@ -589,10 +647,30 @@ async function sendMessage() {
         onToken: token => {
           if (!cancelledRequestIds.has(requestId)) appendMessageContent(assistantMessageId, token)
         },
+        onReasoningToken: token => {
+          if (cancelledRequestIds.has(requestId)) return
+          currentReasoning.value += token
+          updateMessage(assistantMessageId, { reasoning: currentReasoning.value })
+        },
+        onToolStatus: updateToolStatus,
+        onTodoList: state => {
+          if (cancelledRequestIds.has(requestId)) return
+          todoItems.value = state.items
+          scheduleChatSave()
+        },
+        onPlanningResult: result => {
+          if (cancelledRequestIds.has(requestId)) return
+          if (typeof result.outline === 'string') {
+            emit('applyPlanningOutline', { outline: result.outline })
+          }
+          if (Array.isArray(result.characters)) {
+            emit('applyPlanningCharacters', { characters: result.characters })
+          }
+        },
         signal: abortController.signal,
       })
       if (cancelledRequestIds.has(requestId)) return
-      updateMessage(assistantMessageId, { content: response })
+      updateMessage(assistantMessageId, { content: response, reasoning: currentReasoning.value })
     }
   } catch (error: any) {
     if (cancelledRequestIds.has(requestId) || abortController.signal.aborted || error?.name === 'AbortError') return
@@ -601,6 +679,7 @@ async function sendMessage() {
   } finally {
     if (activeRequestId === requestId) {
       isLoading.value = false
+      emit('loadingChange', false)
       streamingAssistantId.value = ''
       if (currentAbortController === abortController) currentAbortController = null
     }
@@ -618,6 +697,7 @@ function cancelCurrentResponse() {
     activeMessage.content = 'Response interrupted before any visible content was generated.'
   }
   isLoading.value = false
+  emit('loadingChange', false)
   streamingAssistantId.value = ''
   currentReasoning.value = ''
   toolStatuses.value = toolStatuses.value.map(item =>
@@ -766,6 +846,13 @@ watch(selectedModelValue, value => {
   if (value !== ui.vibeModelRef) ui.setVibeModelRef(value)
 })
 
+watch(() => genStore.streamContent, async () => {
+  await nextTick()
+  if (generationStreamContainer.value) {
+    generationStreamContainer.value.scrollTop = generationStreamContainer.value.scrollHeight
+  }
+})
+
 function runQuickAction(action: string) {
   inputText.value = action
   void sendMessage()
@@ -817,6 +904,7 @@ function systemMessageTone(message: ChatMessage) {
 
 defineExpose({
   submitRequest,
+  cancelCurrentResponse,
 })
 </script>
 
@@ -871,6 +959,41 @@ defineExpose({
       v-model="selectedModelValue"
       role="editingAI"
     />
+
+    <div
+      v-if="showGlobalGenerationPanel"
+      class="shrink-0 border-b border-surface-4 bg-surface-1 px-3 py-3 space-y-3"
+    >
+      <div
+        v-if="genStore.isGenerating || genStore.streamContent"
+        class="overflow-hidden rounded-lg border border-surface-4 bg-surface-2/80"
+      >
+        <div class="flex items-center justify-between gap-2 border-b border-surface-4 px-3 py-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <Loader2 v-if="genStore.isGenerating" :size="12" class="shrink-0 animate-spin text-accent" />
+            <Sparkles v-else :size="12" class="shrink-0 text-accent" />
+            <span class="truncate text-xs font-semibold text-text-primary">{{ tr(globalGenerationStageLabel) }}</span>
+          </div>
+          <span v-if="globalGenerationProgressText" class="truncate text-[10px] text-text-muted">
+            {{ tr(globalGenerationProgressText) }}
+          </span>
+        </div>
+        <div
+          v-if="genStore.streamContent"
+          ref="generationStreamContainer"
+          class="max-h-[160px] overflow-y-auto px-3 py-2 text-xs leading-relaxed text-text-secondary whitespace-pre-wrap custom-scrollbar"
+        >
+          {{ genStore.streamContent }}
+        </div>
+      </div>
+      <TodoListStatus
+        v-if="agentTodoListState.items.length"
+        :items="agentTodoListState.items"
+        :agent="agentTodoListState.agent"
+        title="Agent Todo"
+        compact
+      />
+    </div>
 
     <!-- Minimalist Chat Container -->
     <div
