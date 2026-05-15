@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import VibeAssistant from './VibeAssistant.vue'
 import { translatePhrase } from '@/i18n'
-import { Sparkles, MessageSquare, X } from 'lucide-vue-next'
+import { Sparkles, X } from 'lucide-vue-next'
 
 const props = defineProps<{
   stage: string
@@ -11,7 +11,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  apply: [content: string]
 }>()
 
 const isOpen = ref(false)
@@ -19,10 +18,6 @@ const tr = translatePhrase
 
 function toggle() {
   isOpen.value = !isOpen.value
-}
-
-function handleApply(content: string) {
-  emit('apply', content)
 }
 </script>
 
@@ -46,7 +41,6 @@ function handleApply(content: string) {
         <VibeAssistant
           :stage="stage"
           :context="context"
-          @apply="handleApply"
         />
       </div>
     </Transition>

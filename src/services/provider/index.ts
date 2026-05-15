@@ -1,12 +1,21 @@
 import type { ChatMessage, ProviderConfig } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
-import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, FunctionCallingCallbacks, StreamWithToolsCallbacks, ToolCallOptions } from './types'
+import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall, ToolResult } from './tools'
 import { OpenAIAdapter } from './openai'
 import { OpenAIResponsesAdapter } from './openaiResponses'
 import { AnthropicAdapter } from './anthropic'
 import { GoogleAdapter } from './google'
 import { buildContinueMessages, createParagraphGuard, guardResponseText } from './responseGuard'
+import { applyDsmlCompatToFunctionResponse } from './dsmlCompat'
+import { calculateBudget, estimateMessageTokens, estimateMessagesTokens, fitMessagesToContextSmart } from '@/services/context'
+
+type ToolChoiceCompatState = {
+  canFallback: boolean
+  active: boolean
+  instruction: string | null
+  downgradedOptions?: ToolCallOptions
+}
 
 const adapters: Record<string, ProviderAdapter> = {
   openai: new OpenAIAdapter(),
@@ -19,6 +28,11 @@ export class ProviderManager {
   private providers: ProviderConfig[] = []
   private maxRetries = 3
   private maxGuardContinuations = 2
+  private compressionThreshold = 0.6
+  private compressionPreserveRecentGroups = 6
+  private unknownContextCompressionTriggerTokens = 200000
+  private unknownContextVirtualWindowTokens = 220000
+  private unknownContextForcedInputLimitTokens = 190000
 
   setProviders(providers: ProviderConfig[]) {
     this.providers = providers
@@ -49,6 +63,127 @@ export class ProviderManager {
     return { provider, adapter: this.getAdapter(provider.type), model }
   }
 
+  private buildToolChoiceCompatState(toolOptions?: ToolCallOptions): ToolChoiceCompatState {
+    const toolChoice = toolOptions?.toolChoice
+    if (!toolChoice || typeof toolChoice !== 'object') {
+      return {
+        canFallback: false,
+        active: false,
+        instruction: null,
+        downgradedOptions: toolOptions,
+      }
+    }
+
+    const targetToolName = toolChoice.function?.name?.trim()
+    const instruction = targetToolName
+      ? `Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. You must call the function tool "${targetToolName}" as the next action and place the final structured result in that tool call arguments.`
+      : 'Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. Prefer function calling and complete the response via an appropriate tool call when possible.'
+
+    return {
+      canFallback: true,
+      active: false,
+      instruction,
+      downgradedOptions: { ...(toolOptions ?? {}), toolChoice: 'auto' },
+    }
+  }
+
+  private isToolChoiceThinkingModeCompatibilityError(error: unknown): boolean {
+    const message = String((error as any)?.message ?? error ?? '').toLowerCase()
+    if (!message.includes('tool_choice')) return false
+    if (message.includes('thinking mode') && (message.includes('required') || message.includes('object'))) return true
+    if (message.includes('does not support being set to required or object')) return true
+    if (message.includes('invalidparameter') && message.includes('tool_choice')) return true
+    return false
+  }
+
+  private withToolChoiceCompatInstruction(messages: ChatMessage[], instruction: string | null): ChatMessage[] {
+    if (!instruction) return messages
+    const marker = 'Tool-choice compatibility fallback is active.'
+    const firstSystemIndex = messages.findIndex(message => message.role === 'system')
+    if (firstSystemIndex >= 0) {
+      const target = messages[firstSystemIndex]
+      const currentContent = target.content ?? ''
+      if (currentContent.includes(marker)) return messages
+      const next = [...messages]
+      next[firstSystemIndex] = {
+        ...target,
+        content: currentContent ? `${currentContent}\n\n${instruction}` : instruction,
+      }
+      return next
+    }
+    return [{ role: 'system', content: instruction }, ...messages]
+  }
+
+  private fitMessagesToModelContext(
+    messages: ChatMessage[],
+    contextTokens: number | null | undefined,
+    maxOutputTokens: number
+  ): ChatMessage[] {
+    const hasConfiguredContext = !!(contextTokens && contextTokens > 0)
+    let effectiveContextTokens = contextTokens ?? null
+    if (!hasConfiguredContext) {
+      const totalTokens = estimateMessagesTokens(messages)
+      if (totalTokens < this.unknownContextCompressionTriggerTokens) {
+        return messages
+      }
+      effectiveContextTokens = Math.max(
+        this.unknownContextVirtualWindowTokens,
+        Math.ceil(totalTokens * 1.05)
+      )
+    }
+
+    if (!effectiveContextTokens || effectiveContextTokens <= 0) return messages
+    const { messages: fitted } = fitMessagesToContextSmart(
+      messages,
+      effectiveContextTokens,
+      maxOutputTokens,
+      {
+        threshold: this.compressionThreshold,
+        preserveRecentGroups: this.compressionPreserveRecentGroups,
+      }
+    )
+    const budget = calculateBudget(effectiveContextTokens, maxOutputTokens)
+    const maxInputTokens = hasConfiguredContext
+      ? budget.available
+      : Math.min(budget.available, this.unknownContextForcedInputLimitTokens)
+    const fittedTokens = estimateMessagesTokens(fitted)
+    if (fittedTokens <= maxInputTokens) return fitted
+
+    const longestUserIndex = fitted
+      .map((message, index) => ({ index, tokens: message.role === 'user' ? estimateMessageTokens(message) : -1 }))
+      .sort((a, b) => b.tokens - a.tokens)[0]?.index
+
+    if (longestUserIndex == null || longestUserIndex < 0) return fitted
+    const target = fitted[longestUserIndex]
+    const source = String(target.content || '')
+    if (!source.trim()) return fitted
+
+    const otherTokens = fittedTokens - estimateMessageTokens(target)
+    const maxContentTokens = Math.max(80, maxInputTokens - otherTokens - 12)
+    const notice = hasConfiguredContext
+      ? '\n\n[Context truncated to fit model token window.]'
+      : '\n\n[Context truncated by fallback high-token safeguard.]'
+    let low = 0
+    let high = source.length
+    let best = ''
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2)
+      const candidate = `${source.slice(0, mid).trimEnd()}${notice}`
+      const candidateMsg: ChatMessage = { ...target, content: candidate }
+      if (estimateMessageTokens(candidateMsg) <= maxContentTokens) {
+        best = candidate
+        low = mid + 1
+      } else {
+        high = mid - 1
+      }
+    }
+
+    if (!best) return fitted
+    const next = [...fitted]
+    next[longestUserIndex] = { ...target, content: best }
+    return next
+  }
+
   getProviderConfigForModel(modelRef: ProviderModelRef): ProviderConfig | null {
     return this.getProviderForModel(modelRef)?.provider ?? null
   }
@@ -75,19 +210,20 @@ export class ProviderManager {
     let lastError: Error | null = null
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        let currentMessages = messages
+        let currentMessages = this.fitMessagesToModelContext(messages, match.model.contextTokens, maxTokens)
         let collected = ''
         for (let continuation = 0; continuation <= this.maxGuardContinuations; continuation++) {
+          currentMessages = this.fitMessagesToModelContext(currentMessages, match.model.contextTokens, maxTokens)
           const raw = await match.adapter.chat(currentMessages, options)
           const guarded = guardResponseText(raw)
           collected = collected ? `${collected}\n\n${guarded.text}` : guarded.text
           if (!guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
             return collected
           }
-          currentMessages = [
+          currentMessages = this.fitMessagesToModelContext([
             ...currentMessages,
             { role: 'user', content: 'Continue.' },
-          ]
+          ], match.model.contextTokens, maxTokens)
         }
         return collected
       } catch (e: any) {
@@ -116,12 +252,42 @@ export class ProviderManager {
     }
 
     let lastError: Error | null = null
+    const toolChoiceCompat = this.buildToolChoiceCompatState(toolOptions)
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        let currentMessages = messages
+        let currentMessages = this.fitMessagesToModelContext(messages, match.model.contextTokens, maxTokens)
         let combinedContent = ''
         for (let continuation = 0; continuation <= this.maxGuardContinuations; continuation++) {
-          const response = await match.adapter.chatWithTools(currentMessages, options, tools, toolOptions)
+          currentMessages = this.fitMessagesToModelContext(currentMessages, match.model.contextTokens, maxTokens)
+          let requestMessages = toolChoiceCompat.active
+            ? this.withToolChoiceCompatInstruction(currentMessages, toolChoiceCompat.instruction)
+            : currentMessages
+          let requestToolOptions = toolChoiceCompat.active
+            ? toolChoiceCompat.downgradedOptions
+            : toolOptions
+
+          let rawResponse: FunctionCallingResponse
+          try {
+            rawResponse = await match.adapter.chatWithTools(requestMessages, options, tools, requestToolOptions)
+          } catch (error) {
+            if (
+              !toolChoiceCompat.active &&
+              toolChoiceCompat.canFallback &&
+              this.isToolChoiceThinkingModeCompatibilityError(error)
+            ) {
+              console.warn('[ProviderManager] tool_choice compatibility fallback activated (chatWithTools)', {
+                providerType: match.provider.type,
+                model: match.model.id,
+              })
+              toolChoiceCompat.active = true
+              requestMessages = this.withToolChoiceCompatInstruction(currentMessages, toolChoiceCompat.instruction)
+              requestToolOptions = toolChoiceCompat.downgradedOptions
+              rawResponse = await match.adapter.chatWithTools(requestMessages, options, tools, requestToolOptions)
+            } else {
+              throw error
+            }
+          }
+          const response = applyDsmlCompatToFunctionResponse(rawResponse)
           const guarded = guardResponseText(response.content)
           response.content = guarded.text || null
           combinedContent = combinedContent
@@ -133,7 +299,11 @@ export class ProviderManager {
             response.content = combinedContent || response.content
             return response
           }
-          currentMessages = buildContinueMessages(currentMessages, guarded.text, response.reasoning_content)
+          currentMessages = this.fitMessagesToModelContext(
+            buildContinueMessages(currentMessages, guarded.text, response.reasoning_content),
+            match.model.contextTokens,
+            maxTokens
+          )
         }
         return { content: combinedContent || null, tool_calls: [], finish_reason: 'stop' }
       } catch (e: any) {
@@ -172,9 +342,10 @@ export class ProviderManager {
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
         const runStream = async (streamMessages: ChatMessage[], continuation: number, aggregateText = ''): Promise<string> => {
+          const fittedStreamMessages = this.fitMessagesToModelContext(streamMessages, match.model.contextTokens, maxTokens)
           const paragraphGuard = createParagraphGuard(token => callbacks.onToken(token))
           let reasoningContent = ''
-          await match.adapter.stream(streamMessages, options, {
+          await match.adapter.stream(fittedStreamMessages, options, {
             ...callbacks,
             onToken: token => {
               paragraphGuard.push(token)
@@ -194,7 +365,15 @@ export class ProviderManager {
           if (!guarded.detectedRefusal || continuation >= this.maxGuardContinuations) {
             return nextAggregate
           }
-          return runStream(buildContinueMessages(streamMessages, guarded.text, reasoningContent), continuation + 1, nextAggregate)
+          return runStream(
+            this.fitMessagesToModelContext(
+              buildContinueMessages(fittedStreamMessages, guarded.text, reasoningContent),
+              match.model.contextTokens,
+              maxTokens
+            ),
+            continuation + 1,
+            nextAggregate
+          )
         }
 
         const finalText = await runStream(messages, 0)
@@ -234,7 +413,14 @@ export class ProviderManager {
       signal,
     }
 
+    const streamedToolCallKeys = new Set<string>()
+    const toolCallKey = (toolCall: { id?: string | null; name?: string | null }) =>
+      toolCall.id?.trim()
+        ? `id:${toolCall.id.trim()}`
+        : `name:${String(toolCall.name || '').trim()}`
+
     let lastError: Error | null = null
+    const toolChoiceCompat = this.buildToolChoiceCompatState(toolOptions)
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
         const runStreamWithTools = async (
@@ -242,17 +428,62 @@ export class ProviderManager {
           continuation: number,
           aggregateText = ''
         ): Promise<FunctionCallingResponse> => {
+          const fittedStreamMessages = this.fitMessagesToModelContext(streamMessages, match.model.contextTokens, maxTokens)
+          let requestMessages = toolChoiceCompat.active
+            ? this.withToolChoiceCompatInstruction(fittedStreamMessages, toolChoiceCompat.instruction)
+            : fittedStreamMessages
+          let requestToolOptions = toolChoiceCompat.active
+            ? toolChoiceCompat.downgradedOptions
+            : toolOptions
           const paragraphGuard = createParagraphGuard(token => callbacks.onToken(token))
           let completedResponse: FunctionCallingResponse | null = null
-          await match.adapter.streamWithTools(streamMessages, options, tools, {
-            ...callbacks,
-            onToken: token => {
-              paragraphGuard.push(token)
-            },
-            onComplete: response => {
-              completedResponse = response
-            },
-          }, toolOptions)
+          let streamError: Error | null = null
+
+          const executeOnce = async () => {
+            streamError = null
+            await match.adapter.streamWithTools(requestMessages, options, tools, {
+              ...callbacks,
+              onToolCall: toolCall => {
+                const key = toolCallKey(toolCall)
+                if (key !== 'name:') {
+                  streamedToolCallKeys.add(key)
+                }
+                callbacks.onToolCall(toolCall)
+              },
+              onToken: token => {
+                paragraphGuard.push(token)
+              },
+              onComplete: response => {
+                completedResponse = response
+              },
+              onError: error => {
+                streamError = error
+              },
+            }, requestToolOptions)
+            if (streamError) throw streamError
+          }
+
+          try {
+            await executeOnce()
+          } catch (error) {
+            if (
+              !toolChoiceCompat.active &&
+              toolChoiceCompat.canFallback &&
+              this.isToolChoiceThinkingModeCompatibilityError(error)
+            ) {
+              console.warn('[ProviderManager] tool_choice compatibility fallback activated (streamWithTools)', {
+                providerType: match.provider.type,
+                model: match.model.id,
+              })
+              toolChoiceCompat.active = true
+              requestMessages = this.withToolChoiceCompatInstruction(fittedStreamMessages, toolChoiceCompat.instruction)
+              requestToolOptions = toolChoiceCompat.downgradedOptions
+              completedResponse = null
+              await executeOnce()
+            } else {
+              throw error
+            }
+          }
 
           const response = completedResponse as FunctionCallingResponse | null
           if (!response) {
@@ -272,13 +503,27 @@ export class ProviderManager {
           }
 
           return runStreamWithTools(
-            buildContinueMessages(streamMessages, guarded.text, response.reasoning_content),
+            this.fitMessagesToModelContext(
+              buildContinueMessages(fittedStreamMessages, guarded.text, response.reasoning_content),
+              match.model.contextTokens,
+              maxTokens
+            ),
             continuation + 1,
             nextAggregate
           )
         }
 
-        const finalResponse = await runStreamWithTools(messages, 0)
+        const finalResponse = applyDsmlCompatToFunctionResponse(await runStreamWithTools(messages, 0))
+        for (const toolCall of finalResponse.tool_calls) {
+          const key = toolCallKey(toolCall)
+          if (key !== 'name:' && streamedToolCallKeys.has(key)) {
+            continue
+          }
+          callbacks.onToolCall(toolCall)
+          if (key !== 'name:') {
+            streamedToolCallKeys.add(key)
+          }
+        }
         callbacks.onComplete(finalResponse)
         return
       } catch (e: any) {

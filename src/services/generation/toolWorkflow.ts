@@ -70,7 +70,7 @@ export async function chatWithRelationshipToolsInPlace(
       currentMessages,
       options.contextTokens,
       options.maxTokens ?? 4096,
-      { threshold: 0.85, preserveRecentGroups: 4 }
+      { threshold: 0.6, preserveRecentGroups: 4 }
     ).messages
 
     const response = await providerManager.chatWithTools(

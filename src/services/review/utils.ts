@@ -7,6 +7,7 @@ import type {
   ReviewContextElement,
   ReviewProposal,
   ReviewAskUserRequest,
+  ReviewChangeAction,
   ReviewChangeRequest,
   ReviewChangeAmendment,
   ReviewChangeVoteSession,
@@ -129,7 +130,7 @@ function normalizeJsonStyleChangeRequest(parsed: any): ReviewChangeRequest | nul
     : null
   if (!target) return null
 
-  const action = typeof parsed?.action === 'string' && parsed.action.trim() ? parsed.action.trim() : 'update'
+  const action = normalizeChangeAction(parsed?.action)
   const data = parsed?.data ?? parsed?.content
   const scope = typeof parsed?.scope === 'string' && parsed.scope.trim()
     ? parsed.scope.trim()
@@ -140,7 +141,15 @@ function normalizeJsonStyleChangeRequest(parsed: any): ReviewChangeRequest | nul
   const content = typeof data === 'string' ? data : JSON.stringify(data ?? parsed, null, 2)
   if (!content.trim()) return null
 
-  return { target, scope, purpose, content }
+  return { target, action, scope, purpose, content }
+}
+
+export function normalizeChangeAction(value: unknown): ReviewChangeAction {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (normalized === 'create' || normalized === 'read' || normalized === 'update' || normalized === 'delete') {
+    return normalized
+  }
+  return 'update'
 }
 
 export function normalizeChapterOutlinePatch(chapter: Chapter, request: ReviewChangeRequest): Chapter['outline'] {
@@ -265,16 +274,17 @@ export function extractChangeRequests(content: string): ReviewChangeRequest[] {
     }
 
   const readField = (name: string) => {
-    const pattern = new RegExp(`^${name}\\s*:\\s*([\\s\\S]*?)(?=^(?:target|scope|purpose|content)\\s*:|$)`, 'im')
+    const pattern = new RegExp(`^${name}\\s*:\\s*([\\s\\S]*?)(?=^(?:action|target|scope|purpose|content)\\s*:|$)`, 'im')
     return block.match(pattern)?.[1]?.trim() || ''
   }
+  const action = normalizeChangeAction(readField('action'))
   const targetRaw = readField('target')
   const target: ReviewChangeTarget | null = targetRaw === 'master-outline' || targetRaw === 'chapter-plan' || targetRaw === 'characters' || targetRaw === 'consensus' ? targetRaw : null
   const scope = readField('scope')
   const purpose = readField('purpose')
   const changeContent = readField('content')
     if (!target || !scope || !purpose || !changeContent) continue
-    requests.push({ target, scope, purpose, content: changeContent })
+    requests.push({ target, action, scope, purpose, content: changeContent })
   }
 
   return requests

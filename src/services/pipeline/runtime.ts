@@ -90,7 +90,12 @@ export async function buildKnowledgeContextForProject(
   const query = buildKnowledgeQuery(queryInput)
   if (!query.trim()) return ''
 
-  return buildKnowledgeContextAsync(bases, query, maxTokens)
+  const dynamicBudget = Math.max(
+    maxTokens,
+    Math.min(8000, 2200 + Math.max(0, bases.length - 1) * 900)
+  )
+
+  return buildKnowledgeContextAsync(bases, query, dynamicBudget)
 }
 
 export function prepareProviderRuntime() {

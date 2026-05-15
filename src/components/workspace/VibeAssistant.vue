@@ -5,21 +5,43 @@ import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
 import { translatePhrase } from '@/i18n'
 import { decodeProviderModelRef } from '@/services/provider/catalog'
-import { loadVibeConversation, saveVibeConversation, type StoredVibeChatMessage } from '@/services/vibeChatStorage'
+import {
+  loadVibeConversation,
+  saveVibeConversation,
+  listVibeConversationHistory,
+  createVibeConversationHistoryEntry,
+  ensureVibeConversationHistory,
+  updateVibeConversationHistoryEntry,
+  removeVibeConversationHistoryEntry,
+  type StoredVibeChatMessage,
+  type StoredVibeChatMessageBlock,
+  type VibeConversationHistoryEntry,
+} from '@/services/vibeChatStorage'
 import ToolCallStatus, { type ToolCallStatusItem } from '@/components/ui/ToolCallStatus.vue'
 import TodoListStatus from '@/components/ui/TodoListStatus.vue'
 import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
-import { agentTodoListState, type AgentTodoItem } from '@/services/agent/todolist'
+import { agentTodoListState, clearAgentTodoList, type AgentTodoItem } from '@/services/agent/todolist'
 import type { ChapterOutline } from '@/types/chapter'
-import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, RotateCcw, User, Check, Copy, Wand2, ChevronDown, Brain } from 'lucide-vue-next'
+import { markdownToHtml } from '@/services/markdown'
+import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, RotateCcw, User, Copy, Wand2, ChevronDown, Brain, History, Plus, Trash2 } from 'lucide-vue-next'
+
+interface ChatMessageBlock {
+  id: StoredVibeChatMessageBlock['id']
+  type: StoredVibeChatMessageBlock['type']
+  text: StoredVibeChatMessageBlock['text']
+  toolId: StoredVibeChatMessageBlock['toolId']
+}
 
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   reasoning?: string
+  toolStatuses?: ToolCallStatusItem[]
   workspaceSnapshot?: unknown
   timestamp: Date
+  generationDurationMs?: number
+  workBlocks?: ChatMessageBlock[]
 }
 
 const props = withDefaults(defineProps<{
@@ -54,21 +76,47 @@ const autoApplyEdits = ref(true)
 const toolStatuses = ref<ToolCallStatusItem[]>([])
 const todoItems = ref<AgentTodoItem[]>([])
 const expandedMessageIds = ref<Set<string>>(new Set())
-const reasoningExpanded = ref(false)
+const expandedReasoningMessageIds = ref<Set<string>>(new Set())
+const manuallyExpandedToolMessageIds = ref<Set<string>>(new Set())
 const currentReasoning = ref('')
 const streamingAssistantId = ref('')
 const showResetConfirm = ref(false)
+const showRewindConfirm = ref(false)
+const pendingRewindMessageId = ref('')
+const showHistoryMenu = ref(false)
+const conversationHistory = ref<VibeConversationHistoryEntry[]>([])
+const activeConversationId = ref('')
 const selectedModelValue = ref('')
+
+const generationStartTime = ref<number>(0)
+const generationElapsedMs = ref<number>(0)
+let timerInterval: ReturnType<typeof setInterval> | null = null
+
+function startTimer() {
+  generationStartTime.value = Date.now()
+  generationElapsedMs.value = 0
+  if (timerInterval) clearInterval(timerInterval)
+  timerInterval = setInterval(() => {
+    generationElapsedMs.value = Date.now() - generationStartTime.value
+  }, 100)
+}
+
+function stopTimer() {
+  if (timerInterval) clearInterval(timerInterval)
+  timerInterval = null
+}
+
 let chatSaveTimer: ReturnType<typeof setTimeout> | null = null
 let isLoadingConversation = false
 let pendingChatSave: (() => Promise<boolean>) | null = null
 let conversationLoadRun = 0
 let conversationLoadPromise: Promise<void> = Promise.resolve()
-let activeConversationScope: { projectId: string; directoryPath?: string; key: string } | null = null
+let activeConversationScope: { projectId: string; directoryPath?: string; scopeKey: string; storageKey: string; conversationId: string } | null = null
 const conversationMemoryCache = new Map<string, { messages: StoredVibeChatMessage[]; toolStatuses: ToolCallStatusItem[]; todoItems: AgentTodoItem[] }>()
 let activeRequestId = 0
 let currentAbortController: AbortController | null = null
 const cancelledRequestIds = new Set<number>()
+type ToolStatusUpdate = Omit<ToolCallStatusItem, 'id'> & { callId?: string }
 
 function tr(value: string) {
   return translatePhrase(value)
@@ -78,11 +126,24 @@ const selectedModelRef = computed(() => decodeProviderModelRef(selectedModelValu
 
 const projectId = computed(() => String(props.context?.projectId ?? 'local'))
 const projectDirectoryPath = computed(() => typeof props.context?.directoryPath === 'string' ? props.context.directoryPath : undefined)
-const conversationKey = computed(() => {
+const conversationScopeKey = computed(() => {
   const chapterId = typeof props.context?.chapter?.id === 'string' && props.context.chapter.id.trim()
     ? props.context.chapter.id.trim()
     : 'global'
   return `${props.stage}.${props.mode}.${chapterId}`
+})
+const scopeCategory = computed(() => props.stage || 'planning')
+const scopeEvent = computed(() => props.mode || 'assistant')
+
+const activeConversation = computed(() =>
+  conversationHistory.value.find(item => item.id === activeConversationId.value) ?? null
+)
+
+const activeConversationLabel = computed(() => {
+  const entry = activeConversation.value
+  if (!entry) return tr('Current')
+  if (entry.topic) return entry.topic
+  return new Date(entry.updatedAt).toLocaleString()
 })
 
 const hasConversationContent = computed(() =>
@@ -98,9 +159,9 @@ const shouldShowQuickActions = computed(() =>
 )
 
 const stagePrompts: Record<string, string> = {
-  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. Provide creative suggestions, identify plot holes, and help develop compelling narratives. Relationship query tools are not available in this stage, so rely on the current outline and characters only.',
-  'chapter-outline': 'You are a chapter planning assistant. Help the user structure their chapters effectively. Suggest improvements to chapter flow, pacing, and story beats.',
-  'chapter-outline-review': 'You are a chapter plan review assistant. This optional stage is scaffolded only; provide high-level review notes without mutating chapter data unless the user explicitly asks for an edit.',
+  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. In this stage, "story outline" means the master outline for the whole story (global narrative arc), not per-chapter outlines. Do not convert the request into chapter-by-chapter planning unless the user explicitly asks for chapter planning. Provide creative suggestions, identify plot holes, and help develop compelling narratives. Relationship query tools are not available in this stage, so rely on the current outline and characters only. Prefer Function Calling when relevant tools are available.',
+  'chapter-outline': 'You are a chapter planning assistant. Help the user structure their chapters effectively. Suggest improvements to chapter flow, pacing, and story beats. Prefer Function Calling when relevant tools are available.',
+  'chapter-outline-review': 'You are a chapter plan review assistant. This optional stage is scaffolded only; provide high-level review notes without mutating chapter data unless the user explicitly asks for an edit. Prefer Function Calling when relevant tools are available.',
   writing: 'You are a writing assistant. Help the user improve their prose, suggest better word choices, enhance descriptions, and maintain consistent voice and style.',
   proofreading: 'You are a proofreading assistant. Help the user identify and fix grammar errors, inconsistencies, plot holes, and continuity issues.',
   polishing: 'You are a polishing assistant. Help the user enhance their prose quality, improve sentence rhythm, strengthen emotional resonance, and elevate the overall writing.',
@@ -172,6 +233,7 @@ function addMessage(role: 'user' | 'assistant' | 'system', content: string, reas
     role,
     content,
     reasoning,
+    toolStatuses: role === 'assistant' ? [] : undefined,
     workspaceSnapshot,
     timestamp: new Date(),
   }
@@ -186,6 +248,9 @@ function updateMessage(id: string, patch: Partial<Pick<ChatMessage, 'content' | 
   const message = messages.value.find(item => item.id === id)
   if (!message) return
   Object.assign(message, patch)
+  if (typeof patch.content === 'string') {
+    ensureContentBlockFromMessage(message)
+  }
   scheduleChatSave()
   scrollToBottom()
 }
@@ -194,6 +259,9 @@ function appendMessageContent(id: string, token: string) {
   const message = messages.value.find(item => item.id === id)
   if (!message) return
   message.content += token
+  if (message.role === 'assistant') {
+    appendContentBlock(message, token)
+  }
   scheduleChatSave()
   scrollToBottom()
 }
@@ -211,15 +279,22 @@ function serializeMessages(): StoredVibeChatMessage[] {
     role: message.role,
     content: message.content,
     reasoning: message.reasoning,
+    toolStatuses: Array.isArray(message.toolStatuses)
+      ? message.toolStatuses.map(item => ({ ...item }))
+      : undefined,
+    workBlocks: Array.isArray(message.workBlocks)
+      ? message.workBlocks.map(item => ({ ...item }))
+      : undefined,
     workspaceSnapshot: message.workspaceSnapshot,
     timestamp: message.timestamp instanceof Date
       ? message.timestamp.toISOString()
       : new Date(message.timestamp).toISOString(),
+    generationDurationMs: message.generationDurationMs,
   }))
 }
 
-function scopeCacheKey(scope: { projectId: string; key: string }) {
-  return `${scope.projectId}:${scope.key}`
+function scopeCacheKey(scope: { projectId: string; storageKey: string }) {
+  return `${scope.projectId}:${scope.storageKey}`
 }
 
 function cacheCurrentConversation(scope = activeConversationScope) {
@@ -231,15 +306,40 @@ function cacheCurrentConversation(scope = activeConversationScope) {
   })
 }
 
-async function saveConversationScope(scope: { projectId: string; directoryPath?: string; key: string }) {
+function deriveConversationTopicFromMessages(items: StoredVibeChatMessage[]) {
+  const firstUserMessage = items.find(item => item.role === 'user' && item.content.trim())
+  if (!firstUserMessage) return ''
+  return firstUserMessage.content.replace(/\s+/g, ' ').slice(0, 72)
+}
+
+async function saveConversationScope(scope: { projectId: string; directoryPath?: string; scopeKey: string; storageKey: string; conversationId: string }) {
   const cached = conversationMemoryCache.get(scopeCacheKey(scope))
   const messagesToSave = cached?.messages ?? serializeMessages()
   const toolStatusesToSave = cached?.toolStatuses ?? toolStatuses.value.map(item => ({ ...item }))
   const todoItemsToSave = cached?.todoItems ?? todoItems.value.map(item => ({ ...item }))
-  await saveVibeConversation(scope.projectId, scope.directoryPath, scope.key, messagesToSave, {
+  await saveVibeConversation(scope.projectId, scope.directoryPath, scope.storageKey, messagesToSave, {
     toolStatuses: toolStatusesToSave,
     todoItems: todoItemsToSave,
   })
+  const nextTopic = deriveConversationTopicFromMessages(messagesToSave) || activeConversation.value?.topic || ''
+  const updated = await updateVibeConversationHistoryEntry(
+    scope.projectId,
+    scope.directoryPath,
+    scope.scopeKey,
+    scope.conversationId,
+    {
+      topic: nextTopic,
+      messageCount: messagesToSave.length,
+      updatedAt: new Date().toISOString(),
+      category: scopeCategory.value,
+      event: scopeEvent.value,
+    }
+  )
+  if (updated) {
+    conversationHistory.value = conversationHistory.value
+      .map(item => item.id === updated.id ? updated : item)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+  }
 }
 
 async function flushPendingChatSave() {
@@ -270,15 +370,24 @@ function scheduleChatSave() {
   if (chatSaveTimer) clearTimeout(chatSaveTimer)
   const scopedProjectId = projectId.value
   const scopedDirectoryPath = projectDirectoryPath.value
-  const scopedKey = conversationKey.value
+  const scopedScopeKey = conversationScopeKey.value
+  const scopedStorageKey = activeConversationScope?.storageKey || ''
+  const scopedConversationId = activeConversationScope?.conversationId || ''
+  if (!scopedStorageKey || !scopedConversationId) return
   const scopedMessages = serializeMessages()
   const scopedUiState = serializeUiState()
-  conversationMemoryCache.set(scopeCacheKey({ projectId: scopedProjectId, key: scopedKey }), {
+  conversationMemoryCache.set(scopeCacheKey({ projectId: scopedProjectId, storageKey: scopedStorageKey }), {
     messages: scopedMessages,
     toolStatuses: scopedUiState.toolStatuses,
     todoItems: scopedUiState.todoItems,
   })
-  pendingChatSave = () => saveVibeConversation(scopedProjectId, scopedDirectoryPath, scopedKey, scopedMessages, scopedUiState)
+  pendingChatSave = () => saveConversationScope({
+    projectId: scopedProjectId,
+    directoryPath: scopedDirectoryPath,
+    scopeKey: scopedScopeKey,
+    storageKey: scopedStorageKey,
+    conversationId: scopedConversationId,
+  }).then(() => true)
   chatSaveTimer = setTimeout(() => {
     void flushPendingChatSave()
   }, 700)
@@ -342,9 +451,104 @@ function hydrateMessages(rawMessages: StoredVibeChatMessage[] | undefined) {
       role: message.role,
       content: String(message.content ?? ''),
       reasoning: typeof message.reasoning === 'string' ? message.reasoning : '',
+      toolStatuses: Array.isArray((message as any).toolStatuses)
+        ? hydrateToolStatuses((message as any).toolStatuses)
+        : undefined,
+      workBlocks: Array.isArray((message as any).workBlocks)
+        ? (message as any).workBlocks
+          .map((block: any) => ({
+            id: String(block?.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+            type: block?.type === 'reasoning' || block?.type === 'tool' || block?.type === 'content'
+              ? block.type
+              : 'reasoning',
+            text: String(block?.text ?? ''),
+            toolId: String(block?.toolId ?? ''),
+          }))
+        : undefined,
       workspaceSnapshot: message.workspaceSnapshot,
       timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
+      generationDurationMs: typeof (message as any).generationDurationMs === 'number' ? (message as any).generationDurationMs : undefined,
     }))
+}
+
+function ensureAssistantWorkBlocks(message: ChatMessage) {
+  if (message.role !== 'assistant') return []
+  if (!Array.isArray(message.workBlocks)) message.workBlocks = []
+  return message.workBlocks
+}
+
+function appendReasoningBlock(message: ChatMessage, token: string) {
+  if (!token) return
+  const blocks = ensureAssistantWorkBlocks(message)
+  if (blocks.length > 0 && blocks[blocks.length - 1].type === 'reasoning') {
+    blocks[blocks.length - 1].text += token
+    return
+  }
+  blocks.push({ id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'reasoning', text: token, toolId: '' })
+}
+
+function appendContentBlock(message: ChatMessage, token: string) {
+  if (!token) return
+  const blocks = ensureAssistantWorkBlocks(message)
+  if (blocks.length > 0 && blocks[blocks.length - 1].type === 'content') {
+    blocks[blocks.length - 1].text += token
+    return
+  }
+  blocks.push({ id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'content', text: token, toolId: '' })
+}
+
+function ensureContentBlockFromMessage(message: ChatMessage) {
+  if (message.role !== 'assistant') return
+  const content = message.content || ''
+  if (!content.trim()) return
+  const blocks = ensureAssistantWorkBlocks(message)
+  const contentFromBlocks = blocks
+    .filter(block => block.type === 'content')
+    .map(block => block.text)
+    .join('')
+  if (contentFromBlocks === content) return
+  if (!contentFromBlocks) {
+    blocks.push({ id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'content', text: content, toolId: '' })
+    return
+  }
+  if (content.startsWith(contentFromBlocks)) {
+    const delta = content.slice(contentFromBlocks.length)
+    if (delta) appendContentBlock(message, delta)
+    return
+  }
+  blocks.push({ id: `c-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: 'content', text: content, toolId: '' })
+}
+
+function workBlocksBeforeContent(message: ChatMessage) {
+  const blocks = Array.isArray(message.workBlocks) ? message.workBlocks : []
+  const firstContentIndex = blocks.findIndex(block => block.type === 'content')
+  const end = firstContentIndex >= 0 ? firstContentIndex : blocks.length
+  return blocks.slice(0, end).filter(block => block.type !== 'content')
+}
+
+function workBlocksAfterContent(message: ChatMessage) {
+  const blocks = Array.isArray(message.workBlocks) ? message.workBlocks : []
+  const firstContentIndex = blocks.findIndex(block => block.type === 'content')
+  if (firstContentIndex < 0) return []
+  return blocks.slice(firstContentIndex + 1).filter(block => block.type !== 'content')
+}
+
+function attachLegacyToolStatusesToLatestAssistant(legacy: ToolCallStatusItem[]) {
+  if (!legacy.length) return
+  const hasAnyPerMessageToolStatuses = messages.value.some(message =>
+    message.role === 'assistant' &&
+    Array.isArray(message.toolStatuses) &&
+    message.toolStatuses.length > 0
+  )
+  if (hasAnyPerMessageToolStatuses) return
+  for (let index = messages.value.length - 1; index >= 0; index--) {
+    const message = messages.value[index]
+    if (message.role !== 'assistant') continue
+    if (!Array.isArray(message.toolStatuses) || !message.toolStatuses.length) {
+      message.toolStatuses = legacy.map(item => ({ ...item }))
+    }
+    return
+  }
 }
 
 function cloneJsonSafe<T>(value: T): T | null {
@@ -500,9 +704,16 @@ function buildContextPrompt(): string {
 function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: string) {
   const ctx = props.context || {}
   if (props.mode === 'assistant') {
-    return contextPrompt
-      ? `${systemPrompt}\n\nContext:\n${contextPrompt}\n\nUser: ${userMessage}`
-      : `${systemPrompt}\n\nUser: ${userMessage}`
+    return [
+      systemPrompt,
+      'Function Calling priority:',
+      '- Prefer Function Calling whenever relevant tools are available.',
+      '- Do not output tool-eligible structured edits as plain text.',
+      '- Keep assistant prose minimal when a tool can carry the result.',
+      '- When responding or summarizing modifications, use Markdown bullet points for clarity.',
+      contextPrompt ? `Context:\n${contextPrompt}` : '',
+      `User: ${userMessage}`,
+    ].filter(Boolean).join('\n\n')
   }
 
   if (props.mode === 'outline-agent') {
@@ -514,6 +725,7 @@ function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: s
       '- Prefer a localized outline field update when the request targets one field.',
       '- Use a complete outline rewrite only when multiple fields need coordinated changes.',
       '- Do not edit or generate chapter prose.',
+      '- Function Calling first: when an outline tool can perform the requested work, call that tool before explanatory text.',
       '- Do not reply with the revised outline in plain text. Complete the edit by calling the appropriate outline tool only.',
       contextPrompt ? `Context:\n${contextPrompt}` : '',
       `User Request:\n${userMessage}`,
@@ -531,17 +743,93 @@ function buildPrompt(systemPrompt: string, contextPrompt: string, userMessage: s
     ctx.writingFormat === 'markdown'
       ? '- Preserve Markdown structure. Normalize headings, lists, emphasis, blockquotes, and spacing only when the request requires it.'
       : '- Output Plain Text by default. Do not use Markdown syntax, headings, lists, code fences, chapter title lines, or chapter number lines unless the Writing Style Guide explicitly requires them.',
+    '- Function Calling first: when an editing tool can perform the requested work, call that tool before explanatory text.',
     '- Do not reply with the revised chapter in plain text. Complete the edit by calling the appropriate replacement tool only.',
     contextPrompt ? `Context:\n${contextPrompt}` : '',
     `User Request:\n${userMessage}`,
   ].filter(Boolean).join('\n\n')
 }
 
-function extractApplicableContent(value: string) {
-  const trimmed = value.trim()
-  const fenced = /^```(?:markdown|md|text)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed)
-  return fenced ? fenced[1].trim() : trimmed
+function settleDanglingToolStatuses(
+  nextStatus: Extract<ToolCallStatusItem['status'], 'warning' | 'error'>,
+  detail: string
+) {
+  let changed = false
+  toolStatuses.value = toolStatuses.value.map(item => {
+    if (item.status !== 'pending' && item.status !== 'running') return item
+    changed = true
+    return {
+      ...item,
+      status: nextStatus,
+      description: nextStatus === 'error' ? 'Tool execution failed' : 'Tool execution incomplete',
+      detail,
+    }
+  })
+  if (changed) {
+    scheduleChatSave()
+  }
+
+  for (const message of messages.value) {
+    if (!Array.isArray(message.toolStatuses) || !message.toolStatuses.length) continue
+    message.toolStatuses = message.toolStatuses.map(item => {
+      if (item.status !== 'pending' && item.status !== 'running') return item
+      return {
+        ...item,
+        status: nextStatus,
+        description: nextStatus === 'error' ? 'Tool execution failed' : 'Tool execution incomplete',
+        detail,
+      }
+    })
+  }
 }
+
+function sanitizeReasoningText(input: string) {
+  return input
+    .replace(/｜/g, '|')
+    .replace(/<\|DSML\|tool_calls>[\s\S]*?<\/\|DSML\|tool_calls>/gi, '')
+    .replace(/<\|DSML\|tool_>/gi, '')
+    .replace(/<\|DSML\|[^>]*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function settleDanglingTodoItems(reason: string) {
+  let changed = false
+  todoItems.value = todoItems.value.map(item => {
+    if (item.status !== 'in_progress') return item
+    changed = true
+    return {
+      ...item,
+      status: 'blocked',
+      notes: reason,
+    }
+  })
+  if (changed) {
+    scheduleChatSave()
+  }
+}
+
+function sanitizeReasoningTextSafe(input: string) {
+  return input
+    .replace(/｜/g, '|')
+    .replace(/<\|DSML\|tool_calls>[\s\S]*?<\/\|DSML\|tool_calls>/gi, '')
+    .replace(/<\|DSML\|tool_>/gi, '')
+    .replace(/<\|DSML\|[^>]*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function getToolAnchorMessage() {
+  if (streamingAssistantId.value) {
+    const streaming = messages.value.find(item => item.id === streamingAssistantId.value && item.role === 'assistant')
+    if (streaming) return streaming
+  }
+  for (let index = messages.value.length - 1; index >= 0; index--) {
+    if (messages.value[index].role === 'assistant') return messages.value[index]
+  }
+  return null
+}
+
 
 async function sendMessage() {
   if (isLoadingConversation) {
@@ -563,9 +851,32 @@ async function sendMessage() {
   toolStatuses.value = []
   todoItems.value = []
   currentReasoning.value = ''
-  reasoningExpanded.value = false
+  expandedReasoningMessageIds.value = new Set()
+  manuallyExpandedToolMessageIds.value = new Set()
+  
+  startTimer()
+
+  let activeAssistantMessageId = ''
 
   try {
+    activeAssistantMessageId = addMessage('assistant', '')
+    streamingAssistantId.value = activeAssistantMessageId
+    
+    const getActiveMessage = () => messages.value.find(item => item.id === activeAssistantMessageId)
+
+    const onToolStatus = (status: ToolStatusUpdate) => {
+      updateToolStatus(status)
+      const msg = getActiveMessage()
+      if (msg) {
+        const blocks = ensureAssistantWorkBlocks(msg)
+        const toolItem = msg.toolStatuses?.find(t => t.name === status.name && (t.status === 'running' || t.status === 'pending' || t.status === status.status))
+        const toolId = toolItem?.id || status.callId || ''
+        if (toolId && !blocks.some(b => b.type === 'tool' && b.toolId === toolId)) {
+          blocks.push({ id: `t-${toolId}-${Date.now()}`, type: 'tool', text: '', toolId })
+        }
+      }
+    }
+
     const systemPrompt = stagePrompts[props.stage] || stagePrompts.planning
     const contextPrompt = buildContextPrompt()
     const fullPrompt = buildPrompt(systemPrompt, contextPrompt, userMessage)
@@ -574,88 +885,101 @@ async function sendMessage() {
       const currentContent = typeof props.context?.chapter?.content === 'string'
         ? props.context.chapter.content
         : ''
-      const assistantMessageId = addMessage('assistant', '')
-      streamingAssistantId.value = assistantMessageId
       const response = await genStore.editChapterWithTool(fullPrompt, {
         currentContent,
         modelRef: selectedModelRef.value,
-        onToolStatus: updateToolStatus,
+        onToolStatus,
         onTodoList: state => {
           if (cancelledRequestIds.has(requestId)) return
           todoItems.value = state.items
+          agentTodoListState.value = state
           scheduleChatSave()
         },
         onToken: () => {},
         onReasoningToken: token => {
           if (cancelledRequestIds.has(requestId)) return
           currentReasoning.value += token
-          updateMessage(assistantMessageId, { reasoning: currentReasoning.value })
+          const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
+          updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
+          const msg = getActiveMessage()
+          if (msg) {
+            appendReasoningBlock(msg, token)
+          }
         },
         signal: abortController.signal,
       })
       if (cancelledRequestIds.has(requestId)) return
       emit('apply', response.content)
       toast.success('Applied to editor')
-      updateMessage(assistantMessageId, {
+      updateMessage(activeAssistantMessageId, {
         content: response.summary?.trim()
-          ? `Applied edit: ${response.summary.trim()}`
+          ? response.summary.trim()
           : response.toolName === 'replace_chapter_section'
             ? 'Applied localized edit to the editor.'
             : 'Applied chapter replacement to the editor.',
-        reasoning: currentReasoning.value,
+        reasoning: sanitizeReasoningTextSafe(currentReasoning.value),
       })
     } else if (props.mode === 'outline-agent') {
-      const currentTitle = typeof props.context?.chapter?.title === 'string'
-        ? props.context.chapter.title
+      const currentTitle = typeof props.context?.chapter?.title === 'string' && props.context.chapter.title.trim()
+        ? props.context.chapter.title.trim()
         : 'Untitled'
       const currentOutline = props.context?.chapter?.outline as ChapterOutline | undefined
-      const assistantMessageId = addMessage('assistant', '')
-      streamingAssistantId.value = assistantMessageId
       const response = await genStore.editChapterOutlineWithTool(fullPrompt, {
         currentTitle,
         currentOutline,
         modelRef: selectedModelRef.value,
-        onToolStatus: updateToolStatus,
+        onToolStatus,
         onTodoList: state => {
           if (cancelledRequestIds.has(requestId)) return
           todoItems.value = state.items
+          agentTodoListState.value = state
           scheduleChatSave()
         },
         onToken: () => {},
         onReasoningToken: token => {
           if (cancelledRequestIds.has(requestId)) return
           currentReasoning.value += token
-          updateMessage(assistantMessageId, { reasoning: currentReasoning.value })
+          const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
+          updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
+          const msg = getActiveMessage()
+          if (msg) {
+            appendReasoningBlock(msg, token)
+          }
         },
         signal: abortController.signal,
       })
       if (cancelledRequestIds.has(requestId)) return
       emit('applyOutline', { title: response.title, outline: response.outline })
       toast.success('Applied to outline')
-      updateMessage(assistantMessageId, {
+      updateMessage(activeAssistantMessageId, {
         content: response.summary?.trim()
           ? `Applied outline edit: ${response.summary.trim()}`
           : response.toolName === 'replace_chapter_outline_field'
             ? 'Applied outline field update.'
             : 'Applied chapter outline rewrite.',
-        reasoning: currentReasoning.value,
+        reasoning: sanitizeReasoningTextSafe(currentReasoning.value),
       })
     } else {
-      const assistantMessageId = addMessage('assistant', '')
-      streamingAssistantId.value = assistantMessageId
       const response = await genStore.chatWithAssistant(fullPrompt, selectedModelRef.value, {
         onToken: token => {
-          if (!cancelledRequestIds.has(requestId)) appendMessageContent(assistantMessageId, token)
+          if (cancelledRequestIds.has(requestId)) return
+          appendMessageContent(activeAssistantMessageId, token)
         },
         onReasoningToken: token => {
           if (cancelledRequestIds.has(requestId)) return
           currentReasoning.value += token
-          updateMessage(assistantMessageId, { reasoning: currentReasoning.value })
+          const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
+          updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
+          const msg = getActiveMessage()
+          if (msg) {
+            appendReasoningBlock(msg, token)
+          }
         },
-        onToolStatus: updateToolStatus,
+        onToolStatus,
         onTodoList: state => {
           if (cancelledRequestIds.has(requestId)) return
           todoItems.value = state.items
+          agentTodoListState.value = state
           scheduleChatSave()
         },
         onPlanningResult: result => {
@@ -670,18 +994,34 @@ async function sendMessage() {
         signal: abortController.signal,
       })
       if (cancelledRequestIds.has(requestId)) return
-      updateMessage(assistantMessageId, { content: response, reasoning: currentReasoning.value })
+      updateMessage(activeAssistantMessageId, { content: response, reasoning: sanitizeReasoningTextSafe(currentReasoning.value) })
     }
   } catch (error: any) {
     if (cancelledRequestIds.has(requestId) || abortController.signal.aborted || error?.name === 'AbortError') return
+    settleDanglingToolStatuses('error', 'The request failed before the tool returned a final result.')
+    settleDanglingTodoItems('This todo item was interrupted because the request failed.')
     toast.error(error?.message || 'Connection lost')
     addMessage('system', error?.message ? `Vibe AI error: ${error.message}` : 'System error: Unable to reach Vibe Engine.')
   } finally {
     if (activeRequestId === requestId) {
+      if (!cancelledRequestIds.has(requestId) && !abortController.signal.aborted) {
+        settleDanglingToolStatuses('warning', 'This tool call did not return a final result in the current run. You can resend the request to continue.')
+        settleDanglingTodoItems('This todo item was interrupted when this run ended with unfinished checklist items.')
+      }
+      clearAgentTodoList()
       isLoading.value = false
       emit('loadingChange', false)
       streamingAssistantId.value = ''
       if (currentAbortController === abortController) currentAbortController = null
+      
+      stopTimer()
+      if (messages.value.length > 0) {
+        const lastMsg = messages.value[messages.value.length - 1]
+        if (lastMsg.role === 'assistant') {
+          lastMsg.generationDurationMs = generationElapsedMs.value
+          scheduleChatSave()
+        }
+      }
     }
     cancelledRequestIds.delete(requestId)
   }
@@ -700,65 +1040,97 @@ function cancelCurrentResponse() {
   emit('loadingChange', false)
   streamingAssistantId.value = ''
   currentReasoning.value = ''
-  toolStatuses.value = toolStatuses.value.map(item =>
-    item.status === 'pending' || item.status === 'running'
-      ? {
-          ...item,
-          status: 'error',
-          description: 'Tool execution was interrupted',
-          detail: 'The current Vibe AI response was interrupted by the user.',
-        }
-      : item
-  )
+  settleDanglingToolStatuses('error', 'The current Vibe AI response was interrupted by the user.')
   todoItems.value = todoItems.value.map(item =>
     item.status === 'in_progress'
       ? { ...item, status: 'blocked', notes: 'Interrupted by user.' }
       : item
   )
+  clearAgentTodoList()
   addMessage('system', 'Vibe AI response interrupted.')
   scheduleChatSave()
 }
 
-function updateToolStatus(status: Omit<ToolCallStatusItem, 'id'>) {
-  const existing = toolStatuses.value.find(item => item.name === status.name)
-  if (existing) {
-    Object.assign(existing, status)
-    scheduleChatSave()
-    return
+function updateToolStatus(status: ToolStatusUpdate) {
+  const { callId, ...statusPayload } = status
+  const normalizedCallId = callId?.trim() || ''
+  const statusName = statusPayload.name
+  const findRunningByName = (items: ToolCallStatusItem[]) =>
+    items.find(item => item.name === statusName && (item.status === 'pending' || item.status === 'running'))
+
+  const upsertStatus = (items: ToolCallStatusItem[]) => {
+    const existingById = normalizedCallId ? items.find(item => item.id === normalizedCallId) : null
+    const existingRunningByName = findRunningByName(items)
+    const target = existingById || existingRunningByName
+    if (target) {
+      if (normalizedCallId) target.id = normalizedCallId
+      Object.assign(target, statusPayload)
+      return target.id
+    }
+    const id = normalizedCallId || `${statusName}-${Date.now()}`
+    items.push({
+      id,
+      ...statusPayload,
+    })
+    return id
   }
 
-  toolStatuses.value.push({
-    id: `${status.name}-${Date.now()}`,
-    ...status,
-  })
+  upsertStatus(toolStatuses.value)
+
+  const anchor = getToolAnchorMessage()
+  if (anchor) {
+    if (!Array.isArray(anchor.toolStatuses)) {
+      anchor.toolStatuses = []
+    }
+    upsertStatus(anchor.toolStatuses)
+  }
+
   scheduleChatSave()
   scrollToBottom()
 }
 
-function applyContent(content: string) {
-  emit('apply', extractApplicableContent(content))
-  toast.success('Applied to editor')
-}
 
 function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text)
   toast.success('Copied to clipboard')
 }
 
-function clearChat() {
+function defaultHistoryTopic() {
+  const chapterTitle = typeof props.context?.chapter?.title === 'string' ? props.context.chapter.title.trim() : ''
+  if (chapterTitle) return chapterTitle
+  const projectName = typeof props.context?.projectConfig?.name === 'string' ? props.context.projectConfig.name.trim() : ''
+  if (projectName) return projectName
+  return `${stageLabels[props.stage] || 'Assistant'} Session`
+}
+
+async function createAndSwitchConversation() {
+  const entry = await createVibeConversationHistoryEntry(
+    projectId.value,
+    projectDirectoryPath.value,
+    conversationScopeKey.value,
+    {
+      category: scopeCategory.value,
+      event: scopeEvent.value,
+      topic: defaultHistoryTopic(),
+    }
+  )
+  const nextHistory = await listVibeConversationHistory(
+    projectId.value,
+    projectDirectoryPath.value,
+    conversationScopeKey.value
+  )
+  conversationHistory.value = nextHistory
+  activeConversationId.value = entry.id
+  await loadConversationForCurrentScope()
+}
+
+async function clearChat() {
   showResetConfirm.value = false
-  if (chatSaveTimer) {
-    clearTimeout(chatSaveTimer)
-    chatSaveTimer = null
-  }
-  pendingChatSave = null
-  messages.value = [createGreetingMessage()]
-  expandedMessageIds.value = new Set()
-  reasoningExpanded.value = false
-  toolStatuses.value = []
-  todoItems.value = []
-  currentReasoning.value = ''
-  void persistChatNow()
+  showRewindConfirm.value = false
+  pendingRewindMessageId.value = ''
+  showHistoryMenu.value = false
+  await persistChatNow()
+  await createAndSwitchConversation()
 }
 
 function requestClearChat() {
@@ -766,7 +1138,70 @@ function requestClearChat() {
     showResetConfirm.value = true
     return
   }
-  clearChat()
+  void clearChat()
+}
+
+async function switchConversation(conversationId: string) {
+  if (!conversationId || conversationId === activeConversationId.value) {
+    showHistoryMenu.value = false
+    return
+  }
+  activeConversationId.value = conversationId
+  showHistoryMenu.value = false
+  await loadConversationForCurrentScope()
+}
+
+async function deleteConversation(conversationId: string) {
+  if (!conversationId) return
+  await flushPendingChatSave()
+  const target = conversationHistory.value.find(item => item.id === conversationId)
+  if (!target) return
+
+  const removed = await removeVibeConversationHistoryEntry(
+    projectId.value,
+    projectDirectoryPath.value,
+    conversationScopeKey.value,
+    conversationId
+  )
+  if (!removed) {
+    toast.warning('Failed to delete conversation history entry')
+    return
+  }
+
+  if (target.storageKey) {
+    conversationMemoryCache.delete(scopeCacheKey({ projectId: projectId.value, storageKey: target.storageKey }))
+  }
+
+  let nextHistory = await listVibeConversationHistory(
+    projectId.value,
+    projectDirectoryPath.value,
+    conversationScopeKey.value
+  )
+
+  if (!nextHistory.length) {
+    await createVibeConversationHistoryEntry(
+      projectId.value,
+      projectDirectoryPath.value,
+      conversationScopeKey.value,
+      {
+        category: scopeCategory.value,
+        event: scopeEvent.value,
+        topic: defaultHistoryTopic(),
+      }
+    )
+    nextHistory = await listVibeConversationHistory(
+      projectId.value,
+      projectDirectoryPath.value,
+      conversationScopeKey.value
+    )
+  }
+
+  conversationHistory.value = nextHistory
+
+  if (activeConversationId.value === conversationId) {
+    activeConversationId.value = nextHistory[0]?.id || ''
+    await loadConversationForCurrentScope()
+  }
 }
 
 async function loadConversationForCurrentScope() {
@@ -779,7 +1214,7 @@ async function loadConversationForCurrentScope() {
   const targetScope = {
     projectId: projectId.value,
     directoryPath: projectDirectoryPath.value,
-    key: conversationKey.value,
+    scopeKey: conversationScopeKey.value,
   }
   const runId = ++conversationLoadRun
   if (chatSaveTimer) {
@@ -789,15 +1224,51 @@ async function loadConversationForCurrentScope() {
 
   isLoadingConversation = true
   try {
-    const stored = await loadVibeConversation(targetScope.projectId, targetScope.directoryPath, targetScope.key)
-    const cached = conversationMemoryCache.get(scopeCacheKey(targetScope))
+    const history = await ensureVibeConversationHistory(
+      targetScope.projectId,
+      targetScope.directoryPath,
+      targetScope.scopeKey,
+      {
+        category: scopeCategory.value,
+        event: scopeEvent.value,
+        topic: defaultHistoryTopic(),
+      }
+    )
     if (runId !== conversationLoadRun) return
-    activeConversationScope = targetScope
+    conversationHistory.value = history
+    let targetConversation = history.find(item => item.id === activeConversationId.value) ?? history[0] ?? null
+    if (!targetConversation) {
+      targetConversation = await createVibeConversationHistoryEntry(
+        targetScope.projectId,
+        targetScope.directoryPath,
+        targetScope.scopeKey,
+        {
+          category: scopeCategory.value,
+          event: scopeEvent.value,
+          topic: defaultHistoryTopic(),
+        }
+      )
+      conversationHistory.value = await listVibeConversationHistory(
+        targetScope.projectId,
+        targetScope.directoryPath,
+        targetScope.scopeKey
+      )
+    }
+    activeConversationId.value = targetConversation.id
+    activeConversationScope = {
+      ...targetScope,
+      conversationId: targetConversation.id,
+      storageKey: targetConversation.storageKey,
+    }
+    const stored = await loadVibeConversation(targetScope.projectId, targetScope.directoryPath, targetConversation.storageKey)
+    const cached = conversationMemoryCache.get(scopeCacheKey(activeConversationScope))
     const restored = hydrateMessages(cached?.messages ?? stored?.messages)
     messages.value = restored
     expandedMessageIds.value = new Set()
-    reasoningExpanded.value = false
+    expandedReasoningMessageIds.value = new Set()
+    manuallyExpandedToolMessageIds.value = new Set()
     toolStatuses.value = hydrateToolStatuses(cached?.toolStatuses ?? stored?.toolStatuses)
+    attachLegacyToolStatusesToLatestAssistant(toolStatuses.value)
     todoItems.value = hydrateTodoItems(cached?.todoItems ?? stored?.todoItems)
     currentReasoning.value = ''
     if (
@@ -810,6 +1281,7 @@ async function loadConversationForCurrentScope() {
     if (!messages.value.length) {
       messages.value = [createGreetingMessage()]
     }
+    await saveConversationScope(activeConversationScope)
   } finally {
     if (runId === conversationLoadRun) {
       isLoadingConversation = false
@@ -825,7 +1297,7 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-watch([projectId, conversationKey], () => {
+watch([projectId, conversationScopeKey], () => {
   conversationLoadPromise = loadConversationForCurrentScope()
 }, { immediate: true })
 
@@ -880,20 +1352,78 @@ function toggleMessageExpanded(messageId: string) {
   expandedMessageIds.value = next
 }
 
-function rewindToMessageSnapshot(message: ChatMessage) {
-  if (!message.workspaceSnapshot) return
-  const snapshot = cloneJsonSafe(message.workspaceSnapshot)
-  if (!snapshot) return
-  emit('rewind', snapshot)
-  toast.success('Workspace rewound')
+function isReasoningExpanded(messageId: string) {
+  return expandedReasoningMessageIds.value.has(messageId)
 }
 
-const lastAssistantMessageId = computed(() => {
-  for (let index = messages.value.length - 1; index >= 0; index--) {
-    if (messages.value[index].role === 'assistant') return messages.value[index].id
+function toggleReasoningExpanded(messageId: string) {
+  const next = new Set(expandedReasoningMessageIds.value)
+  if (next.has(messageId)) next.delete(messageId)
+  else next.add(messageId)
+  expandedReasoningMessageIds.value = next
+}
+
+function isToolsExpanded(msg: ChatMessage) {
+  if (msg.id === streamingAssistantId.value) return true
+  return manuallyExpandedToolMessageIds.value.has(msg.id)
+}
+
+function toggleToolsExpanded(msgId: string) {
+  const next = new Set(manuallyExpandedToolMessageIds.value)
+  if (next.has(msgId)) next.delete(msgId)
+  else next.add(msgId)
+  manuallyExpandedToolMessageIds.value = next
+}
+
+function rewindToMessageSnapshot(message: ChatMessage) {
+  if (isLoading.value) {
+    toast.warning('Please wait for the current response to finish before rewinding.')
+    return
   }
-  return ''
+  if (!message.workspaceSnapshot || message.role !== 'user') return
+  pendingRewindMessageId.value = message.id
+  showRewindConfirm.value = true
+}
+
+function pendingRewindMessage() {
+  if (!pendingRewindMessageId.value) return null
+  return messages.value.find(item => item.id === pendingRewindMessageId.value) ?? null
+}
+
+const pendingRewindPreview = computed(() => {
+  const target = pendingRewindMessage()
+  if (!target) return ''
+  return target.content.replace(/\s+/g, ' ').slice(0, 160)
 })
+
+async function confirmRewindWorkspace() {
+  const target = pendingRewindMessage()
+  showRewindConfirm.value = false
+  pendingRewindMessageId.value = ''
+  if (!target || !target.workspaceSnapshot || target.role !== 'user') return
+  const targetIndex = messages.value.findIndex(item => item.id === target.id)
+  if (targetIndex < 0) return
+
+  const snapshot = cloneJsonSafe(target.workspaceSnapshot)
+  if (!snapshot) return
+
+  const restorePrompt = target.content
+  messages.value = messages.value.slice(0, targetIndex)
+  inputText.value = restorePrompt
+  expandedMessageIds.value = new Set()
+  expandedReasoningMessageIds.value = new Set()
+  currentReasoning.value = ''
+  toolStatuses.value = []
+  todoItems.value = []
+  clearAgentTodoList()
+  scheduleChatSave()
+  resetInputHeight()
+  await nextTick()
+  inputTextarea.value?.focus()
+
+  emit('rewind', snapshot)
+  toast.success('Workspace and conversation rewound')
+}
 
 function systemMessageTone(message: ChatMessage) {
   const content = message.content.toLowerCase()
@@ -909,7 +1439,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col overflow-hidden bg-surface-1 font-sans">
+  <div class="relative flex h-full min-h-0 flex-col overflow-hidden bg-surface-1 font-sans">
     <!-- Clean Header -->
     <div class="relative shrink-0 px-3 py-2 flex items-center justify-between border-b border-surface-4">
       <div class="flex items-center gap-2 min-w-0">
@@ -918,25 +1448,77 @@ defineExpose({
         </div>
         <div class="min-w-0">
           <h3 class="text-xs font-semibold text-text-primary tracking-tight truncate">{{ tr('Vibe AI') }}</h3>
-          <p class="text-[9px] uppercase tracking-widest text-text-muted font-bold truncate">{{ tr(stageLabels[stage] || 'Assistant') }}</p>
+          <p class="text-[9px] uppercase tracking-widest text-text-muted font-bold truncate">
+            {{ tr(stageLabels[stage] || 'Assistant') }} · {{ activeConversationLabel }}
+          </p>
         </div>
       </div>
       <div class="flex items-center gap-1">
         <button
           class="p-1.5 text-text-muted hover:text-accent hover:bg-accent/5 rounded transition-all"
-          :title="tr('Reset Conversation')"
+          :title="tr('Conversation History')"
+          @click="showHistoryMenu = !showHistoryMenu"
+        >
+          <History :size="13" />
+        </button>
+        <button
+          class="p-1.5 text-text-muted hover:text-accent hover:bg-accent/5 rounded transition-all"
+          :title="tr('New Conversation')"
           @click="requestClearChat"
         >
           <RotateCcw :size="13" />
         </button>
       </div>
       <div
+        v-if="showHistoryMenu"
+        class="absolute right-3 top-9 z-50 w-80 rounded-lg border border-surface-4 bg-surface-1 p-3 shadow-xl"
+      >
+        <div class="mb-2 flex items-center justify-between">
+          <p class="text-xs font-semibold text-text-primary">{{ tr('Conversation History') }}</p>
+          <button
+            class="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-[10px] font-semibold text-accent hover:bg-accent/20"
+            @click="clearChat"
+          >
+            <Plus :size="11" />
+            {{ tr('New') }}
+            </button>
+        </div>
+        <div v-if="conversationHistory.length" class="max-h-64 space-y-1 overflow-y-auto pr-1 custom-scrollbar">
+          <div
+            v-for="entry in conversationHistory"
+            :key="entry.id"
+            class="group relative"
+          >
+            <button
+              class="w-full rounded-md border px-2.5 py-2 pr-9 text-left transition-colors"
+              :class="entry.id === activeConversationId ? 'border-accent/40 bg-accent/10' : 'border-surface-4 bg-surface-2/60 hover:border-surface-3'"
+              @click="switchConversation(entry.id)"
+            >
+              <p class="truncate text-[11px] font-medium text-text-primary">
+                {{ entry.topic || tr('Untitled conversation') }}
+              </p>
+              <p class="mt-1 truncate text-[10px] text-text-muted">
+              {{ entry.category }} / {{ entry.event }} · {{ new Date(entry.updatedAt).toLocaleString() }}
+              </p>
+            </button>
+            <button
+              class="absolute right-1.5 top-1.5 rounded p-1 text-text-muted transition-colors hover:bg-danger/15 hover:text-danger"
+              :title="tr('Delete Conversation')"
+              @click.stop="deleteConversation(entry.id)"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </div>
+        </div>
+        <p v-else class="text-[11px] text-text-muted">{{ tr('No saved history in this scope yet.') }}</p>
+      </div>
+      <div
         v-if="showResetConfirm"
         class="absolute right-3 top-9 z-50 w-72 rounded-lg border border-surface-4 bg-surface-1 p-3 shadow-xl"
       >
-        <p class="text-xs font-semibold text-text-primary">{{ tr('Reset conversation?') }}</p>
+        <p class="text-xs font-semibold text-text-primary">{{ tr('Create a new conversation?') }}</p>
         <p class="mt-1 text-[11px] leading-relaxed text-text-secondary">
-          {{ tr('This will delete the saved chat history for the current scope.') }}
+          {{ tr('The current conversation will be kept in history, and a new conversation will start for this same category/event/topic scope.') }}
         </p>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -949,9 +1531,38 @@ defineExpose({
             class="rounded-md bg-danger px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-danger/90"
             @click="clearChat"
           >
-            {{ tr('Reset') }}
+            {{ tr('Start New') }}
           </button>
         </div>
+      </div>
+    </div>
+
+    <div
+      v-if="showRewindConfirm"
+      class="absolute inset-0 z-[70] flex items-center justify-center bg-black/45 px-4"
+    >
+      <div class="w-full max-w-sm rounded-lg border border-surface-4 bg-surface-1 p-4 shadow-2xl">
+        <p class="text-sm font-semibold text-text-primary">{{ tr('Rewind workspace and conversation?') }}</p>
+        <p class="mt-2 text-xs leading-relaxed text-text-secondary">
+          {{ tr('This will restore the workspace snapshot, remove this user message and all following messages, then put that user message back into the input box.') }}
+        </p>
+        <p v-if="pendingRewindPreview" class="mt-3 rounded-md border border-surface-4 bg-surface-2 px-2.5 py-2 text-[11px] text-text-muted">
+          {{ pendingRewindPreview }}
+        </p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            class="rounded-md px-2.5 py-1.5 text-[11px] font-medium text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+            @click="showRewindConfirm = false; pendingRewindMessageId = ''"
+          >
+            {{ tr('Cancel') }}
+          </button>
+          <button
+            class="rounded-md bg-warning px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-warning/90"
+            @click="confirmRewindWorkspace"
+          >
+            {{ tr('Rewind') }}
+          </button>
+          </div>
       </div>
     </div>
 
@@ -998,9 +1609,9 @@ defineExpose({
     <!-- Minimalist Chat Container -->
     <div
       ref="chatContainer"
-      class="min-h-0 flex-1 overflow-y-auto px-4 py-5 space-y-6 custom-scrollbar"
+      class="min-h-0 flex-1 overflow-y-auto px-4 py-5 custom-scrollbar"
     >
-      <div v-if="shouldShowQuickActions" class="grid grid-cols-1 gap-2 -mt-2">
+      <div v-if="shouldShowQuickActions" class="grid grid-cols-1 gap-2 mb-4 -mt-2">
         <button
           v-for="action in activeQuickActions"
           :key="action"
@@ -1014,138 +1625,214 @@ defineExpose({
       </div>
 
       <div
-        v-for="msg in messages"
+        v-for="(msg, index) in messages"
         :key="msg.id"
-        class="group flex flex-col gap-3"
+        class="group flex flex-col"
+        :class="index > 0 ? (messages[index - 1].role === msg.role ? 'gap-1 mt-1' : 'gap-3 mt-4') : 'gap-3'"
       >
-        <!-- Message Role Label -->
-        <div class="flex items-center gap-2 select-none">
-          <div v-if="msg.role === 'user'" class="flex items-center gap-2">
-            <User :size="12" class="text-text-muted" />
-            <span class="text-[10px] font-black uppercase tracking-widest text-text-muted">{{ tr('You') }}</span>
-          </div>
-          <div v-else-if="msg.role === 'assistant'" class="flex items-center gap-2">
-            <Sparkles :size="12" class="text-accent" />
-            <span class="text-[10px] font-black uppercase tracking-widest text-accent">{{ tr('Vibe Engine') }}</span>
-            <span
-              v-if="isLoading && msg.id === streamingAssistantId"
-              class="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-accent"
-            >
-              <LoaderCircle :size="10" class="animate-spin" />
-              {{ tr('Generating') }}
+        <!-- Message Role Label (Minimalist Cursor Style) -->
+        <div v-if="index === 0 || messages[index - 1].role !== msg.role" class="flex items-center justify-between select-none">
+          <div class="flex items-center gap-2">
+            <div v-if="msg.role === 'user'" class="flex items-center justify-center w-5 h-5 rounded-full bg-surface-3 text-text-primary">
+              <User :size="11" />
+            </div>
+            <div v-else-if="msg.role === 'assistant'" class="flex items-center justify-center w-5 h-5 rounded-md bg-accent/10 text-accent">
+              <Sparkles :size="11" />
+            </div>
+            <div v-else class="flex items-center justify-center w-5 h-5 rounded-sm bg-surface-3">
+              <AlertTriangle :size="11" :class="systemMessageTone(msg) === 'danger' ? 'text-danger' : systemMessageTone(msg) === 'warning' ? 'text-warning' : 'text-text-muted'" />
+            </div>
+            
+            <span class="text-[11px] font-semibold text-text-primary">
+              {{ msg.role === 'user' ? tr('You') : msg.role === 'assistant' ? tr('Vibe Engine') : tr('System') }}
             </span>
           </div>
-          <div v-else class="flex items-center gap-2">
-            <AlertTriangle
-              :size="12"
-              :class="systemMessageTone(msg) === 'danger' ? 'text-danger' : systemMessageTone(msg) === 'warning' ? 'text-warning' : 'text-text-muted'"
-            />
-            <span
-              class="text-[10px] font-black uppercase tracking-widest"
-              :class="systemMessageTone(msg) === 'danger' ? 'text-danger' : systemMessageTone(msg) === 'warning' ? 'text-warning' : 'text-text-muted'"
-            >{{ tr('System') }}</span>
-          </div>
-          <span class="text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
-            {{ msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
-          </span>
-        </div>
-
-        <!-- Content Body (No Bubble for Assistant, Subtle for User) -->
-        <div
-          :class="[
-            'leading-relaxed max-w-full transition-all',
-            msg.role === 'user' 
-              ? 'bg-surface-2/70 p-3 rounded-lg border border-surface-4 italic text-[12px] text-text-secondary'
-              : msg.role === 'system'
-                ? [
-                    'rounded-lg border p-3 text-[12px]',
-                    systemMessageTone(msg) === 'danger'
-                      ? 'border-danger/30 bg-danger-subtle/40 text-danger'
-                      : systemMessageTone(msg) === 'warning'
-                        ? 'border-warning/30 bg-warning/10 text-warning'
-                        : 'border-surface-4 bg-surface-2/70 text-text-secondary',
-                  ]
-              : 'text-[15px] text-text-primary px-1'
-          ]"
-        >
-          <div
-            v-if="msg.role === 'assistant' && msg.reasoning"
-            class="mb-3 rounded-lg border border-surface-4 bg-surface-2/70"
-          >
+          
+          <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <span class="text-[10px] text-text-muted">
+              {{ msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+            </span>
             <button
-              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[11px] font-semibold text-text-secondary hover:text-text-primary"
-              @click="reasoningExpanded = !reasoningExpanded"
-            >
-              <span class="flex items-center gap-1.5">
-                <Brain :size="12" class="text-accent" />
-                {{ tr('Reasoning') }}
-              </span>
-              <ChevronDown :size="12" class="transition-transform" :class="reasoningExpanded ? 'rotate-180' : ''" />
-            </button>
-            <div
-              v-if="reasoningExpanded"
-              class="border-t border-surface-4 px-3 py-2 text-[11px] leading-relaxed text-text-muted whitespace-pre-wrap"
-            >{{ msg.reasoning }}</div>
-          </div>
-
-          <div
-            class="whitespace-pre-wrap"
-            :class="msg.role === 'user' && isUserMessageCollapsible(msg) && !isMessageExpanded(msg.id) ? 'max-h-[9.6em] overflow-hidden' : ''"
-          >
-            {{ msg.role === 'system' ? tr(msg.content) : msg.content }}
-          </div>
-
-          <TodoListStatus
-            v-if="msg.id === lastAssistantMessageId && todoItems.length"
-            class="mt-3"
-            :items="todoItems"
-            title="Vibe Todo"
-            agent="Vibe AI"
-          />
-
-          <button
-            v-if="isUserMessageCollapsible(msg)"
-            class="mt-2 text-[11px] font-medium text-accent hover:text-accent/80"
-            @click="toggleMessageExpanded(msg.id)"
-          >
-            {{ tr(isMessageExpanded(msg.id) ? 'Collapse' : 'Expand') }}
-          </button>
-          <button
-            v-if="msg.role === 'user' && msg.workspaceSnapshot"
-            class="ml-3 mt-2 text-[11px] font-medium text-warning hover:text-warning/80"
-            :title="tr('Restore the workspace to the state before this request.')"
-            @click="rewindToMessageSnapshot(msg)"
-          >
-            {{ tr('Rewind workspace') }}
-          </button>
-
-          <!-- Actions for Assistant Messages -->
-          <div v-if="msg.role === 'assistant' && props.mode === 'assistant'" class="mt-6 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-y-2 group-hover:translate-y-0">
-            <button 
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-accent text-white shadow-lg shadow-accent/20 hover:scale-105 active:scale-95 transition-all"
-              @click="applyContent(msg.content)"
-            >
-              <Check :size="12" />
-              {{ tr('Apply to Editor') }}
-            </button>
-            <button 
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold bg-surface-3 text-text-secondary hover:bg-surface-4 transition-all"
+              v-if="msg.role === 'assistant' || msg.role === 'user'"
+              class="flex items-center justify-center w-5 h-5 rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors"
+              :title="tr('Copy')"
               @click="copyToClipboard(msg.content)"
             >
-              <Copy :size="12" />
-              {{ tr('Copy') }}
+              <Copy :size="11" />
             </button>
           </div>
         </div>
-      </div>
 
-      <div v-if="toolStatuses.length" class="space-y-2">
-        <ToolCallStatus
-          v-for="tool in toolStatuses"
-          :key="tool.id"
-          :item="tool"
-        />
-      </div>
+        <!-- Content Body (Minimalist Cursor Style) -->
+        <div
+          :class="[
+            'leading-relaxed max-w-full transition-all text-[13px] relative',
+            msg.role === 'user' 
+              ? 'text-text-primary pl-7'
+              : msg.role === 'system'
+                ? [
+                    'rounded text-[11px] px-2 py-1',
+                    systemMessageTone(msg) === 'danger'
+                      ? 'bg-danger/10 text-danger'
+                      : systemMessageTone(msg) === 'warning'
+                        ? 'bg-warning/10 text-warning'
+                        : 'bg-surface-2 text-text-secondary',
+                  ]
+              : 'text-text-primary pl-7'
+          ]"
+        >
+          <!-- Contiguous Copy Button & Timestamp (Only visible on hover when header is hidden) -->
+          <div 
+            v-if="index > 0 && messages[index - 1].role === msg.role"
+            class="absolute -left-2 -top-1 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1"
+          >
+            <button
+              v-if="msg.role === 'assistant' || msg.role === 'user'"
+              class="flex items-center justify-center w-5 h-5 rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors"
+              :title="tr('Copy')"
+              @click="copyToClipboard(msg.content)"
+            >
+              <Copy :size="10" />
+            </button>
+          </div>
+
+          <!-- Initial Pulsing Loader (Cursor Style) -->
+          <div
+            v-if="msg.role === 'assistant' && !msg.content && !msg.reasoning && !msg.toolStatuses?.length && isLoading && msg.id === streamingAssistantId"
+            class="flex items-center h-6 mb-1"
+          >
+            <div class="flex items-center gap-1.5 opacity-60">
+              <div class="h-1.5 w-1.5 rounded-full bg-text-muted animate-bounce" style="animation-delay: 0ms"></div>
+              <div class="h-1.5 w-1.5 rounded-full bg-text-muted animate-bounce" style="animation-delay: 150ms"></div>
+              <div class="h-1.5 w-1.5 rounded-full bg-text-muted animate-bounce" style="animation-delay: 300ms"></div>
+            </div>
+          </div>
+
+          <!-- Work Process Block (Before Content) -->
+          <div
+            v-if="msg.role === 'assistant' && (workBlocksBeforeContent(msg).length || ((msg.reasoning || msg.toolStatuses?.length) && !(msg.workBlocks && msg.workBlocks.length)))"
+            class="mb-2"
+          >
+            <!-- Group Header -->
+            <button
+              class="flex items-center gap-1.5 text-[11px] font-medium text-text-muted hover:text-text-primary transition-colors"
+              @click="toggleToolsExpanded(msg.id)"
+            >
+              <LoaderCircle v-if="isLoading && msg.id === streamingAssistantId" :size="11" class="animate-spin text-accent" />
+              <Brain v-else :size="11" class="text-text-muted" />
+              
+              <span>
+                {{ (isLoading && msg.id === streamingAssistantId) ? tr('Working...') : tr('Work Process') }}
+              </span>
+
+              <span class="opacity-70">
+                <span v-if="msg.toolStatuses?.length">· {{ msg.toolStatuses.length }} {{ msg.toolStatuses.length === 1 ? tr('tool') : tr('tools') }}</span>
+                <span v-if="msg.generationDurationMs">· {{ (msg.generationDurationMs / 1000).toFixed(1) }}s</span>
+                <span v-else-if="isLoading && msg.id === streamingAssistantId">· {{ (generationElapsedMs / 1000).toFixed(1) }}s</span>
+              </span>
+
+              <ChevronDown v-if="isToolsExpanded(msg)" :size="11" class="ml-1" />
+              <ChevronRight v-else :size="11" class="ml-1" />
+            </button>
+
+            <!-- Group Body -->
+            <div v-if="isToolsExpanded(msg)" class="mt-1.5 space-y-2 pl-3 border-l-2 border-surface-4">
+              <template v-if="msg.workBlocks && msg.workBlocks.length">
+                <div v-for="block in workBlocksBeforeContent(msg)" :key="block.id">
+                  <div v-if="block.type === 'reasoning' && block.text.trim()" class="text-[11px] leading-relaxed text-text-muted whitespace-pre-wrap">
+                    {{ sanitizeReasoningTextSafe(block.text) }}
+                  </div>
+                  <div v-else-if="block.type === 'tool'" class="mt-1">
+                    <ToolCallStatus
+                      v-if="msg.toolStatuses?.find(t => t.id === block.toolId)"
+                      :item="msg.toolStatuses.find(t => t.id === block.toolId)!"
+                    />
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <!-- Fallback for old history without blocks -->
+                <div v-if="msg.reasoning" class="text-[11px] leading-relaxed text-text-muted whitespace-pre-wrap">
+                  {{ msg.reasoning }}
+                </div>
+                <div v-if="msg.toolStatuses?.length" class="space-y-1 mt-1">
+                  <ToolCallStatus
+                    v-for="tool in msg.toolStatuses"
+                    :key="tool.id"
+                    :item="tool"
+                  />
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div
+            v-if="msg.content"
+            :class="[
+              msg.role === 'assistant' ? 'markdown-body text-[13px] leading-relaxed break-words' : 'whitespace-pre-wrap',
+              msg.role === 'user' && isUserMessageCollapsible(msg) && !isMessageExpanded(msg.id) ? 'max-h-[9.6em] overflow-hidden relative' : ''
+            ]"
+          >
+            <template v-if="msg.role === 'assistant'">
+              <div v-html="markdownToHtml(msg.content)"></div>
+            </template>
+            <template v-else>
+              {{ msg.role === 'system' ? tr(msg.content) : msg.content }}
+            </template>
+            <div v-if="msg.role === 'user' && isUserMessageCollapsible(msg) && !isMessageExpanded(msg.id)" class="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-surface-1 to-transparent pointer-events-none"></div>
+          </div>
+
+          <!-- Work Process Block (After Content) -->
+          <div
+            v-if="msg.role === 'assistant' && workBlocksAfterContent(msg).length"
+            class="mt-2 mb-1"
+          >
+            <button
+              class="flex items-center gap-1.5 text-[11px] font-medium text-text-muted hover:text-text-primary transition-colors"
+              @click="toggleToolsExpanded(msg.id)"
+            >
+              <LoaderCircle v-if="isLoading && msg.id === streamingAssistantId" :size="11" class="animate-spin text-accent" />
+              <Brain v-else :size="11" class="text-text-muted" />
+              <span>{{ tr('Work Process') }}</span>
+              <ChevronDown v-if="isToolsExpanded(msg)" :size="11" class="ml-1" />
+              <ChevronRight v-else :size="11" class="ml-1" />
+            </button>
+
+            <div v-if="isToolsExpanded(msg)" class="mt-1.5 space-y-2 pl-3 border-l-2 border-surface-4">
+              <div v-for="block in workBlocksAfterContent(msg)" :key="block.id">
+                <div v-if="block.type === 'reasoning' && block.text.trim()" class="text-[11px] leading-relaxed text-text-muted whitespace-pre-wrap">
+                  {{ sanitizeReasoningTextSafe(block.text) }}
+                </div>
+                <div v-else-if="block.type === 'tool'" class="mt-1">
+                  <ToolCallStatus
+                    v-if="msg.toolStatuses?.find(t => t.id === block.toolId)"
+                    :item="msg.toolStatuses.find(t => t.id === block.toolId)!"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="msg.role === 'user'" class="flex items-center gap-3 mt-1">
+            <button
+              v-if="isUserMessageCollapsible(msg)"
+              class="text-[11px] font-medium text-accent hover:text-accent/80"
+              @click="toggleMessageExpanded(msg.id)"
+            >
+              {{ tr(isMessageExpanded(msg.id) ? 'Collapse' : 'Expand') }}
+            </button>
+            <button
+              v-if="msg.workspaceSnapshot"
+              class="text-[11px] font-medium text-warning hover:text-warning/80"
+              :title="tr('Restore the workspace to the state before this request.')"
+              @click="rewindToMessageSnapshot(msg)"
+            >
+              {{ tr('Rewind workspace') }}
+            </button>
+          </div>
+
+          </div>
+        </div>
 
     </div>
 
@@ -1225,5 +1912,50 @@ textarea {
 
 .group {
   animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* Minimalist Markdown Styles */
+:deep(.markdown-body p) {
+  margin-bottom: 0.75em;
+}
+:deep(.markdown-body p:last-child) {
+  margin-bottom: 0;
+}
+:deep(.markdown-body ul) {
+  list-style-type: disc;
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+:deep(.markdown-body ol) {
+  list-style-type: decimal;
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+:deep(.markdown-body li) {
+  margin-bottom: 0.25em;
+}
+:deep(.markdown-body strong) {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+:deep(.markdown-body code) {
+  background: var(--surface-3);
+  padding: 0.1em 0.3em;
+  border-radius: 0.25em;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+:deep(.markdown-body pre) {
+  background: var(--surface-2);
+  padding: 0.75em;
+  border-radius: 0.375em;
+  overflow-x: auto;
+  margin-bottom: 0.75em;
+}
+:deep(.markdown-body h1), :deep(.markdown-body h2), :deep(.markdown-body h3), :deep(.markdown-body h4) {
+  font-weight: 600;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  color: var(--text-primary);
 }
 </style>

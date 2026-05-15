@@ -21,6 +21,7 @@ interface PersistedUiState {
   editingAiModelRef: string
   customSystemPrompt: string
   meetingProposerPrompt: string
+  aiSidebarWidth: number
 }
 
 interface ChapterEditorDraft {
@@ -31,6 +32,12 @@ interface ChapterEditorDraft {
 
 function isSidebarItem(value: unknown): value is SidebarItem {
   return value === 'projects' || value === 'workspace' || value === 'knowledge' || value === 'providers' || value === 'settings'
+}
+
+const normalizeAiSidebarWidth = (value: unknown) => {
+  const width = Number(value)
+  if (!Number.isFinite(width)) return 384
+  return Math.max(300, Math.min(720, Math.round(width)))
 }
 
 export const useUiStore = defineStore('ui', () => {
@@ -61,6 +68,7 @@ export const useUiStore = defineStore('ui', () => {
       ? persisted.meetingProposerPrompt
       : DEFAULT_MEETING_PROPOSER_PROMPT
   )
+  const aiSidebarWidth = ref<number>(normalizeAiSidebarWidth(persisted.aiSidebarWidth))
   const unsavedWorkspaceNodes = ref<Record<string, boolean>>({})
   const chapterEditorDrafts = ref<Record<string, ChapterEditorDraft>>({})
   const toasts = ref<Toast[]>([])
@@ -90,6 +98,7 @@ export const useUiStore = defineStore('ui', () => {
       editingAiModelRef: editingAiModelRef.value,
       customSystemPrompt: customSystemPrompt.value,
       meetingProposerPrompt: meetingProposerPrompt.value,
+      aiSidebarWidth: aiSidebarWidth.value,
     }
     writeJsonStorage(UI_STORAGE_KEY, nextState)
   }
@@ -120,6 +129,10 @@ export const useUiStore = defineStore('ui', () => {
 
   function setMeetingProposerPrompt(value: string) {
     meetingProposerPrompt.value = value
+  }
+
+  function setAiSidebarWidth(value: number) {
+    aiSidebarWidth.value = normalizeAiSidebarWidth(value)
   }
 
   function setLanguage(lang: Language) {
@@ -207,6 +220,7 @@ export const useUiStore = defineStore('ui', () => {
   watch(editingAiModelRef, persistState)
   watch(customSystemPrompt, persistState)
   watch(meetingProposerPrompt, persistState)
+  watch(aiSidebarWidth, persistState)
 
   return {
     activeSidebarItem,
@@ -219,6 +233,7 @@ export const useUiStore = defineStore('ui', () => {
     editingAiModelRef,
     customSystemPrompt,
     meetingProposerPrompt,
+    aiSidebarWidth,
     unsavedWorkspaceNodes,
     chapterEditorDrafts,
     toasts,
@@ -236,6 +251,7 @@ export const useUiStore = defineStore('ui', () => {
     setEditingAiModelRef,
     setCustomSystemPrompt,
     setMeetingProposerPrompt,
+    setAiSidebarWidth,
     t,
     text,
     addToast,

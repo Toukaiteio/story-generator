@@ -233,9 +233,21 @@ function mergeRefreshedModels(existingModels: ModelConfig[], remoteModels: Model
     const existing = existingById.get(model.id)
     if (!existing) return cloneModel(model)
 
-    // Preserve manual overrides when refreshing remote model metadata.
+    // Preserve local user-edited model settings when refreshing remote metadata.
+    // Remote sync should not silently reset configured tier/tokens/reasoning.
     return cloneModel({
       ...model,
+      name: existing.name || model.name,
+      tier: existing.tier || model.tier,
+      maxTokens: Number.isFinite(existing.maxTokens) && existing.maxTokens > 0 ? existing.maxTokens : model.maxTokens,
+      supportsStreaming: typeof existing.supportsStreaming === 'boolean' ? existing.supportsStreaming : model.supportsStreaming,
+      supportsEmbeddings: typeof existing.supportsEmbeddings === 'boolean' ? existing.supportsEmbeddings : model.supportsEmbeddings,
+      embeddingDimensions: existing.supportsEmbeddings
+        ? (Number.isFinite(existing.embeddingDimensions) && Number(existing.embeddingDimensions) > 0
+          ? Number(existing.embeddingDimensions)
+          : model.embeddingDimensions)
+        : model.embeddingDimensions,
+      reasoning: normalizeReasoningConfig(existing.reasoning ?? model.reasoning),
       contextTokens: existing.contextTokensSource === 'manual' ? existing.contextTokens : model.contextTokens,
       contextTokensSource: existing.contextTokensSource === 'manual'
         ? 'manual'
@@ -429,6 +441,22 @@ export const useProviderStore = defineStore('provider', () => {
   const syncingProviderIds = ref<string[]>([])
   const providerWarnings = ref<string[]>(loaded.warnings)
 
+  function persistProvidersNow() {
+    writeJsonStorage(PROVIDER_STORAGE_KEY, providers.value)
+  }
+
+  function persistAgentBindingsNow() {
+    writeJsonStorage(AGENT_MODEL_STORAGE_KEY, agentModelBindings.value)
+  }
+
+  function persistEmbeddingBindingNow() {
+    writeJsonStorage(EMBEDDING_MODEL_STORAGE_KEY, embeddingModelBinding.value)
+  }
+
+  function persistModelContextOverridesNow() {
+    writeJsonStorage(MODEL_CONTEXT_STORAGE_KEY, modelContextOverrides.value)
+  }
+
   const modelOptions = computed(() =>
     providers.value
       .filter(provider => provider.isActive)
@@ -529,6 +557,7 @@ export const useProviderStore = defineStore('provider', () => {
     ensureAgentModelBindings()
     ensureEmbeddingModelBinding()
     applyModelContextOverridesToProvider(provider)
+    persistProvidersNow()
     return provider
   }
 
@@ -578,6 +607,7 @@ export const useProviderStore = defineStore('provider', () => {
     applyModelContextOverridesToProvider(provider)
     ensureAgentModelBindings()
     ensureEmbeddingModelBinding()
+    persistProvidersNow()
     return provider
   }
 
@@ -598,6 +628,8 @@ export const useProviderStore = defineStore('provider', () => {
     }
     ensureAgentModelBindings()
     ensureEmbeddingModelBinding()
+    persistProvidersNow()
+    persistModelContextOverridesNow()
   }
 
   function getProviderForTier(tier: 'expert' | 'standard'): ProviderConfig | null {
@@ -633,6 +665,7 @@ export const useProviderStore = defineStore('provider', () => {
 
   function setAgentModelBinding(role: AgentType, ref: ProviderModelRef | null) {
     agentModelBindings.value[role] = ref
+    persistAgentBindingsNow()
   }
 
   function getEmbeddingModelBinding() {
@@ -641,6 +674,7 @@ export const useProviderStore = defineStore('provider', () => {
 
   function setEmbeddingModelBinding(ref: ProviderModelRef | null) {
     embeddingModelBinding.value = ref
+    persistEmbeddingBindingNow()
   }
 
   function ensureAgentModelBindings() {
@@ -653,7 +687,7 @@ export const useProviderStore = defineStore('provider', () => {
     }
 
     if (changed) {
-      writeJsonStorage(AGENT_MODEL_STORAGE_KEY, agentModelBindings.value)
+      persistAgentBindingsNow()
     }
   }
 
@@ -663,7 +697,7 @@ export const useProviderStore = defineStore('provider', () => {
     }
 
     embeddingModelBinding.value = pickEmbeddingModelRef(providers.value)
-    writeJsonStorage(EMBEDDING_MODEL_STORAGE_KEY, embeddingModelBinding.value)
+    persistEmbeddingBindingNow()
   }
 
   function getModelOptionsForRole(role: AgentType) {
@@ -732,6 +766,7 @@ export const useProviderStore = defineStore('provider', () => {
       provider.lastSyncedAt = new Date().toISOString()
       ensureAgentModelBindings()
       ensureEmbeddingModelBinding()
+      persistProvidersNow()
       return provider.models
     } catch (error) {
       normalizeProviderModels(provider)
@@ -770,6 +805,7 @@ export const useProviderStore = defineStore('provider', () => {
     ensureAgentModelBindings()
     ensureEmbeddingModelBinding()
     applyModelContextOverridesToProvider(provider)
+    persistProvidersNow()
     return nextModel
   }
 
@@ -833,6 +869,8 @@ export const useProviderStore = defineStore('provider', () => {
       model.contextTokens = null
       model.contextTokensSource = null
     }
+    persistProvidersNow()
+    persistModelContextOverridesNow()
     return true
   }
 
@@ -851,6 +889,8 @@ export const useProviderStore = defineStore('provider', () => {
     delete modelContextOverrides.value[contextOverrideKey(providerId, modelId)]
     model.contextTokens = fallback
     model.contextTokensSource = fallback ? 'fallback' : null
+    persistProvidersNow()
+    persistModelContextOverridesNow()
     return true
   }
 

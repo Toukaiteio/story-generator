@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
@@ -39,6 +39,8 @@ const form = ref({
   currentState: '',
 })
 
+const characterUnsavedNodeKey = computed(() => character.value ? `character-${character.value.id}` : '')
+
 const roleVariant = computed(() => {
   if (form.value.role === 'protagonist') return 'accent'
   if (form.value.role === 'antagonist') return 'danger'
@@ -70,6 +72,43 @@ watch(character, (c) => {
     }
   }
 }, { immediate: true })
+
+function normalizedPersonalityText(value: string) {
+  return value
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
+const isCharacterDirty = computed(() => {
+  if (!character.value) return false
+  return (
+    form.value.name !== character.value.name
+    || form.value.role !== character.value.role
+    || JSON.stringify(normalizedPersonalityText(form.value.personality)) !== JSON.stringify(character.value.personality || [])
+    || form.value.appearance !== character.value.appearance
+    || form.value.backstory !== character.value.backstory
+    || form.value.motivation !== character.value.motivation
+    || form.value.goals !== character.value.goals
+    || form.value.conflicts !== character.value.conflicts
+    || form.value.currentState !== character.value.currentState
+  )
+})
+
+watch(isCharacterDirty, dirty => {
+  const nodeKey = characterUnsavedNodeKey.value
+  if (!nodeKey) return
+  ui.setWorkspaceNodeUnsaved(nodeKey, dirty)
+}, { immediate: true })
+
+watch(characterUnsavedNodeKey, (next, previous) => {
+  if (previous && previous !== next) {
+    ui.setWorkspaceNodeUnsaved(previous, false)
+  }
+  if (next) {
+    ui.setWorkspaceNodeUnsaved(next, isCharacterDirty.value)
+  }
+})
 
 const roleOptions = [
   { label: 'Protagonist', value: 'protagonist' },
@@ -128,9 +167,25 @@ async function deleteCharacter() {
     return
   }
 
+  ui.setWorkspaceNodeUnsaved(`character-${props.characterId}`, false)
   ui.setWorkspaceNode(remaining[0] ? `character-${remaining[0].id}` : 'config')
   toast.warning(`Character "${character.value.name}" deleted`)
 }
+
+onBeforeUnmount(() => {
+  const nodeKey = characterUnsavedNodeKey.value
+  if (nodeKey && !isCharacterDirty.value) {
+    ui.setWorkspaceNodeUnsaved(nodeKey, false)
+  }
+})
+
+async function saveFromShortcut() {
+  await save()
+}
+
+defineExpose({
+  saveFromShortcut,
+})
 </script>
 
 <template>

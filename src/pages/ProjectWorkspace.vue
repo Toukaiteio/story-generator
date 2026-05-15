@@ -25,13 +25,21 @@ const projectStore = useProjectStore()
 const ui = useUiStore()
 const showUnsavedCloseDialog = ref(false)
 let removeCloseRequestListener: (() => void) | null = null
+const generationStudioRef = ref<InstanceType<typeof GenerationStudio> | null>(null)
+const storyConfigPanelRef = ref<InstanceType<typeof StoryConfigPanel> | null>(null)
+const outlinePanelRef = ref<InstanceType<typeof OutlinePanel> | null>(null)
+const characterDetailRef = ref<InstanceType<typeof CharacterDetail> | null>(null)
+const chapterEditorRefs = ref<Record<string, InstanceType<typeof ChapterEditor> | null>>({})
 
 const unsavedScan = computed(() =>
   buildUnsavedChapterLocations(projectStore.projects, ui.unsavedWorkspaceNodes, ui.chapterEditorDrafts)
 )
 const unsavedEntries = computed(() => unsavedScan.value.entries)
 const staleUnsavedChapterIds = computed(() => unsavedScan.value.staleChapterIds)
-const hasUnsavedWork = computed(() => unsavedEntries.value.length > 0)
+const hasUnsavedWorkspaceFlags = computed(() =>
+  Object.values(ui.unsavedWorkspaceNodes).some(Boolean)
+)
+const hasUnsavedWork = computed(() => unsavedEntries.value.length > 0 || hasUnsavedWorkspaceFlags.value)
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
   if (!hasUnsavedWork.value) return
@@ -65,9 +73,41 @@ function discardUnsavedAndClose() {
   window.electronAPI?.window?.confirmCloseHandled?.('discard')
 }
 
+async function handleGlobalSaveShortcut(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+  event.preventDefault()
+  if (activeView.value === 'generation') {
+    await generationStudioRef.value?.saveFromShortcut?.()
+    return
+  }
+  if (activeView.value === 'config') {
+    await storyConfigPanelRef.value?.saveFromShortcut?.()
+    return
+  }
+  if (activeView.value === 'outline') {
+    await outlinePanelRef.value?.saveFromShortcut?.()
+    return
+  }
+  if (activeView.value === 'character') {
+    await characterDetailRef.value?.saveFromShortcut?.()
+    return
+  }
+  if (activeView.value === 'chapter' && activeChapterId.value) {
+    await chapterEditorRefs.value[activeChapterId.value]?.saveFromShortcut?.()
+  }
+}
+
+function setChapterEditorRef(chapterId: string, instance: InstanceType<typeof ChapterEditor> | null) {
+  chapterEditorRefs.value = {
+    ...chapterEditorRefs.value,
+    [chapterId]: instance,
+  }
+}
+
 onMounted(async () => {
   ui.navigateTo('workspace')
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('keydown', handleGlobalSaveShortcut)
   removeCloseRequestListener = window.electronAPI?.window?.onCloseRequested?.(() => {
     if (!hasUnsavedWork.value) {
       window.electronAPI?.window?.confirmCloseHandled?.('discard')
@@ -87,6 +127,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('keydown', handleGlobalSaveShortcut)
   removeCloseRequestListener?.()
   removeCloseRequestListener = null
 })
@@ -125,6 +166,7 @@ watch(activeChapterId, chapterId => {
 
 watch(() => projectStore.activeProject?.id, () => {
   openedChapterIds.value = activeChapterId.value ? [activeChapterId.value] : []
+  chapterEditorRefs.value = {}
 })
 
 const activeCharacterId = computed(() => {
@@ -164,7 +206,7 @@ const activeView = computed(() => {
             <template v-if="activeView === 'config'">
               <PanelGroup direction="horizontal" :initial-size="350" :min-size="280" :max-size="450" limit-second>
                 <template #first>
-                  <StoryConfigPanel />
+                  <StoryConfigPanel ref="storyConfigPanelRef" />
                 </template>
                 <template #second>
                   <KnowledgeBaseSidebar />
@@ -173,19 +215,21 @@ const activeView = computed(() => {
             </template>
             
             <!-- Other views -->
-            <GenerationStudio v-if="activeView === 'generation'" />
-            <OutlinePanel v-else-if="activeView === 'outline'" />
+            <GenerationStudio v-if="activeView === 'generation'" ref="generationStudioRef" />
+            <OutlinePanel v-else-if="activeView === 'outline'" ref="outlinePanelRef" />
             <CharacterDetail
               v-else-if="activeView === 'character' && activeCharacterId"
+              ref="characterDetailRef"
               :character-id="activeCharacterId"
             />
             <StoryPreviewPanel v-else-if="activeView === 'preview'" />
-            <StoryConfigPanel v-else-if="activeView !== 'chapter' && activeView !== 'config'" />
+            <StoryConfigPanel v-else-if="activeView !== 'chapter' && activeView !== 'config'" ref="storyConfigPanelRef" />
 
             <ChapterEditor
               v-for="chapterId in openedChapterIds"
               v-show="activeView === 'chapter' && activeChapterId === chapterId"
               :key="chapterId"
+              :ref="(instance) => setChapterEditorRef(chapterId, instance as InstanceType<typeof ChapterEditor> | null)"
               :chapter-id="chapterId"
               :active="activeView === 'chapter' && activeChapterId === chapterId"
             />
@@ -200,12 +244,12 @@ const activeView = computed(() => {
         <div class="flex gap-3 rounded-lg border border-warning/20 bg-warning/8 px-4 py-3">
           <AlertTriangle :size="18" class="mt-0.5 shrink-0 text-warning" />
           <div class="space-y-1">
-            <p class="text-sm font-medium text-text-primary">{{ ui.text('You have unsaved chapter drafts.') }}</p>
-            <p class="text-sm leading-relaxed text-text-secondary">{{ ui.text('Review the locations below before closing. You can jump to an unsaved chapter or close the app without saving those drafts.') }}</p>
+            <p class="text-sm font-medium text-text-primary">{{ ui.text('You have unsaved changes.') }}</p>
+            <p class="text-sm leading-relaxed text-text-secondary">{{ ui.text('Review the locations below before closing. You can jump to an unsaved location or close the app without saving those changes.') }}</p>
           </div>
         </div>
 
-        <div class="space-y-2">
+        <div v-if="unsavedEntries.length" class="space-y-2">
           <p class="text-xs font-semibold uppercase tracking-wider text-text-muted">{{ ui.text('Unsaved locations') }}</p>
           <button
             v-for="entry in unsavedEntries"
@@ -224,6 +268,10 @@ const activeView = computed(() => {
               {{ ui.text('Locate') }}
             </span>
           </button>
+        </div>
+
+        <div v-else class="rounded-lg border border-surface-4 bg-surface-2 px-4 py-3 text-sm text-text-secondary">
+          {{ ui.text('The current workspace has unsaved changes.') }}
         </div>
       </div>
 

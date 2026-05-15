@@ -22,6 +22,8 @@ export function buildKnowledgeQuery(input: KnowledgeContextQueryInput) {
     input.genre,
     input.targetReader,
     input.language,
+    input.style,
+    input.outline,
     input.chapterTitle,
     input.chapterOutline,
     input.previousSummary,

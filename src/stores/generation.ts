@@ -23,7 +23,7 @@ import type { AgentType } from '@/types/agent'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderModelRef } from '@/types/provider'
 import type { ToolDefinition } from '@/services/provider'
-import type { FunctionCallingResponse } from '@/services/provider/types'
+import type { FunctionCallingResponse, ToolCallOptions } from '@/services/provider/types'
 import type { ChapterAuditIssue } from '@/services/generation/types'
 
 export type { ChapterAuditIssue } from '@/services/generation/types'
@@ -49,6 +49,15 @@ interface VibePlanningResult {
   characters?: Character[]
   summary: string
   toolName: string
+}
+
+type ToolStatusUpdate = {
+  name: string
+  status: 'running' | 'success' | 'warning' | 'error'
+  detail?: string
+  before?: string
+  after?: string
+  callId?: string
 }
 
 export const useGenerationStore = defineStore('generation', () => {
@@ -271,25 +280,6 @@ export const useGenerationStore = defineStore('generation', () => {
     return validateProject(projectId).chapters[targetChapterIndex]
   }
 
-  async function proofreadAllChapters(projectId: string) {
-    resetRunState(projectId)
-    try {
-      while (!cancelled.value) {
-        const project = validateProject(projectId)
-        const action = getNextAction(project)
-        if (action.stage !== 'proofreading') return project
-        streamContent.value = ''
-        await proofreadChapterAt(projectId, action.chapterIndex)
-      }
-      return validateProject(projectId)
-    } catch (error: any) {
-      addError('proofreading', error?.message || 'Proofreading failed')
-      throw error
-    } finally {
-      finishRun()
-    }
-  }
-
   async function polishChapter(projectId: string, chapterId?: string, proofreadingIssues?: any[]) {
     resetRunState(projectId)
     const project = validateProject(projectId)
@@ -347,25 +337,6 @@ export const useGenerationStore = defineStore('generation', () => {
     currentStage.value = nextAction.stage === 'done' ? 'done' : nextAction.stage
     currentChapterIndex.value = null
     return generated
-  }
-
-  async function polishAllChapters(projectId: string) {
-    resetRunState(projectId)
-    try {
-      while (!cancelled.value) {
-        const project = validateProject(projectId)
-        const action = getNextAction(project)
-        if (action.stage !== 'polishing') return project
-        streamContent.value = ''
-        await polishChapterAt(projectId, action.chapterIndex)
-      }
-      return validateProject(projectId)
-    } catch (error: any) {
-      addError('polishing', error?.message || 'Polishing failed')
-      throw error
-    } finally {
-      finishRun()
-    }
   }
 
   function cancelGeneration() {
@@ -445,7 +416,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
   function fitToolMessagesForModel(messages: ChatMessage[], modelRef: ProviderModelRef, maxTokens: number): ChatMessage[] {
     return fitMessagesToContextSmart(messages, getModelContextTokens(modelRef), maxTokens, {
-      threshold: 0.85,
+      threshold: 0.6,
       preserveRecentGroups: 4,
     }).messages
   }
@@ -559,7 +530,7 @@ export const useGenerationStore = defineStore('generation', () => {
     callbacks?: {
       onToken?: (token: string) => void
       onReasoningToken?: (token: string) => void
-      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string }) => void
+      onToolStatus?: (status: ToolStatusUpdate) => void
       onTodoList?: (state: AgentTodoListState) => void
       onPlanningResult?: (result: VibePlanningResult) => void
       signal?: AbortSignal
@@ -569,7 +540,13 @@ export const useGenerationStore = defineStore('generation', () => {
     const tools = getVibePlanningTools()
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: injectCustomSystemPrompt('You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.') },
+      { role: 'system', content: injectCustomSystemPrompt([
+        'You are a helpful writing assistant. Provide concise, actionable advice to help the user improve their story. Be creative and supportive.',
+        'Function Calling policy:',
+        '- If relevant tools are available, use Function Calling first.',
+        '- Do not return tool-eligible structured edits as plain text.',
+        '- Keep assistant text brief and let tools carry actionable output.',
+      ].join('\n')) },
       { role: 'user', content: prompt },
     ]
 
@@ -578,8 +555,60 @@ export const useGenerationStore = defineStore('generation', () => {
       const toolContext: Record<string, any> = {}
       let latestPlanningResult: VibePlanningResult | null = null
       let streamed = ''
+      let hasOutlineChange = false
+      let hasCharacterChange = false
+      const getOpenTodos = () => {
+        const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+        return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
+      }
+      const syncTodoAfterPlanningTool = (kind: 'outline' | 'characters') => {
+        const items = Array.isArray(toolContext._todoList) ? [...toolContext._todoList] : []
+        if (!items.length) return
+        let changed = false
+        for (const item of items) {
+          const title = String(item?.title ?? '').toLowerCase()
+          if (kind === 'outline' && title.includes('outline') && item.status !== 'done') {
+            item.status = 'done'
+            item.notes = 'Auto-marked done after replace_story_outline.'
+            changed = true
+            continue
+          }
+          if (kind === 'characters' && (title.includes('character') || title.includes('profiles')) && item.status !== 'done') {
+            item.status = 'done'
+            item.notes = 'Auto-marked done after replace_story_characters.'
+            changed = true
+            continue
+          }
+          if (item.status === 'in_progress') {
+            item.status = 'todo'
+            changed = true
+          }
+        }
+        if (!changed) return
+        toolContext._todoList = items
+        callbacks?.onTodoList?.({
+          agent: 'Vibe AI',
+          updatedAt: new Date().toISOString(),
+          items,
+        })
+      }
+      const forceToolChoice = (name: string): ToolCallOptions => ({
+        toolChoice: { type: 'function', function: { name } },
+      })
+      const planningToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
+        if (round === 0) return forceToolChoice('update_todolist')
+        const openTodos = getOpenTodos()
+        if (openTodos.length) {
+          if (!hasOutlineChange) return forceToolChoice('replace_story_outline')
+          if (!hasCharacterChange) return forceToolChoice('replace_story_characters')
+          return forceToolChoice('update_todolist')
+        }
+        if (!hasOutlineChange && round >= 4) return forceToolChoice('replace_story_outline')
+        if (!hasCharacterChange && round >= 5) return forceToolChoice('replace_story_characters')
+        return undefined
+      }
 
-      for (let round = 0; round < 4; round++) {
+      const runForcedTodoClosureRound = async (attempt: number) => {
         streamed = ''
         const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
           providerManager.streamWithTools(
@@ -592,14 +621,104 @@ export const useGenerationStore = defineStore('generation', () => {
                 callbacks?.onToken?.(token)
               },
               onReasoningToken: token => callbacks?.onReasoningToken?.(token),
-              onToolCall: toolCall => callbacks?.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
+              onToolCall: toolCall => callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Finalizing todo checklist.' }),
               onToolResult: () => {},
               onComplete: result => resolve(result),
               onError: error => reject(error),
             },
             4096,
             0.7,
-            undefined,
+            forceToolChoice('update_todolist'),
+            callbacks?.signal
+          ).catch(reject)
+        })
+
+        const content = response.content || streamed
+        currentMessages.push({
+          role: 'assistant',
+          content: content || null,
+          reasoning_content: response.reasoning_content ?? null,
+          tool_calls: response.tool_calls.map(toolCall => ({
+            id: toolCall.id,
+            type: 'function',
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.arguments),
+            },
+          })),
+        })
+
+        if (!response.tool_calls.length) {
+          const openTodos = getOpenTodos()
+          currentMessages.push({
+            role: 'user',
+            content: `Hard requirement: call update_todolist now. Do not answer in plain text. Mark all completed items as done and leave only real blockers as blocked. Attempt ${attempt + 1}. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ') || 'none'}.`,
+          })
+          return
+        }
+
+        for (const toolCall of response.tool_calls) {
+          if (isTodoListTool(toolCall.name)) {
+            const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+            let detail = 'Todo list updated.'
+            try {
+              const parsed = JSON.parse(result.content)
+              if (parsed?.error) detail = parsed.error
+              else if (typeof parsed?.done === 'number' && typeof parsed?.total === 'number') detail = `${parsed.done}/${parsed.total} complete.`
+            } catch {
+              // keep fallback detail
+            }
+            callbacks?.onToolStatus?.({
+              callId: toolCall.id,
+              name: toolCall.name,
+              status: result.content.includes('"ok":false') ? 'error' : 'success',
+              detail,
+            })
+            callbacks?.onTodoList?.({
+              agent: 'Vibe AI',
+              updatedAt: new Date().toISOString(),
+              items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
+            })
+            currentMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.content,
+            })
+            continue
+          }
+
+          const result = { ok: false, error: `Unsupported tool during checklist finalization: ${toolCall.name}` }
+          callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          currentMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result),
+          })
+        }
+      }
+
+      for (let round = 0; round < 8; round++) {
+        streamed = ''
+        const toolOptions = planningToolChoiceForRound(round)
+        const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
+          providerManager.streamWithTools(
+            currentMessages,
+            modelRef,
+            tools,
+            {
+              onToken: token => {
+                streamed += token
+                callbacks?.onToken?.(token)
+              },
+              onReasoningToken: token => callbacks?.onReasoningToken?.(token),
+              onToolCall: toolCall => callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
+              onToolResult: () => {},
+              onComplete: result => resolve(result),
+              onError: error => reject(error),
+            },
+            4096,
+            0.7,
+            toolOptions,
             callbacks?.signal
           ).catch(reject)
         })
@@ -607,6 +726,24 @@ export const useGenerationStore = defineStore('generation', () => {
         const content = response.content || streamed
 
         if (!response.tool_calls.length) {
+          const openTodos = getOpenTodos()
+          if (openTodos.length) {
+            callbacks?.onToolStatus?.({
+              name: 'update_todolist',
+              status: 'warning',
+              detail: `Checklist incomplete: ${openTodos.length} item(s) still open.`,
+            })
+            currentMessages.push({
+              role: 'assistant',
+              content: content || null,
+              reasoning_content: response.reasoning_content ?? null,
+            })
+            currentMessages.push({
+              role: 'user',
+              content: `Do not finish yet. The todolist is still incomplete. Mark completed items done, keep at most one item in_progress, and continue execution. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
+            })
+            continue
+          }
           return content || ''
         }
 
@@ -636,6 +773,7 @@ export const useGenerationStore = defineStore('generation', () => {
               // keep fallback detail
             }
             callbacks?.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: result.content.includes('"ok":false') ? 'error' : 'success',
               detail,
@@ -660,14 +798,16 @@ export const useGenerationStore = defineStore('generation', () => {
             const summary = String(toolCall.arguments?.summary ?? '').trim() || 'Updated story outline.'
             if (!outline) {
               const result = { ok: false, error: 'outline is required.' }
-              callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
               continue
             }
             const nextOutline = [title ? `Title: ${title}` : '', synopsis ? `Synopsis: ${synopsis}` : '', outline].filter(Boolean).join('\n\n')
             latestPlanningResult = { outline: nextOutline, summary, toolName: toolCall.name }
+            hasOutlineChange = true
+            syncTodoAfterPlanningTool('outline')
             callbacks?.onPlanningResult?.(latestPlanningResult)
-            callbacks?.onToolStatus?.({ name: toolCall.name, status: 'success', detail: summary })
+            callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: summary })
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, summary }) })
             continue
           }
@@ -678,19 +818,21 @@ export const useGenerationStore = defineStore('generation', () => {
             const summary = String(toolCall.arguments?.summary ?? '').trim() || `Updated ${characters.length} character profiles.`
             if (!characters.length) {
               const result = { ok: false, error: 'characters must contain at least one character.' }
-              callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
               continue
             }
             latestPlanningResult = { characters, summary, toolName: toolCall.name }
+            hasCharacterChange = true
+            syncTodoAfterPlanningTool('characters')
             callbacks?.onPlanningResult?.(latestPlanningResult)
-            callbacks?.onToolStatus?.({ name: toolCall.name, status: 'success', detail: summary })
+            callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: summary })
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, totalCharacters: characters.length, summary }) })
             continue
           }
 
           const result = { ok: false, error: `Unsupported tool: ${toolCall.name}` }
-          callbacks?.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+          callbacks?.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
           currentMessages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -698,12 +840,36 @@ export const useGenerationStore = defineStore('generation', () => {
           })
         }
 
+        const openTodos = getOpenTodos()
         currentMessages.push({
           role: 'user',
-          content: 'Continue from the updated todolist. If the checklist is ready, complete the user request and provide the final response.',
+          content: openTodos.length
+            ? `Continue from the updated todolist. Do not finish yet. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}. If outline is still missing, call replace_story_outline now. If characters are still missing, call replace_story_characters now.`
+            : 'Continue from the updated todolist. If the checklist is ready, complete the user request and provide the final response.',
         })
       }
 
+      let remainingTodos = getOpenTodos()
+      for (let attempt = 0; remainingTodos.length && attempt < 2; attempt++) {
+        currentMessages.push({
+          role: 'user',
+          content: `Checklist must be completed before ending. Call update_todolist now and finish status reporting. Open items: ${remainingTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
+        })
+        await runForcedTodoClosureRound(attempt)
+        remainingTodos = getOpenTodos()
+      }
+
+      if (remainingTodos.length) {
+        const missing = [
+          !hasOutlineChange ? 'replace_story_outline' : '',
+          !hasCharacterChange ? 'replace_story_characters' : '',
+        ].filter(Boolean)
+        callbacks?.onToolStatus?.({
+          name: 'update_todolist',
+          status: 'warning',
+          detail: `Checklist still incomplete after retries: ${remainingTodos.length} open item(s).${missing.length ? ` Missing tool steps: ${missing.join(', ')}` : ''}`,
+        })
+      }
       return latestPlanningResult?.summary || streamed
     } catch (error: any) {
       throw new Error(`Assistant error: ${error?.message || 'Unknown error'}`)
@@ -715,7 +881,7 @@ export const useGenerationStore = defineStore('generation', () => {
     options: {
       currentContent?: string
       modelRef?: ProviderModelRef | null
-      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string; before?: string; after?: string }) => void
+      onToolStatus?: (status: ToolStatusUpdate) => void
       onTodoList?: (state: AgentTodoListState) => void
       onToken?: (token: string) => void
       onReasoningToken?: (token: string) => void
@@ -842,6 +1008,7 @@ export const useGenerationStore = defineStore('generation', () => {
         content: injectCustomSystemPrompt([
           'You are Vibe AI inside a chapter editor.',
           'You must use a tool for every successful edit.',
+          'Prefer Function Calling for every tool-eligible step; do not solve edits in plain assistant text.',
           'For multi-step edits, call update_todolist first and update it as you inspect, edit, and complete the request.',
           'Use insert_todolist_item when you discover a new necessary step after the todo list already exists.',
           'Use modify_todolist_item to update a single todo item when only one item changes.',
@@ -881,6 +1048,15 @@ export const useGenerationStore = defineStore('generation', () => {
           items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
         })
       }
+      const forceToolChoice = (name: string): ToolCallOptions => ({
+        toolChoice: { type: 'function', function: { name } },
+      })
+      const editToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
+        if (round === 0) return forceToolChoice('update_todolist')
+        if (pendingFinalResult || getOpenTodos().length) return forceToolChoice('update_todolist')
+        if (!hasCurrentContent && round >= 1) return forceToolChoice('replace_chapter_content')
+        return undefined
+      }
 
       if (!hasCurrentContent) {
         currentMessages.push({
@@ -907,6 +1083,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
         let streamedContent = ''
         const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 8192)
+        const toolOptions = editToolChoiceForRound(round)
         const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
           providerManager.streamWithTools(
             outboundMessages,
@@ -921,7 +1098,7 @@ export const useGenerationStore = defineStore('generation', () => {
                 options.onReasoningToken?.(token)
               },
               onToolCall: toolCall => {
-                options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' })
+                options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Preparing tool call.' })
               },
               onToolResult: () => {},
               onComplete: result => {
@@ -933,7 +1110,7 @@ export const useGenerationStore = defineStore('generation', () => {
             },
             8192,
             0.5,
-            undefined,
+            toolOptions,
             options.signal
           ).catch(reject)
         })
@@ -970,7 +1147,7 @@ export const useGenerationStore = defineStore('generation', () => {
         })
 
         for (const toolCall of response.tool_calls) {
-          options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Running tool.' })
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Running tool.' })
 
           if (isTodoListTool(toolCall.name)) {
             const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
@@ -983,6 +1160,7 @@ export const useGenerationStore = defineStore('generation', () => {
               // keep fallback detail
             }
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: result.content.includes('"ok":false') ? 'error' : 'success',
               detail,
@@ -999,7 +1177,7 @@ export const useGenerationStore = defineStore('generation', () => {
             ? await handleRelationshipQueryTool(toolCall, activeProject)
             : null
           if (relationshipResult) {
-            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
             currentMessages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
@@ -1041,6 +1219,7 @@ export const useGenerationStore = defineStore('generation', () => {
             }
 
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: result.ok ? 'success' : 'error',
               detail: result.ok ? `${result.item.id}: ${result.item.title}` : result.error,
@@ -1059,7 +1238,7 @@ export const useGenerationStore = defineStore('generation', () => {
             const index = items.findIndex((item: any) => item.id === targetId)
             if (!targetId || index === -1) {
               const result = { ok: false, error: targetId ? `Todo item not found: ${targetId}` : 'id is required.' }
-              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -1073,7 +1252,7 @@ export const useGenerationStore = defineStore('generation', () => {
               : items[index].status
             if (nextStatus === 'in_progress' && items.some((item: any, itemIndex: number) => itemIndex !== index && item.status === 'in_progress')) {
               const result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
-              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -1095,7 +1274,7 @@ export const useGenerationStore = defineStore('generation', () => {
             toolContext._todoList = items
             await publishTodoList()
             const result = { ok: true, item: items[index] }
-            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: `${targetId}: ${nextStatus}` })
+            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${targetId}: ${nextStatus}` })
             currentMessages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
@@ -1112,7 +1291,7 @@ export const useGenerationStore = defineStore('generation', () => {
               characters: countSource.length,
               nonWhitespaceCharacters: countSource.replace(/\s/g, '').length,
             }
-            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: `${result.words} words.` })
+            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${result.words} words.` })
             currentMessages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
@@ -1125,6 +1304,7 @@ export const useGenerationStore = defineStore('generation', () => {
             const result = getChapterRegion(currentContent, toolCall.arguments)
             const warning = 'warning' in result && typeof result.warning === 'string' ? result.warning : ''
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: result.ok ? (warning ? 'warning' : 'success') : 'error',
               detail: result.ok && 'label' in result ? (warning || result.label) : result.error,
@@ -1153,6 +1333,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
             if (!hasCurrentContent && revisedSectionContent.trim()) {
               options.onToolStatus?.({
+                callId: toolCall.id,
                 name: toolCall.name,
                 status: 'warning',
                 detail: 'Chapter was empty; used the section replacement as the full chapter content.',
@@ -1175,7 +1356,7 @@ export const useGenerationStore = defineStore('generation', () => {
                 ok: false,
                 error: 'The targetText did not match the current chapter exactly. Use get_chapter_region to inspect the relevant lines, paragraphs, or sections, then retry replace_chapter_section with exact targetText.',
               }
-              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -1185,6 +1366,7 @@ export const useGenerationStore = defineStore('generation', () => {
             }
 
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: 'success',
               detail: 'Matched and replaced one passage.',
@@ -1206,7 +1388,7 @@ export const useGenerationStore = defineStore('generation', () => {
               : ''
             if (!revisedContent) {
               const result = { ok: false, error: 'revisedContent is required.' }
-              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -1216,6 +1398,7 @@ export const useGenerationStore = defineStore('generation', () => {
             }
 
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: 'success',
               detail: 'Prepared a complete chapter replacement.',
@@ -1253,7 +1436,7 @@ export const useGenerationStore = defineStore('generation', () => {
       currentTitle?: string
       currentOutline?: ChapterOutline
       modelRef?: ProviderModelRef | null
-      onToolStatus?: (status: { name: string; status: 'running' | 'success' | 'warning' | 'error'; detail?: string; before?: string; after?: string }) => void
+      onToolStatus?: (status: ToolStatusUpdate) => void
       onTodoList?: (state: AgentTodoListState) => void
       onToken?: (token: string) => void
       onReasoningToken?: (token: string) => void
@@ -1301,6 +1484,44 @@ export const useGenerationStore = defineStore('generation', () => {
           .filter(Boolean)
       }
       return fallback
+    }
+
+    const buildTitleFromContext = () => {
+      const candidates = [
+        currentState.title,
+        options.currentTitle,
+        currentState.outline.objective,
+        currentState.outline.conflict,
+      ]
+      for (const raw of candidates) {
+        const text = String(raw || '').trim()
+        if (!text) continue
+        const firstLine = text.split(/\r?\n/)[0]?.trim() || ''
+        if (!firstLine) continue
+        const cleaned = firstLine.replace(/^title\s*[:：]\s*/i, '').trim()
+        if (cleaned) return cleaned.slice(0, 80)
+      }
+      return 'Untitled Chapter'
+    }
+
+    const ensureNonEmptyTitle = () => {
+      const current = String(currentState.title || '').trim()
+      if (current) return current
+      const fallback = buildTitleFromContext()
+      currentState.title = fallback
+      return fallback
+    }
+
+    const getMissingOutlineFields = () => {
+      const missing: string[] = []
+      if (!String(currentState.title || '').trim()) missing.push('title')
+      if (!String(currentState.outline.objective || '').trim()) missing.push('objective')
+      if (!String(currentState.outline.conflict || '').trim()) missing.push('conflict')
+      if (!Array.isArray(currentState.outline.keyEvents) || !currentState.outline.keyEvents.some(item => String(item).trim())) missing.push('keyEvents')
+      if (!Array.isArray(currentState.outline.characterActions) || !currentState.outline.characterActions.some(item => String(item).trim())) missing.push('characterActions')
+      if (!Array.isArray(currentState.outline.infoReveals) || !currentState.outline.infoReveals.some(item => String(item).trim())) missing.push('infoReveals')
+      if (!String(currentState.outline.endingHook || '').trim()) missing.push('endingHook')
+      return missing
     }
 
     const tools: ToolDefinition[] = [
@@ -1371,6 +1592,8 @@ export const useGenerationStore = defineStore('generation', () => {
         content: injectCustomSystemPrompt([
           'You are Vibe AI inside a chapter outline editor.',
           'You must use tools for every successful outline edit.',
+          'Prefer Function Calling for every tool-eligible step; do not solve outline edits in plain assistant text.',
+          'A complete chapter plan must always include: title, objective, conflict, keyEvents, characterActions, infoReveals, and endingHook.',
           'Use get_chapter_outline before editing if the exact field content matters.',
           'Prefer replace_chapter_outline_field when the user asks to adjust one field or one list.',
           'Use rewrite_chapter_outline when multiple fields need coordinated changes.',
@@ -1399,12 +1622,37 @@ export const useGenerationStore = defineStore('generation', () => {
           items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
         })
       }
+      const forceToolChoice = (name: string): ToolCallOptions => ({
+        toolChoice: { type: 'function', function: { name } },
+      })
+      const outlineToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
+        if (round === 0) return forceToolChoice('update_todolist')
+        if (pendingFinalResult || getOpenTodos().length) return forceToolChoice('update_todolist')
+        return undefined
+      }
 
       let pendingFinalResult: { title: string; outline: ChapterOutline; summary: string; toolName: string } | null = null
       for (let round = 0; round < 6; round++) {
         if (pendingFinalResult) {
           const openTodos = getOpenTodos()
-          if (!openTodos.length) return pendingFinalResult
+          if (!openTodos.length) {
+            ensureNonEmptyTitle()
+            const missingFields = getMissingOutlineFields()
+            if (!missingFields.length) {
+              return pendingFinalResult
+            }
+            options.onToolStatus?.({
+              name: pendingFinalResult.toolName,
+              status: 'warning',
+              detail: `Outline is still incomplete: ${missingFields.join(', ')}. Requesting auto-repair.`,
+            })
+            currentMessages.push({
+              role: 'user',
+              content: `The outline is still incomplete. Missing required fields: ${missingFields.join(', ')}. Call outline tools again now to fill every missing field. Do not finish until all required fields are non-empty.`,
+            })
+            pendingFinalResult = null
+            continue
+          }
           currentMessages.push({
             role: 'user',
             content: `The outline edit is prepared, but the todolist is not complete. Mark completed items done before finishing. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
@@ -1413,6 +1661,7 @@ export const useGenerationStore = defineStore('generation', () => {
 
         let streamedContent = ''
         const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 4096)
+        const toolOptions = outlineToolChoiceForRound(round)
         const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
           providerManager.streamWithTools(
             outboundMessages,
@@ -1424,14 +1673,14 @@ export const useGenerationStore = defineStore('generation', () => {
                 options.onToken?.(token)
               },
               onReasoningToken: token => options.onReasoningToken?.(token),
-              onToolCall: toolCall => options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
+              onToolCall: toolCall => options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
               onToolResult: () => {},
               onComplete: resolve,
               onError: reject,
             },
             4096,
             0.35,
-            undefined,
+            toolOptions,
             options.signal
           ).catch(reject)
         })
@@ -1459,12 +1708,12 @@ export const useGenerationStore = defineStore('generation', () => {
         })
 
         for (const toolCall of response.tool_calls) {
-          options.onToolStatus?.({ name: toolCall.name, status: 'running', detail: 'Running tool.' })
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Running tool.' })
 
           if (isTodoListTool(toolCall.name)) {
             const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
             await publishTodoList()
-            options.onToolStatus?.({ name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
+            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: result.content })
             continue
           }
@@ -1473,7 +1722,7 @@ export const useGenerationStore = defineStore('generation', () => {
             ? await handleRelationshipQueryTool(toolCall, activeProject)
             : null
           if (relationshipResult) {
-            options.onToolStatus?.({ name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: relationshipResult.content })
             continue
           }
@@ -1493,6 +1742,7 @@ export const useGenerationStore = defineStore('generation', () => {
               ? { ok: true, field, content: value }
               : { ok: false, error: `Unknown outline field: ${field}` }
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: result.ok ? 'success' : 'error',
               detail: result.ok ? `Read ${field}.` : result.error,
@@ -1505,7 +1755,7 @@ export const useGenerationStore = defineStore('generation', () => {
             const field = String(toolCall.arguments?.field || '')
             if (!scalarFields.has(field) && !listFields.has(field)) {
               const result = { ok: false, error: `Unknown outline field: ${field}` }
-              options.onToolStatus?.({ name: toolCall.name, status: 'error', detail: result.error })
+              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
               currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
               continue
             }
@@ -1523,6 +1773,7 @@ export const useGenerationStore = defineStore('generation', () => {
             } else {
               ;(currentState.outline as any)[field] = String(toolCall.arguments?.value ?? '').trim()
             }
+            ensureNonEmptyTitle()
 
             const after = field === 'title'
               ? currentState.title
@@ -1531,6 +1782,7 @@ export const useGenerationStore = defineStore('generation', () => {
                 : (currentState.outline as any)[field]
             const result = { ok: true, field, title: currentState.title, outline: currentState.outline }
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: 'success',
               detail: `Updated ${field}.`,
@@ -1554,9 +1806,11 @@ export const useGenerationStore = defineStore('generation', () => {
               infoReveals: normalizeList(toolCall.arguments?.infoReveals),
               endingHook: String(toolCall.arguments?.endingHook ?? '').trim(),
             }
+            ensureNonEmptyTitle()
             const after = outlineToText()
             const result = { ok: true, title: currentState.title, outline: currentState.outline }
             options.onToolStatus?.({
+              callId: toolCall.id,
               name: toolCall.name,
               status: 'success',
               detail: 'Prepared complete outline revision.',
@@ -1821,8 +2075,6 @@ export const useGenerationStore = defineStore('generation', () => {
     proofreadChapterWithToolChunked,
     proofreadChapterContentWithTool,
     saveChapterProofreadingIssues,
-    proofreadAllChapters,
-    polishAllChapters,
     markCompleted,
   }
 })

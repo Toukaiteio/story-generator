@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Save, Wand2 } from 'lucide-vue-next'
 import { useProjectStore } from '@/stores/project'
 import { useProviderStore } from '@/stores/provider'
 import { useWritingStyleStore } from '@/stores/writingStyle'
+import { useUiStore } from '@/stores/ui'
 import { providerManager } from '@/services/provider'
 import { getAgent } from '@/services/agent'
 import { useToast } from '@/composables/useToast'
@@ -18,6 +19,7 @@ import type { WritingFormat } from '@/types/project'
 const projectStore = useProjectStore()
 const providerStore = useProviderStore()
 const writingStyleStore = useWritingStyleStore()
+const ui = useUiStore()
 const toast = useToast()
 const tr = translatePhrase
 
@@ -41,6 +43,7 @@ const requiredElementsText = ref('')
 const forbiddenElementsText = ref('')
 const requiredElementsPreview = computed(() => splitListInput(requiredElementsText.value))
 const forbiddenElementsPreview = computed(() => splitListInput(forbiddenElementsText.value))
+const configUnsavedNodeKey = computed(() => project.value ? `config-${project.value.id}` : '')
 
 const genreOptions = [
   { label: 'Fantasy', value: 'fantasy' },
@@ -178,6 +181,35 @@ function setGenreValue(value: unknown) {
   form.customGenre = next
 }
 
+function normalizePersonalityListText(value: string) {
+  return splitListInput(value)
+}
+
+const isConfigDirty = computed(() => {
+  if (!project.value) return false
+  const chapterCount = normalizedChapterCount()
+  const projectChapterCount = Number(project.value.chapterCount || 8)
+  const projectMaxChapters = Number(project.value.chapterConfig?.maxChapters || projectChapterCount || 8)
+  const currentLanguage = normalizeTextValue(form.language) || 'English'
+  const projectLanguage = normalizeTextValue(project.value.language) || 'English'
+  const currentRequirements = normalizeTextValue(form.customRequirements)
+  const projectRequirements = normalizeTextValue(project.value.customRequirements)
+  return (
+    normalizeTextValue(form.name) !== normalizeTextValue(project.value.name)
+    || normalizeTextValue(form.theme) !== normalizeTextValue(project.value.theme)
+    || normalizeTextValue(resolvedGenre.value) !== normalizeTextValue(project.value.genre)
+    || normalizeTextValue(form.targetReader) !== normalizeTextValue(project.value.targetReader)
+    || currentLanguage !== projectLanguage
+    || form.styleId !== (project.value.styleId || 'default')
+    || form.writingFormat !== (project.value.writingFormat || 'plaintext')
+    || chapterCount !== projectChapterCount
+    || chapterCount !== projectMaxChapters
+    || currentRequirements !== projectRequirements
+    || JSON.stringify(normalizePersonalityListText(requiredElementsText.value)) !== JSON.stringify(project.value.constraints.required || [])
+    || JSON.stringify(normalizePersonalityListText(forbiddenElementsText.value)) !== JSON.stringify(project.value.constraints.forbidden || [])
+  )
+})
+
 function stripCodeFence(content: string) {
   const trimmed = content.trim()
   if (!trimmed.startsWith('```')) return trimmed
@@ -262,6 +294,36 @@ async function save(showToast = true) {
   }
   return true
 }
+
+watch(isConfigDirty, dirty => {
+  const nodeKey = configUnsavedNodeKey.value
+  if (!nodeKey) return
+  ui.setWorkspaceNodeUnsaved(nodeKey, dirty)
+}, { immediate: true })
+
+watch(configUnsavedNodeKey, (next, previous) => {
+  if (previous && previous !== next) {
+    ui.setWorkspaceNodeUnsaved(previous, false)
+  }
+  if (next) {
+    ui.setWorkspaceNodeUnsaved(next, isConfigDirty.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  const nodeKey = configUnsavedNodeKey.value
+  if (nodeKey && !isConfigDirty.value) {
+    ui.setWorkspaceNodeUnsaved(nodeKey, false)
+  }
+})
+
+async function saveFromShortcut() {
+  await save()
+}
+
+defineExpose({
+  saveFromShortcut,
+})
 
 async function optimizeWithDetailer() {
   if (!project.value || isOptimizing.value) return

@@ -4,7 +4,7 @@ import type { Chapter } from '@/types/chapter'
 
 export type ReviewAgentStatus = 'idle' | 'waiting' | 'requesting' | 'speaking' | 'blocked'
 export type ReviewMessageRole = 'user' | 'agent' | 'system'
-export type ReviewContextElement = 'story-config' | 'master-outline' | 'characters' | 'selected-chapter' | 'chapter-plan' | 'chapter-draft'
+export type ReviewContextElement = 'story-config' | 'master-outline' | 'characters' | 'knowledge-base' | 'selected-chapter' | 'chapter-plan' | 'chapter-draft'
 
 export interface ReviewSpeechRequest {
   id: string
@@ -64,9 +64,11 @@ export interface ReviewAskUserSession {
 }
 
 export type ReviewChangeTarget = 'master-outline' | 'chapter-plan' | 'characters' | 'consensus'
+export type ReviewChangeAction = 'create' | 'read' | 'update' | 'delete'
 
 export interface ReviewChangeRequest {
   target: ReviewChangeTarget
+  action: ReviewChangeAction
   scope: string
   purpose: string
   content: string

@@ -149,6 +149,8 @@ Return a corrected response only. Keep the original intent intact. Do not add ma
     return `${systemPrompt}
 
 Base tool available to every agent:
+- When tools are available, prefer Function Calling first. Do not solve tool-eligible actions in plain assistant text.
+- If any available tool can perform or report the requested work, call that tool instead of returning prose.
 - For complex work with several dependent steps, use update_todolist to create a short checklist before acting and update it as progress is made.
 - Keep only one item in_progress at a time. Mark completed work as done. Use blocked only when a real blocker prevents progress.
 - The todolist is for task control, not user-facing prose; continue using the agent-specific final tool or final response required by the task.
@@ -169,7 +171,7 @@ Base tool available to every agent:
       messages,
       this.contextTokens,
       this.maxTokens,
-      { threshold: 0.85, preserveRecentGroups: 4 }
+      { threshold: 0.6, preserveRecentGroups: 4 }
     )
 
     if (compressed) {

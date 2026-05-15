@@ -1,4 +1,4 @@
-export default {
+﻿export default {
   common: {
     save: '保存',
     cancel: '取消',
@@ -346,7 +346,6 @@ export default {
     'You': '你',
     'Vibe Engine': 'Vibe 引擎',
     'System': '系统',
-    'Apply to Editor': '应用到编辑器',
     'Copy': '复制',
     'Vibe Engine Thinking...': 'Vibe 引擎思考中...',
     'Describe a vibe, ask for advice...': '描述想要的氛围，或提出修改建议...',
@@ -354,7 +353,6 @@ export default {
     'Shift + Enter for new line': 'Shift + Enter 换行',
     'Tool edit mode': '工具编辑模式',
     'Powered by Vibe Engine v2': '由 Vibe Engine v2 提供支持',
-    'Applied to editor': '已应用到编辑器',
     'Copied to clipboard': '已复制到剪贴板',
     'Connection lost': '连接中断',
     'System error: Unable to reach Vibe Engine.': '系统错误：无法连接 Vibe 引擎。',

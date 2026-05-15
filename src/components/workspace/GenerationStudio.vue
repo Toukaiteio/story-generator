@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { generateId } from '@/lib/id'
 import { useProjectStore } from '@/stores/project'
 import { useGenerationStore, type ChapterAuditIssue } from '@/stores/generation'
@@ -141,11 +141,35 @@ const chapterProofreadingIssues = ref<Record<string, any[]>>({})
 const isQuickSubmittingPolish = ref(false)
 const vibeAiLoading = ref(false)
 const activeAiTaskRunning = computed(() => genStore.isGenerating || vibeAiLoading.value || isQuickSubmittingPolish.value)
+const aiSidebarStyle = computed(() => ({ width: `${ui.aiSidebarWidth}px` }))
+const planningUnsavedNodeKey = computed(() => project.value ? `planning-${project.value.id}` : '')
+const chaptersUnsavedNodeKey = computed(() => project.value ? `chapters-${project.value.id}` : '')
+let resizingAiSidebar = false
+let sidebarResizeStartX = 0
+let sidebarResizeStartWidth = 0
+let vibeAutoSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleVibeAutoSave(target: 'planning' | 'chapters') {
+  if (!project.value) return
+  if (vibeAutoSaveTimer) {
+    clearTimeout(vibeAutoSaveTimer)
+    vibeAutoSaveTimer = null
+  }
+  vibeAutoSaveTimer = setTimeout(() => {
+    vibeAutoSaveTimer = null
+    if (target === 'planning') {
+      void savePlanning(false)
+      return
+    }
+    void saveChapters(false)
+  }, 240)
+}
 
 function handleVibeApply(content: string) {
   if (activeStage.value === 'planning') {
     if (planningSubTab.value === 'outline') {
       outlineDraft.value = content
+      scheduleVibeAutoSave('planning')
     }
   } else if (activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing') {
     if (selectedChapter.value) {
@@ -157,6 +181,7 @@ function handleVibeApply(content: string) {
           chapterNumber: selectedChapter.value.index + 1,
         })
         : content)
+      scheduleVibeAutoSave('chapters')
     }
   }
 }
@@ -174,10 +199,12 @@ function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outl
     infoReveals: Array.isArray(payload.outline.infoReveals) ? payload.outline.infoReveals : [],
     endingHook: payload.outline.endingHook || '',
   }
+  scheduleVibeAutoSave('chapters')
 }
 
 function handleVibePlanningOutline(payload: { outline: string }) {
   outlineDraft.value = payload.outline
+  scheduleVibeAutoSave('planning')
   toast.success('Story outline updated')
 }
 
@@ -187,7 +214,34 @@ function handleVibePlanningCharacters(payload: { characters: Character[] }) {
   charactersDraft.value = nextCharacters
   selectedCharacterId.value = nextCharacters[0]?.id ?? null
   planningSubTab.value = 'characters'
+  scheduleVibeAutoSave('planning')
   toast.success('Characters updated')
+}
+
+function onAiSidebarResizeMove(event: MouseEvent) {
+  if (!resizingAiSidebar) return
+  const delta = sidebarResizeStartX - event.clientX
+  ui.setAiSidebarWidth(sidebarResizeStartWidth + delta)
+}
+
+function stopAiSidebarResize() {
+  if (!resizingAiSidebar) return
+  resizingAiSidebar = false
+  window.removeEventListener('mousemove', onAiSidebarResizeMove)
+  window.removeEventListener('mouseup', stopAiSidebarResize)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+}
+
+function startAiSidebarResize(event: MouseEvent) {
+  if (event.button !== 0) return
+  resizingAiSidebar = true
+  sidebarResizeStartX = event.clientX
+  sidebarResizeStartWidth = ui.aiSidebarWidth
+  window.addEventListener('mousemove', onAiSidebarResizeMove)
+  window.addEventListener('mouseup', stopAiSidebarResize)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
 }
 
 function buildVibeWorkspaceSnapshot() {
@@ -351,38 +405,6 @@ async function proofreadCurrentChapter() {
   }
 }
 
-async function proofreadAllChapters() {
-  if (!project.value || genStore.isGenerating) return
-
-  const allChapters = chaptersDraft.value
-  genStore.beginManualTask('proofreading', 'Proofreading all chapters...', allChapters[0]?.index ?? null)
-  try {
-    for (const chapter of allChapters) {
-      selectedChapterId.value = chapter.id
-      genStore.updateManualTask(`Proofreading chapter ${chapter.index + 1} of ${allChapters.length}...`, chapter.index)
-      await nextTick()
-
-      if (proofreadingAssistant.value) {
-        await proofreadingAssistant.value.proofread()
-        // Wait a bit between chapters to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500))
-      }
-    }
-
-    // Auto-save after scanning all chapters
-    await saveChapters()
-
-    // Move to the optional polish workspace without recording a stage-complete state.
-    activeStage.value = 'polishing'
-    ui.setWorkspaceNode('generation-polishing')
-    selectedChapterId.value = allChapters[0]?.id ?? null
-
-    toast.success('All chapters proofread. Optional polish stage is available.')
-  } finally {
-    genStore.finishManualTask()
-  }
-}
-
 async function polishCurrentChapter(targetIssue?: ChapterAuditIssue) {
   if (!project.value || !selectedChapterId.value || genStore.isGenerating) return
   isQuickSubmittingPolish.value = true
@@ -406,17 +428,6 @@ async function polishCurrentChapter(targetIssue?: ChapterAuditIssue) {
     toast.error(error?.message || 'Polishing failed')
   } finally {
     isQuickSubmittingPolish.value = false
-  }
-}
-
-async function polishAllChapters() {
-  if (!project.value || genStore.isGenerating) return
-  try {
-    await genStore.polishAllChapters(project.value.id)
-    syncFromProject()
-    toast.success('All chapters polished')
-  } catch (error: any) {
-    toast.error(error?.message || 'Polishing failed')
   }
 }
 
@@ -505,6 +516,27 @@ const selectedCharacter = computed(() =>
   charactersDraft.value.find(character => character.id === selectedCharacterId.value) ?? null
 )
 
+const isPlanningDirty = computed(() => {
+  if (!project.value) return false
+  if (outlineDraft.value !== project.value.outline) return true
+  return JSON.stringify(cloneCharacters(charactersDraft.value)) !== JSON.stringify(cloneCharacters(project.value.characters))
+})
+
+const isChaptersDirty = computed(() => {
+  if (!project.value) return false
+  const nextChapters = cloneChapters(chaptersDraft.value)
+  const projectChapters = cloneChapters(project.value.chapters || [])
+  const nextCount = Math.max(project.value.chapterCount, nextChapters.length)
+  const projectCount = Number(project.value.chapterCount || 0)
+  const nextMax = Math.max(project.value.chapterConfig?.maxChapters ?? 1, nextCount)
+  const projectMax = Number(project.value.chapterConfig?.maxChapters || 0)
+  return (
+    JSON.stringify(nextChapters) !== JSON.stringify(projectChapters)
+    || nextCount !== projectCount
+    || nextMax !== projectMax
+  )
+})
+
 const selectedChapter = computed(() =>
   chaptersDraft.value.find(chapter => chapter.id === selectedChapterId.value) ?? null
 )
@@ -587,6 +619,7 @@ const canGenerateCharactersFromOutline = computed(() => Boolean(outlineDraft.val
 const requireVibeTodoListToolInstruction = [
   'Before doing any generation or edit, explicitly use the todolist tool to create a concise checklist for this task.',
   'Keep at most one todo item in_progress at a time, update the checklist as you work, and mark all completed items done before the final response.',
+  'Function Calling is the first choice: if a relevant tool exists, call the tool instead of returning plain text.',
   'Treat the Story Configuration in the Context section as mandatory source-of-truth input. Do not ignore theme, genre, target reader, language, chapter count, required elements, forbidden elements, custom requirements, writing format, or writing style.',
 ].join('\n')
 
@@ -594,6 +627,8 @@ const vibeGenerationCommands: Record<string, string> = {
   'generate-story-plan': [
     requireVibeTodoListToolInstruction,
     'Generate or rewrite the story plan for this project.',
+    'Important scope: the "story outline" in this stage means the master outline for the whole story (global narrative arc), not per-chapter outlines.',
+    'Do not output chapter-by-chapter planning fields (such as chapter title/objective/conflict/key events per chapter) in this step unless the user explicitly asks to switch to chapter planning.',
     'Update the master outline first. Then propose any character changes needed to support the outline.',
     'Use the current story configuration, language, genre, theme, constraints, writing format, writing style, and existing characters as source context.',
     'Relationship query tools are not available in this planning stage. Do not try to look up relationship data; infer only from the current outline and character list.',
@@ -613,12 +648,6 @@ const vibeGenerationCommands: Record<string, string> = {
     'Fill every chapter planning field: title, objective, conflict, plot beats, character actions, reveals, and ending hook.',
     'Use the chapter outline tools to apply the result directly.',
   ].join('\n\n'),
-  'generate-all-chapter-plans': [
-    requireVibeTodoListToolInstruction,
-    'Regenerate the full chapter plan for this project.',
-    'Create a coherent chapter-by-chapter structure that fits the configured chapter count and preserves the story outline, character constraints, and required plot logic.',
-    'Use the available outline editing tools to update the selected chapter when applicable. If full-project chapter tools are not available in this Vibe context, explain the proposed full plan clearly instead of silently doing nothing.',
-  ].join('\n\n'),
   'review-current-chapter-plan': [
     requireVibeTodoListToolInstruction,
     'Quickly self-review the selected chapter plan for obvious logic, pacing, continuity, and character-use problems.',
@@ -630,23 +659,11 @@ const vibeGenerationCommands: Record<string, string> = {
     'Use the project language, writing format, writing style, story outline, character context, and continuity requirements.',
     'Return the complete revised chapter content through the chapter editing tool.',
   ].join('\n\n'),
-  'generate-all-drafts': [
-    requireVibeTodoListToolInstruction,
-    'Generate chapter drafts for the manuscript starting from the selected chapter context.',
-    'If this Vibe context can only edit one chapter at a time, draft the currently selected chapter completely and state which chapter should be sent next.',
-    'Use the project language, writing format, writing style, story outline, chapter plans, characters, and continuity requirements.',
-  ].join('\n\n'),
   'polish-current': [
     requireVibeTodoListToolInstruction,
     'Polish the currently selected chapter.',
     'Improve prose quality, rhythm, clarity, emotional resonance, and style consistency while preserving plot, facts, character intent, and formatting.',
     'Return the complete polished chapter through the chapter editing tool.',
-  ].join('\n\n'),
-  'polish-all': [
-    requireVibeTodoListToolInstruction,
-    'Polish the manuscript starting from the selected chapter context.',
-    'If this Vibe context can only edit one chapter at a time, polish the currently selected chapter completely and state which chapter should be sent next.',
-    'Preserve plot, facts, character intent, continuity, and formatting while improving prose quality and style consistency.',
   ].join('\n\n'),
 }
 
@@ -767,6 +784,36 @@ watch(() => ui.activeWorkspaceNode, (node) => {
   }
 }, { immediate: true })
 
+watch(isPlanningDirty, dirty => {
+  const nodeKey = planningUnsavedNodeKey.value
+  if (!nodeKey) return
+  ui.setWorkspaceNodeUnsaved(nodeKey, dirty)
+}, { immediate: true })
+
+watch(planningUnsavedNodeKey, (next, previous) => {
+  if (previous && previous !== next) {
+    ui.setWorkspaceNodeUnsaved(previous, false)
+  }
+  if (next) {
+    ui.setWorkspaceNodeUnsaved(next, isPlanningDirty.value)
+  }
+})
+
+watch(isChaptersDirty, dirty => {
+  const nodeKey = chaptersUnsavedNodeKey.value
+  if (!nodeKey) return
+  ui.setWorkspaceNodeUnsaved(nodeKey, dirty)
+}, { immediate: true })
+
+watch(chaptersUnsavedNodeKey, (next, previous) => {
+  if (previous && previous !== next) {
+    ui.setWorkspaceNodeUnsaved(previous, false)
+  }
+  if (next) {
+    ui.setWorkspaceNodeUnsaved(next, isChaptersDirty.value)
+  }
+})
+
 function selectStage(stage: StageKey) {
   activeStage.value = stage
   ui.setWorkspaceNode(`generation-${stage}`)
@@ -784,7 +831,7 @@ async function markProjectDirty() {
   }
 }
 
-async function savePlanning() {
+async function savePlanning(showToast = true) {
   if (!project.value) return
   const saved = await projectStore.updateProject(project.value.id, {
     outline: outlineDraft.value,
@@ -794,7 +841,19 @@ async function savePlanning() {
     toast.error('Failed to save story plan')
     return
   }
-  toast.success('Story plan saved')
+  if (showToast) toast.success('Story plan saved')
+}
+
+async function saveFromShortcut() {
+  if (!project.value || genStore.isGenerating) return
+  if (activeStage.value === 'planning') {
+    await savePlanning()
+    return
+  }
+  if (activeStage.value === 'chapter-outline' || activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing') {
+    await saveChapters(false)
+    toast.success('Saved')
+  }
 }
 
 async function saveChapters(showToast = true) {
@@ -1035,6 +1094,26 @@ function updateCurrentChapterText(text: string) {
     chapter.status = 'draft'
   }
 }
+
+onBeforeUnmount(() => {
+  const nodeKey = planningUnsavedNodeKey.value
+  if (nodeKey && !isPlanningDirty.value) {
+    ui.setWorkspaceNodeUnsaved(nodeKey, false)
+  }
+  const chaptersNodeKey = chaptersUnsavedNodeKey.value
+  if (chaptersNodeKey && !isChaptersDirty.value) {
+    ui.setWorkspaceNodeUnsaved(chaptersNodeKey, false)
+  }
+  if (vibeAutoSaveTimer) {
+    clearTimeout(vibeAutoSaveTimer)
+    vibeAutoSaveTimer = null
+  }
+  stopAiSidebarResize()
+})
+
+defineExpose({
+  saveFromShortcut,
+})
 </script>
 
 <template>
@@ -1208,7 +1287,6 @@ function updateCurrentChapterText(text: string) {
               <BaseButton variant="ghost" size="sm" class="!h-8" @click="addChapter"><Plus :size="14" class="mr-1.5" />{{ ui.text('Add Chapter') }}</BaseButton>
               <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('smart-chapter-plan')"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(shouldGenerateCurrentChapterPlan ? currentChapterPlanActionLabel : 'Generate Next Chapter') }}</BaseButton>
               <BaseButton v-if="selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('review-current-chapter-plan')"><CheckCircle2 :size="14" class="mr-1.5" />{{ ui.text('Quick Review & Rewrite') }}</BaseButton>
-              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('generate-all-chapter-plans')"><Wand2 :size="14" class="mr-1.5" />{{ ui.text('AI Generate') }}</BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save Chapters') }}</BaseButton>
               </div>
             </div>
@@ -1340,24 +1418,15 @@ function updateCurrentChapterText(text: string) {
             </div>
             <div class="flex items-center gap-2">
               <BaseButton
-                variant="secondary"
-                size="sm"
-                class="!h-8"
-                :loading="genStore.isGenerating"
-                @click="activeStage === 'writing' ? sendGenerationCommandToVibe('generate-current-draft') : activeStage === 'proofreading' ? proofreadCurrentChapter() : sendGenerationCommandToVibe('polish-current')"
-              >
-                <Sparkles :size="14" class="mr-1.5" />
-                <span>{{ ui.text(activeStage === 'writing' ? 'Generate Current' : activeStage === 'proofreading' ? 'Proofread Current' : 'Polish Current') }}</span>
-              </BaseButton>
-              <BaseButton
                 :variant="activeAiTaskRunning ? 'danger' : 'secondary'"
                 size="sm"
                 class="!h-8"
-                @click="activeAiTaskRunning ? stopActiveAiTask() : activeStage === 'writing' ? sendGenerationCommandToVibe('generate-all-drafts') : activeStage === 'proofreading' ? proofreadAllChapters() : sendGenerationCommandToVibe('polish-all')"
+                :loading="genStore.isGenerating"
+                @click="activeAiTaskRunning ? stopActiveAiTask() : activeStage === 'writing' ? sendGenerationCommandToVibe('generate-current-draft') : activeStage === 'proofreading' ? proofreadCurrentChapter() : sendGenerationCommandToVibe('polish-current')"
               >
                 <Square v-if="activeAiTaskRunning" :size="14" class="mr-1.5" />
                 <Sparkles v-else :size="14" class="mr-1.5" />
-                <span>{{ ui.text(activeAiTaskRunning ? 'Stop' : activeStage === 'writing' ? 'Generate All' : activeStage === 'proofreading' ? 'Proofread All' : 'Polish All') }}</span>
+                <span>{{ ui.text(activeAiTaskRunning ? 'Stop' : activeStage === 'writing' ? 'Generate Current' : activeStage === 'proofreading' ? 'Proofread Current' : 'Polish Current') }}</span>
               </BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save') }}</BaseButton>
             </div>
@@ -1424,7 +1493,16 @@ function updateCurrentChapterText(text: string) {
       </div>
 
       <!-- Integrated Assistant Sidebar -->
-      <div v-if="activeStage !== 'chapter-outline-review'" class="w-80 lg:w-96 border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block">
+      <div
+        v-if="activeStage !== 'chapter-outline-review'"
+        class="relative border-l border-surface-4 bg-surface-1 shrink-0 hidden md:block"
+        :style="aiSidebarStyle"
+      >
+        <button
+          class="absolute left-0 top-0 z-20 h-full w-2 -translate-x-1/2 cursor-col-resize border-0 bg-transparent p-0 outline-none hover:bg-accent/10"
+          :title="ui.text('Drag to resize sidebar')"
+          @mousedown.prevent="startAiSidebarResize"
+        />
         <ProofreadingAssistant
           v-if="activeStage === 'proofreading' && selectedChapter"
           ref="proofreadingAssistant"

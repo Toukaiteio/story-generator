@@ -246,7 +246,7 @@ function flattenGroups(groups: MessageGroup[]): ChatMessage[] {
 export function compressMessages(
   messages: ChatMessage[],
   budget: ContextBudget,
-  threshold: number = 0.85
+  threshold: number = 0.6
 ): CompressionResult {
   const totalTokens = estimateMessagesTokens(messages)
 
@@ -333,7 +333,7 @@ export function fitMessagesToContextSmart(
     return { messages, compressed: false, details: emptyDetails }
   }
 
-  const threshold = options.threshold ?? 0.85
+  const threshold = options.threshold ?? 0.6
   const preserveRecentGroups = options.preserveRecentGroups ?? 4
   const budget = calculateBudget(contextTokens, maxOutputTokens)
   const totalTokens = emptyDetails.originalTokens
@@ -441,7 +441,7 @@ export function fitToContext(
   messages: ChatMessage[],
   contextTokens: number | null | undefined,
   maxOutputTokens: number,
-  threshold: number = 0.85
+  threshold: number = 0.6
 ): { messages: ChatMessage[]; compressed: boolean; details: CompressionResult } {
   if (!contextTokens || contextTokens <= 0) {
     // No context limit known — pass through as-is

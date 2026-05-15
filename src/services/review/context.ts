@@ -12,6 +12,84 @@ import type {
   ReviewAskUserSession,
 } from './types'
 import { elementLink } from './utils'
+import { useKnowledgeStore } from '@/stores/knowledge'
+import { buildKnowledgeContext, buildKnowledgeQuery } from '@/services/knowledge/context'
+import { estimateTokens } from '@/services/context'
+
+const REVIEW_CONTEXT_DEFAULT_BUDGET_TOKENS = 5600
+
+const REVIEW_ELEMENT_TOKEN_BUDGET: Record<ReviewContextElement, number> = {
+  'story-config': 700,
+  'master-outline': 1500,
+  'characters': 1300,
+  'knowledge-base': 1400,
+  'selected-chapter': 500,
+  'chapter-plan': 1200,
+  'chapter-draft': 1300,
+}
+
+function truncateToTokenBudget(text: string, maxTokens: number, notice = 'Content truncated to fit context budget.'): string {
+  const normalized = String(text || '')
+  if (!normalized.trim()) return normalized
+  if (maxTokens <= 0) return `[${notice}]`
+  if (estimateTokens(normalized) <= maxTokens) return normalized
+
+  let low = 0
+  let high = normalized.length
+  let best = ''
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2)
+    const candidate = normalized.slice(0, mid).trimEnd()
+    const candidateWithNotice = `${candidate}\n\n[${notice}]`
+    if (estimateTokens(candidateWithNotice) <= maxTokens) {
+      best = candidate
+      low = mid + 1
+    } else {
+      high = mid - 1
+    }
+  }
+
+  return `${best.trimEnd()}\n\n[${notice}]`
+}
+
+function buildKnowledgeReferenceContext(context: MultiAgentReviewContext) {
+  const project = context.project
+  if (!project) return 'No active project is selected.'
+  if (!Array.isArray(project.knowledgeBaseIds) || project.knowledgeBaseIds.length === 0) {
+    return 'No knowledge bases are linked to this project.'
+  }
+
+  const knowledgeStore = useKnowledgeStore()
+  const linkedBases = knowledgeStore.knowledgeBases.filter(base => project.knowledgeBaseIds.includes(base.id))
+  if (!linkedBases.length) return 'Linked knowledge bases were not found in local storage.'
+
+  const withDocs = linkedBases.filter(base => base.documents.length > 0)
+  if (!withDocs.length) {
+    return [
+      `Linked knowledge bases: ${linkedBases.map(base => base.name).join(', ')}`,
+      'None of the linked bases currently has documents.',
+    ].join('\n')
+  }
+
+  const chapter = context.chapter
+  const knowledgeQuery = buildKnowledgeQuery({
+    theme: project.theme,
+    genre: project.genre,
+    targetReader: project.targetReader,
+    language: project.language,
+    style: project.writingStyleSnapshot?.content || project.style || '',
+    customRequirements: project.customRequirements,
+    outline: context.outline || project.outline || '',
+    chapterTitle: chapter?.title || '',
+    chapterOutline: chapter ? JSON.stringify(chapter.outline) : '',
+    content: chapter?.content || '',
+  })
+  const contextText = buildKnowledgeContext(withDocs, knowledgeQuery, 2200)
+  return [
+    `Linked knowledge bases: ${linkedBases.map(base => base.name).join(', ')}`,
+    contextText.trim() || 'No relevant knowledge snippets were retrieved for the current meeting context.',
+  ].join('\n\n')
+}
 
 function buildElementContext(context: MultiAgentReviewContext, element: ReviewContextElement) {
   const project = context.project
@@ -19,7 +97,7 @@ function buildElementContext(context: MultiAgentReviewContext, element: ReviewCo
   if (!project) return 'No active project is selected.'
 
   if (element === 'story-config') {
-    return [
+    return truncateToTokenBudget([
       `${elementLink('story-config', 'Story Configuration')}`,
       `Project: ${project.name || 'Untitled'}`,
       `Theme: ${project.theme || 'Not set'}`,
@@ -31,48 +109,87 @@ function buildElementContext(context: MultiAgentReviewContext, element: ReviewCo
       `Required Elements: ${project.constraints.required.length ? project.constraints.required.join(', ') : 'None'}`,
       `Forbidden Elements: ${project.constraints.forbidden.length ? project.constraints.forbidden.join(', ') : 'None'}`,
       project.customRequirements ? `Custom Requirements: ${project.customRequirements}` : 'Custom Requirements: None',
-    ].join('\n')
+    ].join('\n'), REVIEW_ELEMENT_TOKEN_BUDGET['story-config'])
   }
 
   if (element === 'master-outline') {
-    return `${elementLink('master-outline', 'Master Outline')}\n${context.outline || project.outline || 'Not set'}`
+    return truncateToTokenBudget(
+      `${elementLink('master-outline', 'Master Outline')}\n${context.outline || project.outline || 'Not set'}`,
+      REVIEW_ELEMENT_TOKEN_BUDGET['master-outline']
+    )
   }
 
   if (element === 'characters') {
-    return `${elementLink('characters', 'Characters')}\n${context.characters || 'None'}`
+    return truncateToTokenBudget(
+      `${elementLink('characters', 'Characters')}\n${context.characters || 'None'}`,
+      REVIEW_ELEMENT_TOKEN_BUDGET['characters']
+    )
+  }
+
+  if (element === 'knowledge-base') {
+    return truncateToTokenBudget(
+      `${elementLink('knowledge-base', 'Knowledge Base')}\n${buildKnowledgeReferenceContext(context)}`,
+      REVIEW_ELEMENT_TOKEN_BUDGET['knowledge-base']
+    )
   }
 
   if (!chapter) return 'No chapter is selected.'
 
   if (element === 'selected-chapter') {
-    return [
+    return truncateToTokenBudget([
       `${elementLink('selected-chapter', `Chapter ${chapter.index + 1}`)}`,
       `Title: ${chapter.title || 'Untitled'}`,
       `Summary: ${chapter.summary || 'None'}`,
       `Status: ${chapter.status}`,
-    ].join('\n')
+    ].join('\n'), REVIEW_ELEMENT_TOKEN_BUDGET['selected-chapter'])
   }
 
   if (element === 'chapter-draft') {
-    return `${elementLink('chapter-draft', `Chapter ${chapter.index + 1} Draft`)}\n${chapter.content?.trim() ? chapter.content.slice(0, 5000) : 'No draft content yet.'}`
+    return truncateToTokenBudget(
+      `${elementLink('chapter-draft', `Chapter ${chapter.index + 1} Draft`)}\n${chapter.content?.trim() ? chapter.content : 'No draft content yet.'}`,
+      REVIEW_ELEMENT_TOKEN_BUDGET['chapter-draft']
+    )
   }
 
-  return `${elementLink('chapter-plan', `Chapter ${chapter.index + 1} Plan`)}\n${JSON.stringify(chapter.outline, null, 2)}`
+  return truncateToTokenBudget(
+    `${elementLink('chapter-plan', `Chapter ${chapter.index + 1} Plan`)}\n${JSON.stringify(chapter.outline, null, 2)}`,
+    REVIEW_ELEMENT_TOKEN_BUDGET['chapter-plan']
+  )
 }
 
-export function buildProjectContext(context: MultiAgentReviewContext, elements: ReviewContextElement[]) {
-  const selected: ReviewContextElement[] = elements.length ? elements : ['story-config', 'master-outline', 'characters', 'chapter-plan']
+export function buildProjectContext(
+  context: MultiAgentReviewContext,
+  elements: ReviewContextElement[],
+  maxTokens = REVIEW_CONTEXT_DEFAULT_BUDGET_TOKENS
+) {
+  const selected: ReviewContextElement[] = elements.length ? elements : ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
+  const header = 'Meeting Context Elements:'
+  const footer = 'Reference rule: cite locations using [[element:label]] markers when possible. Short-form [[element]] references are also allowed.'
+  let used = estimateTokens(`${header}\n${footer}`)
+  const sections: string[] = []
 
-  return [
-    'Meeting Context Elements:',
-    ...selected.map(element => buildElementContext(context, element)),
-    '',
-    'Reference rule: cite locations using [[element:label]] markers when possible. Short-form [[element]] references are also allowed.',
-  ].join('\n')
+  for (const element of selected) {
+    const remaining = maxTokens - used
+    if (remaining <= 180) {
+      sections.push(`[${element}] Skipped due to context budget.`)
+      continue
+    }
+
+    const elementBudget = Math.min(REVIEW_ELEMENT_TOKEN_BUDGET[element], Math.max(180, remaining))
+    const section = truncateToTokenBudget(
+      buildElementContext(context, element),
+      elementBudget,
+      `${element} context truncated to fit meeting context budget.`
+    )
+    sections.push(section)
+    used += estimateTokens(section)
+  }
+
+  return [header, ...sections, '', footer].join('\n')
 }
 
 export function selectedContextElementsSafe(_context: MultiAgentReviewContext): ReviewContextElement[] {
-  return ['story-config', 'master-outline', 'characters', 'chapter-plan']
+  return ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
 }
 
 export function buildAgentMessages(
@@ -134,7 +251,7 @@ export function buildAgentMessages(
     '  - [CALL_AGENT: agentId]: Explicitly request another agent to speak next to respond to your points.',
     '  - [REQUEST_SPEECH]: Request another turn for yourself if you have more to add after others speak.',
     '  - [PROPOSE_FOCUS: new focus]: Suggest shifting the meeting focus.',
-    '  - [REQUEST_CHANGE]: Propose a concrete edit to project data (outline, chapter plan, characters, or shared consensus).',
+    '  - [REQUEST_CHANGE]: Propose a concrete edit to project data (outline, chapter plan, characters, or shared consensus). Include action: create|read|update|delete whenever possible.',
     '  - [ASK_USER]: Request clarification from the user.',
     '  - [REQUEST_END: reason]: Propose ending the meeting.',
     '',
@@ -324,6 +441,7 @@ export function buildChangeVoteMessages(
         '',
         `Change Request From ${session.requestedByAgentName}:`,
         `Target: ${session.request.target}`,
+        `Action: ${session.request.action}`,
         `Scope: ${session.request.scope}`,
         `Purpose: ${session.request.purpose}`,
         `Proposed Content:\n${session.request.content}`,
@@ -398,7 +516,7 @@ export function buildSkillAgentMessages(
         'Do not turn abstract roles, themes, relationship concepts, or outline-only mentions into character entities.',
         'For each executable change, plan the intent, analyze the affected project element, prepare normalized content, and include a verification summary.',
         'Prefer valid JSON with this shape, but if impossible return clear structured prose; the local tool will still infer from it:',
-        '{ "target": "master-outline|chapter-plan|characters|consensus", "scope": "...", "purpose": "...", "content": ..., "verification": "..." }',
+        '{ "target": "master-outline|chapter-plan|characters|consensus", "action": "create|read|update|delete", "scope": "...", "purpose": "...", "content": ..., "verification": "..." }',
         'For target characters, content can be an array of character objects, bullets, or prose listing names and traits.',
         'For target chapter-plan, content must be an object with optional title and outline fields or the outline fields directly.',
         'For target master-outline or consensus, content can be a string.',
@@ -411,6 +529,7 @@ export function buildSkillAgentMessages(
         '',
         'Approved Proposal:',
         `Target: ${session.request.target}`,
+        `Action: ${session.request.action}`,
         `Scope: ${session.request.scope}`,
         `Purpose: ${session.request.purpose}`,
         `Content:\n${session.request.content}`,

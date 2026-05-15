@@ -44,6 +44,10 @@ const assistantTab = ref<'outline' | 'vibe' | 'editing'>('outline')
 const vibeAssistant = ref<InstanceType<typeof VibeAssistant> | null>(null)
 const contentPreviewRef = ref<HTMLElement | null>(null)
 const selectedProofreadingIssue = ref<any | null>(null)
+const aiSidebarStyle = computed(() => ({ width: `${ui.aiSidebarWidth}px` }))
+let resizingAiSidebar = false
+let sidebarResizeStartX = 0
+let sidebarResizeStartWidth = 0
 const outlineObjective = ref('')
 const outlineConflict = ref('')
 const outlineKeyEvents = ref('')
@@ -236,50 +240,45 @@ function setWindowUnsavedState(value: boolean) {
   ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, value)
 }
 
-function handleBeforeUnload(event: BeforeUnloadEvent) {
-  if (!isDirty.value && !Object.keys(ui.chapterEditorDrafts).length) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-
 onBeforeUnmount(() => {
+  stopAiSidebarResize()
   if (outlineSaveTimer) {
     void saveOutlineNow()
   }
   if (isDirty.value) {
     cacheCurrentDraft()
   }
-  deactivateEditorListeners()
   if (!isDirty.value) {
     const chapterId = loadedChapterId || props.chapterId
     ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
   }
 })
 
-let editorListenersActive = false
-
-function activateEditorListeners() {
-  if (editorListenersActive) return
-  editorListenersActive = true
-  window.addEventListener('keydown', handleSaveShortcut)
-  window.addEventListener('beforeunload', handleBeforeUnload)
+function onAiSidebarResizeMove(event: MouseEvent) {
+  if (!resizingAiSidebar) return
+  const delta = sidebarResizeStartX - event.clientX
+  ui.setAiSidebarWidth(sidebarResizeStartWidth + delta)
 }
 
-function deactivateEditorListeners() {
-  if (!editorListenersActive) return
-  editorListenersActive = false
-  window.removeEventListener('keydown', handleSaveShortcut)
-  window.removeEventListener('beforeunload', handleBeforeUnload)
+function stopAiSidebarResize() {
+  if (!resizingAiSidebar) return
+  resizingAiSidebar = false
+  window.removeEventListener('mousemove', onAiSidebarResizeMove)
+  window.removeEventListener('mouseup', stopAiSidebarResize)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
 }
 
-onMounted(() => {
-  if (props.active) activateEditorListeners()
-})
-
-watch(() => props.active, active => {
-  if (active) activateEditorListeners()
-  else deactivateEditorListeners()
-}, { immediate: true })
+function startAiSidebarResize(event: MouseEvent) {
+  if (event.button !== 0) return
+  resizingAiSidebar = true
+  sidebarResizeStartX = event.clientX
+  sidebarResizeStartWidth = ui.aiSidebarWidth
+  window.addEventListener('mousemove', onAiSidebarResizeMove)
+  window.addEventListener('mouseup', stopAiSidebarResize)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+}
 
 watch(isDirty, dirty => {
   setWindowUnsavedState(dirty)
@@ -333,13 +332,6 @@ async function save(options: { silent?: boolean } = {}) {
   ui.setWorkspaceNodeUnsaved(`chapter-${chapterId}`, false)
   if (!options.silent) {
     toast.success(willStaleIssues ? 'Chapter saved. Existing proofreading issues may be stale.' : 'Chapter saved')
-  }
-}
-
-function handleSaveShortcut(event: KeyboardEvent) {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-    event.preventDefault()
-    void save()
   }
 }
 
@@ -728,6 +720,15 @@ async function polishProofreadingIssue(issue?: ChapterAuditIssue) {
     toast.error(error?.message || 'Polish AI failed')
   }
 }
+
+async function saveFromShortcut() {
+  await save()
+}
+
+defineExpose({
+  sendToVibe,
+  saveFromShortcut,
+})
 </script>
 
 <template>
@@ -910,7 +911,15 @@ async function polishProofreadingIssue(issue?: ChapterAuditIssue) {
         </div>
       </div>
 
-      <aside class="hidden xl:flex w-[390px] shrink-0 flex-col border-l border-surface-4 bg-surface-1">
+      <aside
+        class="relative hidden xl:flex shrink-0 flex-col border-l border-surface-4 bg-surface-1"
+        :style="aiSidebarStyle"
+      >
+        <button
+          class="absolute left-0 top-0 z-20 h-full w-2 -translate-x-1/2 cursor-col-resize border-0 bg-transparent p-0 outline-none hover:bg-accent/10"
+          :title="tr('Drag to resize sidebar')"
+          @mousedown.prevent="startAiSidebarResize"
+        />
         <div class="flex h-8 shrink-0 border-b border-surface-4 bg-surface-2/60 p-1">
           <button
             :class="[

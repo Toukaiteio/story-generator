@@ -9,12 +9,13 @@ import type { Chapter } from '@/types/chapter'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseDialog from '@/components/ui/BaseDialog.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
-import BaseTooltip from '@/components/ui/BaseTooltip.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import ToolCallStatus from '@/components/ui/ToolCallStatus.vue'
 import VibeModelPicker from './VibeModelPicker.vue'
-import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, CircleDashed, Clock, FileText, History, Info, LayoutList, MessageSquare, PauseCircle, Plus, RotateCcw, Send, Settings, ShieldAlert, Sparkles, Trash2, User, Users, ArrowUp, Square, X } from 'lucide-vue-next'
+import MeetingSettingsSidebar from './review/MeetingSettingsSidebar.vue'
+import MeetingParticipantsSidebar from './review/MeetingParticipantsSidebar.vue'
+import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Info, LayoutList, MessageSquare, PauseCircle, RotateCcw, Settings, ShieldAlert, Sparkles, User, Users, ArrowUp, Square, X } from 'lucide-vue-next'
 
 const props = defineProps<{
   project: StoryProject | null | undefined
@@ -62,18 +63,19 @@ const review = useMultiAgentReviewChat(() => ({
   characters: props.characters,
 }))
 
-const statusMeta: Record<ReviewAgentStatus, { label: string; tone: string; dot: string; icon: any }> = {
-  idle: { label: 'idle', tone: 'text-text-muted', dot: 'bg-surface-5', icon: CircleDashed },
-  waiting: { label: 'waiting', tone: 'text-warning', dot: 'bg-warning', icon: Clock },
-  requesting: { label: 'requesting', tone: 'text-accent', dot: 'bg-accent', icon: Sparkles },
-  speaking: { label: 'speaking', tone: 'text-success', dot: 'bg-success', icon: MessageSquare },
-  blocked: { label: 'blocked', tone: 'text-danger', dot: 'bg-danger', icon: PauseCircle },
+const statusMeta: Record<ReviewAgentStatus, { label: string; tone: string; dot: string }> = {
+  idle: { label: 'idle', tone: 'text-text-muted', dot: 'bg-surface-5' },
+  waiting: { label: 'waiting', tone: 'text-warning', dot: 'bg-warning' },
+  requesting: { label: 'requesting', tone: 'text-accent', dot: 'bg-accent' },
+  speaking: { label: 'speaking', tone: 'text-success', dot: 'bg-success' },
+  blocked: { label: 'blocked', tone: 'text-danger', dot: 'bg-danger' },
 }
 
 const contextOptions: Array<{ key: ReviewContextElement; label: string; detail: string }> = [
   { key: 'story-config', label: 'Story Configuration', detail: 'Theme, genre, reader, language, constraints' },
   { key: 'master-outline', label: 'Master Outline', detail: 'Project-level outline and direction' },
   { key: 'characters', label: 'Characters', detail: 'Current cast and roles' },
+  { key: 'knowledge-base', label: 'Knowledge Base', detail: 'Linked project documents and retrieved references' },
   { key: 'selected-chapter', label: 'Selected Chapter', detail: 'Chapter title, status, summary' },
   { key: 'chapter-plan', label: 'Chapter Plan', detail: 'Structured chapter planning fields' },
   { key: 'chapter-draft', label: 'Chapter Draft', detail: 'Existing draft text if available' },
@@ -83,6 +85,7 @@ const referenceLabelMap: Record<ReviewContextElement, string> = {
   'story-config': 'Story Configuration',
   'master-outline': 'Master Outline',
   'characters': 'Characters',
+  'knowledge-base': 'Knowledge Base',
   'selected-chapter': 'Selected Chapter',
   'chapter-plan': 'Chapter Plan',
   'chapter-draft': 'Chapter Draft',
@@ -165,6 +168,10 @@ function openReference(element: string) {
   }
   if (element === 'characters') {
     ui.setWorkspaceNode('generation-planning')
+    return
+  }
+  if (element === 'knowledge-base') {
+    ui.navigateTo('knowledge')
     return
   }
   if (element === 'chapter-plan') {
@@ -294,117 +301,21 @@ watch(() => review.changeVoteSession.value?.id || null, sessionId => {
 
 <template>
   <div class="relative flex h-full min-h-0 overflow-hidden bg-surface-0">
-    <!-- Left Sidebar: Settings & Context -->
-    <aside
-      class="flex h-full flex-col border-r border-surface-4 bg-surface-1 transition-all duration-300"
-      :class="showLeftSidebar ? 'w-[300px]' : 'w-0 overflow-hidden'"
-    >
-      <div class="flex h-[52px] shrink-0 items-center justify-between border-b border-surface-4 px-4">
-        <div class="flex items-center gap-2">
-          <Settings :size="16" class="text-text-secondary" />
-          <h3 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ tr('Meeting Settings') }}</h3>
-        </div>
-      </div>
-
-      <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
-        <section class="space-y-3">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Opening topic') }}</p>
-            <BaseTooltip :text="tr('Agents may propose a new focus, but it only changes after user approval.')">
-              <Info :size="12" class="text-text-muted" />
-            </BaseTooltip>
-          </div>
-          <textarea
-            v-model="review.currentFocus.value"
-            rows="5"
-            class="w-full resize-none rounded-xl border border-surface-4 bg-surface-2 px-3 py-2 text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted transition-all focus:border-accent/50 focus:ring-2 focus:ring-accent/10"
-            :placeholder="tr('Describe the meeting opening topic...')"
-          ></textarea>
-        </section>
-
-        <section class="mt-8 space-y-3">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Context Limit') }}</p>
-            <BaseTooltip :text="tr('Automatically compress context after this many turns to save tokens and prevent distraction.')">
-              <Info :size="12" class="text-text-muted" />
-            </BaseTooltip>
-          </div>
-          <div class="flex items-center gap-2 rounded-xl border border-surface-4 bg-surface-2 px-3 py-2 focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/10">
-            <input
-              v-model.number="maxContextTurns"
-              type="number"
-              min="5"
-              max="50"
-              class="w-full bg-transparent text-sm text-text-primary outline-none"
-            />
-            <span class="text-xs text-text-muted">{{ tr('Turns') }}</span>
-          </div>
-        </section>
-
-        <section class="mt-8 space-y-3">
-          <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Context Elements') }}</p>
-          <div class="grid gap-2">
-            <button
-              v-for="item in contextOptions"
-              :key="item.key"
-              class="group relative w-full overflow-hidden rounded-xl border p-3 text-left transition-all"
-              :class="isElementSelected(item.key) ? 'border-accent/40 bg-accent/5 ring-1 ring-accent/20' : 'border-surface-4 bg-surface-2 hover:border-surface-5 hover:bg-surface-3'"
-              @click="toggleContextElement(item.key)"
-            >
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0">
-                  <p class="text-xs font-semibold" :class="isElementSelected(item.key) ? 'text-accent' : 'text-text-primary'">{{ tr(item.label) }}</p>
-                  <p class="mt-0.5 text-[10px] leading-relaxed text-text-muted">{{ tr(item.detail) }}</p>
-                </div>
-                <div v-if="isElementSelected(item.key)" class="flex h-4 w-4 items-center justify-center rounded-full bg-accent text-white">
-                  <Check :size="10" stroke-width="3" />
-                </div>
-              </div>
-            </button>
-          </div>
-        </section>
-
-        <section class="mt-8 space-y-3">
-          <div class="flex items-center justify-between">
-            <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Turn Queue') }}</p>
-            <BaseTag variant="default" size="sm" class="font-mono">{{ queueItems.length }}</BaseTag>
-          </div>
-          <div v-if="queueItems.length" class="space-y-2">
-            <div
-              v-for="(item, index) in queueItems"
-              :key="item.id"
-              class="flex items-center justify-between gap-2 rounded-xl border border-surface-4 bg-surface-2 p-2 shadow-sm transition-all hover:border-surface-5"
-            >
-              <div class="flex min-w-0 items-center gap-2">
-                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-surface-3 text-[10px] font-bold text-text-secondary">
-                  {{ index + 1 }}
-                </span>
-                <span class="truncate text-xs font-medium text-text-secondary">{{ tr(item.agentName) }}</span>
-              </div>
-              <BaseTag :variant="item.requestedBy === 'user' ? 'warning' : 'default'" size="sm" class="!px-1.5 !py-0 !text-[9px]">
-                {{ tr(item.requestedBy === 'user' ? 'User' : 'Agent') }}
-              </BaseTag>
-            </div>
-          </div>
-          <div v-else class="rounded-xl border border-dashed border-surface-4 bg-surface-1/50 py-6 text-center">
-            <p class="text-xs text-text-muted">{{ tr('No agents waiting') }}</p>
-          </div>
-        </section>
-      </div>
-
-      <div class="border-t border-surface-4 p-4 bg-surface-1/50">
-        <div class="grid grid-cols-2 gap-3">
-          <BaseButton variant="ghost" size="sm" class="!h-10 border border-surface-4" @click="showResetConfirm = true">
-            <RotateCcw :size="14" />
-            <span>{{ tr('Reset') }}</span>
-          </BaseButton>
-          <BaseButton variant="primary" size="sm" class="!h-10 shadow-lg shadow-accent/10" :disabled="review.loading.value" @click="startMeetingRound">
-            <Sparkles :size="14" />
-            <span>{{ tr('Start') }}</span>
-          </BaseButton>
-        </div>
-      </div>
-    </aside>
+    <MeetingSettingsSidebar
+      :show="showLeftSidebar"
+      :focus="review.currentFocus.value"
+      :max-context-turns="maxContextTurns"
+      :context-options="contextOptions"
+      :selected-context-elements="review.selectedContextElements.value"
+      :queue-items="queueItems"
+      :loading="review.loading.value"
+      @update:show="showLeftSidebar = $event"
+      @update:focus="review.currentFocus.value = $event"
+      @update:max-context-turns="maxContextTurns = $event"
+      @toggle-context="toggleContextElement"
+      @reset="showResetConfirm = true"
+      @start="startMeetingRound"
+    />
 
     <!-- Main Content: Chat Stream -->
     <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -908,125 +819,18 @@ watch(() => review.changeVoteSession.value?.id || null, sessionId => {
       </footer>
     </main>
 
-    <!-- Right Sidebar: Agents & Participants -->
-    <aside
-      class="flex h-full flex-col border-l border-surface-4 bg-surface-1 transition-all duration-300"
-      :class="showRightSidebar ? 'w-[320px]' : 'w-0 overflow-hidden'"
-    >
-      <div class="flex h-[52px] shrink-0 items-center justify-between border-b border-surface-4 px-4">
-        <div class="flex items-center gap-2">
-          <Brain :size="16" class="text-accent" />
-          <h3 class="text-xs font-bold uppercase tracking-widest text-text-primary">{{ tr('Participants') }}</h3>
-        </div>
-        <div class="flex items-center gap-2">
-          <BaseTag variant="default" size="sm" class="font-mono">{{ review.agents.value.length }}</BaseTag>
-          <button
-            class="grid h-7 w-7 place-items-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:border-accent/40 hover:text-accent"
-            :title="tr('Restore default agents')"
-            @click="showRestoreAgentsConfirm = true"
-          >
-            <RotateCcw :size="14" />
-          </button>
-          <button
-            class="grid h-7 w-7 place-items-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:border-accent/40 hover:text-accent"
-            :title="tr('Add agent')"
-            @click="showAddAgentDialog = true"
-          >
-            <Plus :size="14" />
-          </button>
-        </div>
-      </div>
-
-      <div class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        <article
-          v-for="agent in review.agents.value"
-          :key="agent.id"
-          class="group relative overflow-hidden rounded-2xl border border-surface-4 bg-surface-2 p-4 transition-all hover:border-surface-5 hover:shadow-md"
-        >
-          <!-- Status Line -->
-          <div class="absolute top-0 left-0 h-[3px] w-full" :class="statusMeta[agent.status].dot"></div>
-
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex min-w-0 items-center gap-3">
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-surface-4 bg-surface-1 shadow-sm overflow-hidden">
-                <Bot v-if="agent.status !== 'speaking'" :size="20" class="text-text-muted group-hover:text-text-secondary transition-colors" />
-                <div v-else class="flex items-center justify-center w-full h-full bg-success/5">
-                  <div class="flex items-end gap-[3px] h-3">
-                    <span class="w-[3px] bg-success rounded-full animate-speaking-bar-1"></span>
-                    <span class="w-[3px] bg-success rounded-full animate-speaking-bar-2"></span>
-                    <span class="w-[3px] bg-success rounded-full animate-speaking-bar-3"></span>
-                  </div>
-                </div>
-              </div>
-              <div class="min-w-0">
-                <h5 class="truncate text-sm font-bold text-text-primary">{{ tr(agent.name) }}</h5>
-                <p class="truncate text-[10px] font-medium text-text-muted uppercase tracking-wider">{{ tr(agent.role) }}</p>
-              </div>
-            </div>
-            <div class="flex items-center gap-1">
-              <button
-                class="rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors"
-                :class="agent.enabled ? 'bg-success/10 text-success hover:bg-success/15' : 'bg-surface-3 text-text-muted hover:text-text-primary'"
-                @click="review.setAgentEnabled(agent.id, !agent.enabled)"
-              >
-                {{ tr(agent.enabled ? 'Enabled' : 'Disabled') }}
-              </button>
-              <button
-                class="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
-                @click="openAgentSettings(agent.id)"
-              >
-                <Settings :size="14" />
-              </button>
-              <button
-                class="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-danger-subtle hover:text-danger"
-                @click="review.deleteAgent(agent.id)"
-              >
-                <Trash2 :size="14" />
-              </button>
-            </div>
-          </div>
-
-          <p class="mt-3 text-xs leading-relaxed text-text-secondary">{{ tr(agent.brief) }}</p>
-
-          <div class="mt-4 flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2">
-              <div class="h-1.5 w-1.5 rounded-full" :class="statusMeta[agent.status].dot"></div>
-              <span class="text-[10px] font-bold uppercase tracking-tight" :class="statusMeta[agent.status].tone">{{ tr(statusMeta[agent.status].label) }}</span>
-            </div>
-            <div class="flex items-center gap-3">
-              <div class="flex items-center gap-1 text-[10px] text-text-muted">
-                <History :size="10" />
-                <span>{{ agent.privateMemory.length }}</span>
-              </div>
-              <BaseButton
-                variant="secondary"
-                size="sm"
-                class="!h-8 !px-3 !text-[10px] !font-bold uppercase tracking-wider transition-all"
-                :disabled="!agent.enabled || agent.status === 'speaking' || queueItems.some(item => item.agentId === agent.id)"
-                @click="review.userRequestTurn(agent.id, review.inputText.value)"
-              >
-                <span>{{ tr('Ask Next') }}</span>
-              </BaseButton>
-            </div>
-          </div>
-
-          <transition name="fade">
-            <div v-if="agent.toolState.error" class="mt-3 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-[10px] text-danger animate-in slide-in-from-top-1">
-              <ShieldAlert :size="12" class="shrink-0 mt-0.5" />
-              <p>{{ agent.toolState.error }}</p>
-            </div>
-          </transition>
-        </article>
-      </div>
-
-      <div class="border-t border-surface-4 bg-surface-1/50 p-4">
-        <div class="rounded-xl border border-surface-4 bg-surface-2 p-3 text-center">
-          <p class="text-[10px] font-medium text-text-muted leading-relaxed">
-            {{ tr('User commands override normal agent priority. Use "Ask Next" to force an agent to speak.') }}
-          </p>
-        </div>
-      </div>
-    </aside>
+    <MeetingParticipantsSidebar
+      :show="showRightSidebar"
+      :agents="review.agents.value"
+      :queue-agent-ids="queueItems.map(item => item.agentId)"
+      :status-meta="statusMeta"
+      @restore-default="showRestoreAgentsConfirm = true"
+      @add-agent="showAddAgentDialog = true"
+      @set-agent-enabled="(agentId, enabled) => review.setAgentEnabled(agentId, enabled)"
+      @open-agent-settings="openAgentSettings"
+      @delete-agent="review.deleteAgent"
+      @ask-next="agentId => review.userRequestTurn(agentId, review.inputText.value)"
+    />
 
     <BaseDialog :model-value="Boolean(editingAgentId)" :title="tr('Agent Settings')" width="720px" @update:model-value="value => { if (!value) editingAgentId = null }" @close="editingAgentId = null">
       <div v-if="editingAgent" class="space-y-6 py-2">
@@ -1172,28 +976,4 @@ watch(() => review.changeVoteSession.value?.id || null, sessionId => {
   opacity: 0;
 }
 
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.3s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-@keyframes speaking-bar {
-  0%, 100% { height: 4px; }
-  50% { height: 12px; }
-}
-
-.animate-speaking-bar-1 {
-  animation: speaking-bar 0.8s ease-in-out infinite;
-}
-.animate-speaking-bar-2 {
-  animation: speaking-bar 0.8s ease-in-out infinite 0.2s;
-}
-.animate-speaking-bar-3 {
-  animation: speaking-bar 0.8s ease-in-out infinite 0.4s;
-}
 </style>

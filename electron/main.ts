@@ -14,6 +14,7 @@ let forceClosing = false
 const DATA_DIR = join(app.getPath('userData'), 'story-generator')
 const PROJECTS_DIR = join(DATA_DIR, 'projects')
 const STORAGE_DIR = join(DATA_DIR, 'storage')
+const VIBE_CHAT_DIR = join(DATA_DIR, 'vibe-chat')
 
 function normalizeFsPath(value: string | null | undefined) {
   return typeof value === 'string'
@@ -25,6 +26,7 @@ function ensureDirs() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
   if (!existsSync(PROJECTS_DIR)) mkdirSync(PROJECTS_DIR, { recursive: true })
   if (!existsSync(STORAGE_DIR)) mkdirSync(STORAGE_DIR, { recursive: true })
+  if (!existsSync(VIBE_CHAT_DIR)) mkdirSync(VIBE_CHAT_DIR, { recursive: true })
 }
 
 function sanitizeStorageKey(key: string) {
@@ -213,6 +215,10 @@ function safeVibeChatFileName(key: string) {
   return `${key.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 180) || 'conversation'}.json`
 }
 
+function safeVibeChatProjectFolder(projectId: string) {
+  return join(VIBE_CHAT_DIR, sanitizeStorageKey(projectId))
+}
+
 ipcMain.handle('project:list', () => {
   if (!existsSync(PROJECTS_DIR)) return []
   
@@ -372,20 +378,26 @@ ipcMain.handle('project:delete', (_event, id: string, directoryPath?: string, de
 
 ipcMain.handle('vibe-chat:load', (_event, request: { projectId: string; directoryPath?: string; key: string }) => {
   if (!request?.projectId || !request?.key) return null
+  ensureDirs()
+
+  const userDataProjectDir = safeVibeChatProjectFolder(request.projectId)
+  const userDataChatPath = join(userDataProjectDir, safeVibeChatFileName(request.key))
+  if (existsSync(userDataChatPath)) {
+    return JSON.parse(readFileSync(userDataChatPath, 'utf-8'))
+  }
+
   const projectFolder = resolveProjectFolder(request.projectId, request.directoryPath)
   if (!projectFolder) return null
-
-  const chatPath = join(projectFolder, 'vibe-chat', safeVibeChatFileName(request.key))
-  if (!existsSync(chatPath)) return null
-  return JSON.parse(readFileSync(chatPath, 'utf-8'))
+  const legacyChatPath = join(projectFolder, 'vibe-chat', safeVibeChatFileName(request.key))
+  if (!existsSync(legacyChatPath)) return null
+  return JSON.parse(readFileSync(legacyChatPath, 'utf-8'))
 })
 
 ipcMain.handle('vibe-chat:save', (_event, request: { projectId: string; directoryPath?: string; key: string; payload: any }) => {
   if (!request?.projectId || !request?.key) return false
-  const projectFolder = resolveProjectFolder(request.projectId, request.directoryPath)
-  if (!projectFolder) return false
+  ensureDirs()
 
-  const chatDir = join(projectFolder, 'vibe-chat')
+  const chatDir = safeVibeChatProjectFolder(request.projectId)
   if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true })
   const chatPath = join(chatDir, safeVibeChatFileName(request.key))
   writeFileSync(chatPath, JSON.stringify(request.payload ?? {}, null, 2), 'utf-8')
