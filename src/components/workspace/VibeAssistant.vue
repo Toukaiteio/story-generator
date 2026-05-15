@@ -53,8 +53,8 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  apply: [content: string]
-  applyOutline: [payload: { title: string; outline: ChapterOutline }]
+  apply: [payload: string | { content: string; chapterId?: string }]
+  applyOutline: [payload: { title: string; outline: ChapterOutline; chapterId?: string }]
   applyPlanningOutline: [payload: { outline: string }]
   applyPlanningCharacters: [payload: { characters: any[] }]
   rewind: [snapshot: unknown]
@@ -159,7 +159,7 @@ const shouldShowQuickActions = computed(() =>
 )
 
 const stagePrompts: Record<string, string> = {
-  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. In this stage, "story outline" means the master outline for the whole story (global narrative arc), not per-chapter outlines. Do not convert the request into chapter-by-chapter planning unless the user explicitly asks for chapter planning. Provide creative suggestions, identify plot holes, and help develop compelling narratives. Relationship query tools are not available in this stage, so rely on the current outline and characters only. Prefer Function Calling when relevant tools are available.',
+  planning: 'You are a story planning assistant. Help the user refine their story outline and character designs. In this stage, "story outline" means the master outline for the whole story (global narrative arc), not per-chapter outlines. Do not convert the request into chapter-by-chapter planning unless the user explicitly asks for chapter planning. Keep the master outline concise and global, and avoid per-chapter fields such as chapter objective/conflict/key events/ending hook blocks in this stage. Provide creative suggestions, identify plot holes, and help develop compelling narratives. Relationship query tools are not available in this stage, so rely on the current outline and characters only. Prefer Function Calling when relevant tools are available.',
   'chapter-outline': 'You are a chapter planning assistant. Help the user structure their chapters effectively. Suggest improvements to chapter flow, pacing, and story beats. Prefer Function Calling when relevant tools are available.',
   'chapter-outline-review': 'You are a chapter plan review assistant. This optional stage is scaffolded only; provide high-level review notes without mutating chapter data unless the user explicitly asks for an edit. Prefer Function Calling when relevant tools are available.',
   writing: 'You are a writing assistant. Help the user improve their prose, suggest better word choices, enhance descriptions, and maintain consistent voice and style.',
@@ -838,9 +838,19 @@ async function sendMessage() {
   if (!inputText.value.trim() || isLoading.value) return
 
   const userMessage = inputText.value.trim()
+  const requestChapterId = typeof props.context?.chapter?.id === 'string' && props.context.chapter.id.trim()
+    ? props.context.chapter.id.trim()
+    : undefined
+  const requestScopeKey = conversationScopeKey.value
+  const requestProjectId = projectId.value
   const requestId = ++activeRequestId
   const abortController = new AbortController()
   currentAbortController = abortController
+  const isRequestStale = () =>
+    cancelledRequestIds.has(requestId)
+    || abortController.signal.aborted
+    || requestScopeKey !== conversationScopeKey.value
+    || requestProjectId !== projectId.value
   const workspaceSnapshot = captureWorkspaceSnapshot()
   inputText.value = ''
   resetInputHeight()
@@ -865,6 +875,7 @@ async function sendMessage() {
     const getActiveMessage = () => messages.value.find(item => item.id === activeAssistantMessageId)
 
     const onToolStatus = (status: ToolStatusUpdate) => {
+      if (isRequestStale()) return
       updateToolStatus(status)
       const msg = getActiveMessage()
       if (msg) {
@@ -890,14 +901,14 @@ async function sendMessage() {
         modelRef: selectedModelRef.value,
         onToolStatus,
         onTodoList: state => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           todoItems.value = state.items
           agentTodoListState.value = state
           scheduleChatSave()
         },
         onToken: () => {},
         onReasoningToken: token => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           currentReasoning.value += token
           const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
           updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
@@ -908,8 +919,8 @@ async function sendMessage() {
         },
         signal: abortController.signal,
       })
-      if (cancelledRequestIds.has(requestId)) return
-      emit('apply', response.content)
+      if (isRequestStale()) return
+      emit('apply', { content: response.content, chapterId: requestChapterId })
       toast.success('Applied to editor')
       updateMessage(activeAssistantMessageId, {
         content: response.summary?.trim()
@@ -930,14 +941,14 @@ async function sendMessage() {
         modelRef: selectedModelRef.value,
         onToolStatus,
         onTodoList: state => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           todoItems.value = state.items
           agentTodoListState.value = state
           scheduleChatSave()
         },
         onToken: () => {},
         onReasoningToken: token => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           currentReasoning.value += token
           const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
           updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
@@ -948,8 +959,8 @@ async function sendMessage() {
         },
         signal: abortController.signal,
       })
-      if (cancelledRequestIds.has(requestId)) return
-      emit('applyOutline', { title: response.title, outline: response.outline })
+      if (isRequestStale()) return
+      emit('applyOutline', { title: response.title, outline: response.outline, chapterId: requestChapterId })
       toast.success('Applied to outline')
       updateMessage(activeAssistantMessageId, {
         content: response.summary?.trim()
@@ -962,11 +973,11 @@ async function sendMessage() {
     } else {
       const response = await genStore.chatWithAssistant(fullPrompt, selectedModelRef.value, {
         onToken: token => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           appendMessageContent(activeAssistantMessageId, token)
         },
         onReasoningToken: token => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           currentReasoning.value += token
           const safeReasoning = sanitizeReasoningTextSafe(currentReasoning.value)
           updateMessage(activeAssistantMessageId, { reasoning: safeReasoning })
@@ -977,13 +988,13 @@ async function sendMessage() {
         },
         onToolStatus,
         onTodoList: state => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           todoItems.value = state.items
           agentTodoListState.value = state
           scheduleChatSave()
         },
         onPlanningResult: result => {
-          if (cancelledRequestIds.has(requestId)) return
+          if (isRequestStale()) return
           if (typeof result.outline === 'string') {
             emit('applyPlanningOutline', { outline: result.outline })
           }
@@ -993,18 +1004,19 @@ async function sendMessage() {
         },
         signal: abortController.signal,
       })
-      if (cancelledRequestIds.has(requestId)) return
+      if (isRequestStale()) return
       updateMessage(activeAssistantMessageId, { content: response, reasoning: sanitizeReasoningTextSafe(currentReasoning.value) })
     }
   } catch (error: any) {
-    if (cancelledRequestIds.has(requestId) || abortController.signal.aborted || error?.name === 'AbortError') return
+    if (isRequestStale() || error?.name === 'AbortError') return
     settleDanglingToolStatuses('error', 'The request failed before the tool returned a final result.')
     settleDanglingTodoItems('This todo item was interrupted because the request failed.')
     toast.error(error?.message || 'Connection lost')
     addMessage('system', error?.message ? `Vibe AI error: ${error.message}` : 'System error: Unable to reach Vibe Engine.')
   } finally {
     if (activeRequestId === requestId) {
-      if (!cancelledRequestIds.has(requestId) && !abortController.signal.aborted) {
+      const sameScope = requestScopeKey === conversationScopeKey.value && requestProjectId === projectId.value
+      if (sameScope && !cancelledRequestIds.has(requestId) && !abortController.signal.aborted) {
         settleDanglingToolStatuses('warning', 'This tool call did not return a final result in the current run. You can resend the request to continue.')
         settleDanglingTodoItems('This todo item was interrupted when this run ended with unfinished checklist items.')
       }
@@ -1015,7 +1027,7 @@ async function sendMessage() {
       if (currentAbortController === abortController) currentAbortController = null
       
       stopTimer()
-      if (messages.value.length > 0) {
+      if (sameScope && messages.value.length > 0) {
         const lastMsg = messages.value[messages.value.length - 1]
         if (lastMsg.role === 'assistant') {
           lastMsg.generationDurationMs = generationElapsedMs.value
@@ -1298,6 +1310,12 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 watch([projectId, conversationScopeKey], () => {
+  if (isLoading.value && currentAbortController) {
+    cancelledRequestIds.add(activeRequestId)
+    currentAbortController.abort()
+    currentAbortController = null
+    streamingAssistantId.value = ''
+  }
   conversationLoadPromise = loadConversationForCurrentScope()
 }, { immediate: true })
 

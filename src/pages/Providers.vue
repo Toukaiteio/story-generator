@@ -462,42 +462,6 @@ function cancelEditProviderDrawer() {
   providerModelDrafts.value = []
 }
 
-function applyProviderConfigFallback(
-  provider: NonNullable<ReturnType<typeof providerStore.getProviderById>>,
-  data: {
-    type: ProviderType
-    name: string
-    apiKey?: string | null
-    baseUrl: string
-    models: ReturnType<typeof buildModelsFromDrafts>
-  }
-) {
-  const existingModelsById = new Map(provider.models.map(model => [model.id, model]))
-  provider.type = data.type
-  provider.name = data.name.trim()
-  provider.apiKey = data.apiKey ?? ''
-  provider.baseUrl = data.baseUrl || defaultBaseUrls[data.type]
-  provider.models = data.models.map((model) => {
-    const existing = existingModelsById.get(model.id)
-    return {
-      ...model,
-      contextTokens: existing?.contextTokens ?? null,
-      contextTokensSource: existing?.contextTokensSource ?? null,
-      reasoning: {
-        enabled: model.reasoning.enabled,
-        effort: model.reasoning.effort,
-      },
-    }
-  })
-
-  providerStore.ensureAgentModelBindings()
-  providerStore.ensureEmbeddingModelBinding()
-  if (typeof (providerStore as any).reapplyModelContextOverridesForProvider === 'function') {
-    ;(providerStore as any).reapplyModelContextOverridesForProvider(provider.id)
-  }
-  return provider
-}
-
 function saveEditedProvider() {
   const providerId = editingProviderForm.value.providerId
   const provider = providerStore.getProviderById(providerId)
@@ -519,31 +483,13 @@ function saveEditedProvider() {
   }
 
   try {
-    const updateProviderConfig = (providerStore as any).updateProviderConfig as
-      | ((id: string, data: {
-          type: typeof editingProviderForm.value.type
-          name: string
-          apiKey?: string | null
-          baseUrl: string
-          models: typeof models
-        }) => typeof provider)
-      | undefined
-
-    const updatedProvider = (updateProviderConfig
-      ? updateProviderConfig(providerId, {
-          type: editingProviderForm.value.type,
-          name,
-          apiKey: editingProviderForm.value.apiKey,
-          baseUrl: editingProviderForm.value.baseUrl || defaultBaseUrls[editingProviderForm.value.type],
-          models,
-        })
-      : applyProviderConfigFallback(provider, {
-          type: editingProviderForm.value.type,
-          name,
-          apiKey: editingProviderForm.value.apiKey,
-          baseUrl: editingProviderForm.value.baseUrl || defaultBaseUrls[editingProviderForm.value.type],
-          models,
-        })) ?? provider
+    const updatedProvider = providerStore.updateProviderConfig(providerId, {
+      type: editingProviderForm.value.type,
+      name,
+      apiKey: editingProviderForm.value.apiKey,
+      baseUrl: editingProviderForm.value.baseUrl || defaultBaseUrls[editingProviderForm.value.type],
+      models,
+    })
 
     showEditProviderDrawer.value = false
     providerModelDrafts.value = []

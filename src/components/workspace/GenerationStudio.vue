@@ -22,9 +22,29 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import VibeAssistant from './VibeAssistant.vue'
 import ProofreadingAssistant from './ProofreadingAssistant.vue'
 import MultiAgentReviewChat from './MultiAgentReviewChat.vue'
-import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, Square } from 'lucide-vue-next'
+import { Check, FileText, Plus, Save, Sparkles, Trash2, Wand2, Users, BookOpen, Clock, CheckCircle2, Square, RotateCcw } from 'lucide-vue-next'
 
 type StageKey = Exclude<GenerationStage, 'idle' | 'done'>
+type UndoScope = 'planning' | 'chapters'
+
+interface GenerationUndoEntry {
+  id: string
+  scope: UndoScope
+  reason: string
+  snapshot: unknown
+  createdAt: number
+}
+
+interface GenerationStudioHmrDraft {
+  projectId: string
+  activeStage: StageKey
+  planningSubTab: 'outline' | 'characters'
+  selectedCharacterId: string | null
+  selectedChapterId: string | null
+  outlineDraft: string
+  charactersDraft: Character[]
+  chaptersDraft: Chapter[]
+}
 
 const stageTabs: Array<{
   key: StageKey
@@ -68,11 +88,17 @@ const chaptersDraft = ref<Chapter[]>([])
 const showDeleteConfirm = ref(false)
 const showDoubleDeleteConfirm = ref(false)
 const chapterToDeleteId = ref<string | null>(null)
+const draggingChapterId = ref<string | null>(null)
+const dragOverChapterId = ref<string | null>(null)
 const showClearConfirm = ref(false)
+const showClearChapterPlanConfirm = ref(false)
 const showGenerateCharactersDialog = ref(false)
 const characterGenerationRequirements = ref('')
 const characterGenerationCount = ref(5)
 const updateOutlineAfterCharacterGeneration = ref(true)
+const generationUndoStack = ref<GenerationUndoEntry[]>([])
+const generationUndoLimit = 80
+let pendingHmrDraftRestored = false
 
 const characterContext = computed(() => {
   if (!project.value?.characters.length) return ''
@@ -149,6 +175,29 @@ let sidebarResizeStartX = 0
 let sidebarResizeStartWidth = 0
 let vibeAutoSaveTimer: ReturnType<typeof setTimeout> | null = null
 
+function isStageKey(value: unknown): value is StageKey {
+  return typeof value === 'string' && stageTabs.some(stage => stage.key === value)
+}
+
+function restoreDraftFromHmrData(projectId: string | undefined) {
+  if (!projectId || !import.meta.hot || pendingHmrDraftRestored) return false
+  const raw = (import.meta.hot.data as any)?.generationStudioDraft as GenerationStudioHmrDraft | undefined
+  if (!raw || raw.projectId !== projectId) return false
+
+  pendingHmrDraftRestored = true
+  delete (import.meta.hot.data as any).generationStudioDraft
+
+  activeStage.value = isStageKey(raw.activeStage) ? raw.activeStage : activeStage.value
+  planningSubTab.value = raw.planningSubTab === 'characters' ? 'characters' : 'outline'
+  outlineDraft.value = typeof raw.outlineDraft === 'string' ? raw.outlineDraft : ''
+  charactersDraft.value = Array.isArray(raw.charactersDraft) ? cloneCharacters(raw.charactersDraft) : []
+  chaptersDraft.value = Array.isArray(raw.chaptersDraft) ? cloneChapters(raw.chaptersDraft) : []
+  selectedCharacterId.value = typeof raw.selectedCharacterId === 'string' ? raw.selectedCharacterId : null
+  selectedChapterId.value = typeof raw.selectedChapterId === 'string' ? raw.selectedChapterId : null
+  ensureChapterCount(Math.max(targetChapterCount(), chaptersDraft.value.length))
+  return true
+}
+
 function scheduleVibeAutoSave(target: 'planning' | 'chapters') {
   if (!project.value) return
   if (vibeAutoSaveTimer) {
@@ -165,33 +214,83 @@ function scheduleVibeAutoSave(target: 'planning' | 'chapters') {
   }, 240)
 }
 
-function handleVibeApply(content: string) {
+function buildUndoSnapshot(scope: UndoScope) {
+  if (scope === 'planning') {
+    return {
+      type: 'generation-planning',
+      outline: outlineDraft.value,
+      characters: cloneCharacters(charactersDraft.value),
+      selectedCharacterId: selectedCharacterId.value,
+      planningSubTab: planningSubTab.value,
+    }
+  }
+  return {
+    type: 'generation-stage',
+    stage: activeStage.value,
+    outline: outlineDraft.value,
+    chapters: cloneChapters(chaptersDraft.value),
+    selectedChapterId: selectedChapterId.value,
+  }
+}
+
+function pushUndoSnapshot(scope: UndoScope, reason: string) {
+  const entry: GenerationUndoEntry = {
+    id: generateId(),
+    scope,
+    reason,
+    snapshot: buildUndoSnapshot(scope),
+    createdAt: Date.now(),
+  }
+  generationUndoStack.value = [...generationUndoStack.value, entry].slice(-generationUndoLimit)
+}
+
+const canUndoGeneration = computed(() => generationUndoStack.value.length > 0)
+
+function undoLastGenerationChange(showToast = true) {
+  const last = generationUndoStack.value[generationUndoStack.value.length - 1]
+  if (!last) return false
+  generationUndoStack.value = generationUndoStack.value.slice(0, -1)
+  rewindVibeWorkspace(last.snapshot)
+  scheduleVibeAutoSave(last.scope)
+  if (showToast) toast.success(ui.text('Last change reverted'))
+  return true
+}
+
+function handleVibeApply(payload: string | { content: string; chapterId?: string }) {
+  const content = typeof payload === 'string' ? payload : payload.content
+  const targetChapterId = typeof payload === 'object' ? payload.chapterId : undefined
   if (activeStage.value === 'planning') {
     if (planningSubTab.value === 'outline') {
+      if (content !== outlineDraft.value) pushUndoSnapshot('planning', 'ai-outline-overwrite')
       outlineDraft.value = content
       scheduleVibeAutoSave('planning')
     }
   } else if (activeStage.value === 'writing' || activeStage.value === 'proofreading' || activeStage.value === 'polishing') {
-    if (selectedChapter.value) {
-      updateCurrentChapterText(project.value
+    const chapter = targetChapterId
+      ? chaptersDraft.value.find(item => item.id === targetChapterId) ?? null
+      : selectedChapter.value
+    if (chapter) {
+      const nextText = project.value
         ? sanitizeGeneratedChapterContent(content, {
           writingFormat: project.value.writingFormat,
           writingStyle: project.value.style,
-          chapterTitle: selectedChapter.value.title,
-          chapterNumber: selectedChapter.value.index + 1,
+          chapterTitle: chapter.title,
+          chapterNumber: chapter.index + 1,
         })
-        : content)
+        : content
+      if (nextText !== chapter.content) pushUndoSnapshot('chapters', 'ai-chapter-overwrite')
+      applyChapterText(chapter, nextText)
       scheduleVibeAutoSave('chapters')
     }
   }
 }
 
-function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outline'] }) {
-  if (!selectedChapter.value) return
-  const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
+function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outline']; chapterId?: string }) {
+  const targetChapterId = payload.chapterId || selectedChapter.value?.id
+  if (!targetChapterId) return
+  const chapter = chaptersDraft.value.find(item => item.id === targetChapterId)
   if (!chapter) return
-  chapter.title = payload.title || chapter.title
-  chapter.outline = {
+  const nextOutline = {
     objective: payload.outline.objective || '',
     conflict: payload.outline.conflict || '',
     keyEvents: Array.isArray(payload.outline.keyEvents) ? payload.outline.keyEvents : [],
@@ -199,10 +298,16 @@ function handleVibeOutlineApply(payload: { title: string; outline: Chapter['outl
     infoReveals: Array.isArray(payload.outline.infoReveals) ? payload.outline.infoReveals : [],
     endingHook: payload.outline.endingHook || '',
   }
+  const nextTitle = payload.title || chapter.title
+  const changed = nextTitle !== chapter.title || JSON.stringify(nextOutline) !== JSON.stringify(chapter.outline)
+  if (changed) pushUndoSnapshot('chapters', 'ai-chapter-outline-overwrite')
+  chapter.title = payload.title || chapter.title
+  chapter.outline = nextOutline
   scheduleVibeAutoSave('chapters')
 }
 
 function handleVibePlanningOutline(payload: { outline: string }) {
+  if (payload.outline !== outlineDraft.value) pushUndoSnapshot('planning', 'ai-planning-outline-overwrite')
   outlineDraft.value = payload.outline
   scheduleVibeAutoSave('planning')
   toast.success('Story outline updated')
@@ -211,6 +316,9 @@ function handleVibePlanningOutline(payload: { outline: string }) {
 function handleVibePlanningCharacters(payload: { characters: Character[] }) {
   const nextCharacters = cloneCharacters(payload.characters)
   if (!nextCharacters.length) return
+  if (JSON.stringify(nextCharacters) !== JSON.stringify(charactersDraft.value)) {
+    pushUndoSnapshot('planning', 'ai-planning-characters-overwrite')
+  }
   charactersDraft.value = nextCharacters
   selectedCharacterId.value = nextCharacters[0]?.id ?? null
   planningSubTab.value = 'characters'
@@ -606,10 +714,6 @@ const selectedChapterHasPlanInfo = computed(() =>
   selectedChapter.value ? hasAnyChapterPlanInfo(selectedChapter.value) : false
 )
 
-const shouldGenerateCurrentChapterPlan = computed(() =>
-  Boolean(selectedChapter.value && !selectedChapterPlanComplete.value)
-)
-
 const currentChapterPlanActionLabel = computed(() =>
   selectedChapterHasPlanInfo.value ? 'Complete Current Chapter' : 'Generate Current Chapter'
 )
@@ -628,6 +732,9 @@ const vibeGenerationCommands: Record<string, string> = {
     requireVibeTodoListToolInstruction,
     'Generate or rewrite the story plan for this project.',
     'Important scope: the "story outline" in this stage means the master outline for the whole story (global narrative arc), not per-chapter outlines.',
+    'The output must be concise and global. Do not produce per-chapter template fields or chapter-by-chapter blocks.',
+    'Forbidden in this step unless explicitly requested: "Chapter 1/2/3", per-chapter Objective/Conflict/Key Events/Ending Hook sections, or one-outline-per-chapter structure.',
+    'Target shape: one compact master outline for the whole story, preferably 4-8 short paragraphs or bullet groups.',
     'Do not output chapter-by-chapter planning fields (such as chapter title/objective/conflict/key events per chapter) in this step unless the user explicitly asks to switch to chapter planning.',
     'Update the master outline first. Then propose any character changes needed to support the outline.',
     'Use the current story configuration, language, genre, theme, constraints, writing format, writing style, and existing characters as source context.',
@@ -775,7 +882,10 @@ watch(project, () => {
   if (genStore.isGenerating || activeStage.value === 'chapter-outline-review') syncFromProject()
 }, { deep: true })
 
-watch(() => project.value?.id, syncFromProject, { immediate: true })
+watch(() => project.value?.id, projectId => {
+  if (restoreDraftFromHmrData(projectId)) return
+  syncFromProject()
+}, { immediate: true })
 watch(() => ui.activeWorkspaceNode, (node) => {
   if (!node?.startsWith('generation-')) return
   const key = node.replace('generation-', '') as StageKey
@@ -813,6 +923,23 @@ watch(chaptersUnsavedNodeKey, (next, previous) => {
     ui.setWorkspaceNodeUnsaved(next, isChaptersDirty.value)
   }
 })
+
+if (import.meta.hot) {
+  import.meta.hot.dispose((data) => {
+    if (!project.value?.id) return
+    const draft: GenerationStudioHmrDraft = {
+      projectId: project.value.id,
+      activeStage: activeStage.value,
+      planningSubTab: planningSubTab.value,
+      selectedCharacterId: selectedCharacterId.value,
+      selectedChapterId: selectedChapterId.value,
+      outlineDraft: outlineDraft.value,
+      charactersDraft: cloneCharacters(charactersDraft.value),
+      chaptersDraft: cloneChapters(chaptersDraft.value),
+    }
+    ;(data as any).generationStudioDraft = draft
+  })
+}
 
 function selectStage(stage: StageKey) {
   activeStage.value = stage
@@ -1015,11 +1142,83 @@ function performDeleteChapter() {
     if (selectedChapterId.value === id) {
       selectedChapterId.value = chaptersDraft.value[0]?.id ?? null
     }
+    void saveChapters(false)
     toast.success('Chapter deleted')
   }
   chapterToDeleteId.value = null
   showDeleteConfirm.value = false
   showDoubleDeleteConfirm.value = false
+}
+
+function requestClearChapterPlan() {
+  if (!selectedChapter.value) return
+  showClearChapterPlanConfirm.value = true
+}
+
+function performClearChapterPlan() {
+  const chapter = selectedChapter.value
+  if (!chapter) {
+    showClearChapterPlanConfirm.value = false
+    return
+  }
+  chapter.title = `Chapter ${chapter.index + 1}`
+  chapter.outline = {
+    objective: '',
+    conflict: '',
+    keyEvents: [],
+    characterActions: [],
+    infoReveals: [],
+    endingHook: '',
+  }
+  showClearChapterPlanConfirm.value = false
+  void saveChapters(false)
+  toast.success('Chapter plan cleared')
+}
+
+function onChapterDragStart(chapterId: string, event: DragEvent) {
+  draggingChapterId.value = chapterId
+  dragOverChapterId.value = chapterId
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', chapterId)
+  }
+}
+
+function undoFromShortcut() {
+  if (genStore.isGenerating || vibeAiLoading.value || isQuickSubmittingPolish.value) return
+  undoLastGenerationChange(false)
+}
+
+function onChapterDragOver(chapterId: string, event: DragEvent) {
+  event.preventDefault()
+  dragOverChapterId.value = chapterId
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+}
+
+function onChapterDrop(targetChapterId: string, event: DragEvent) {
+  event.preventDefault()
+  const sourceChapterId = draggingChapterId.value || event.dataTransfer?.getData('text/plain') || ''
+  draggingChapterId.value = null
+  dragOverChapterId.value = null
+  if (!sourceChapterId || sourceChapterId === targetChapterId) return
+
+  const sourceIndex = chaptersDraft.value.findIndex(ch => ch.id === sourceChapterId)
+  const targetIndex = chaptersDraft.value.findIndex(ch => ch.id === targetChapterId)
+  if (sourceIndex < 0 || targetIndex < 0) return
+
+  pushUndoSnapshot('chapters', 'chapter-reorder')
+  const [moved] = chaptersDraft.value.splice(sourceIndex, 1)
+  chaptersDraft.value.splice(targetIndex, 0, moved)
+  chaptersDraft.value.forEach((chapter, idx) => { chapter.index = idx })
+  selectedChapterId.value = moved.id
+  void saveChapters(false)
+}
+
+function onChapterDragEnd() {
+  draggingChapterId.value = null
+  dragOverChapterId.value = null
 }
 
 function ensureChapterCount(count: number) {
@@ -1084,6 +1283,10 @@ function updateCurrentChapterText(text: string) {
   if (!selectedChapter.value) return
   const chapter = chaptersDraft.value.find(item => item.id === selectedChapter.value?.id)
   if (!chapter) return
+  applyChapterText(chapter, text)
+}
+
+function applyChapterText(chapter: Chapter, text: string) {
   if (activeStage.value === 'proofreading') {
     markProofreadingIssuesStaleForEdit(chapter, text)
     chapter.content = text
@@ -1113,6 +1316,7 @@ onBeforeUnmount(() => {
 
 defineExpose({
   saveFromShortcut,
+  undoFromShortcut,
 })
 </script>
 
@@ -1149,6 +1353,16 @@ defineExpose({
             <span class="text-[10px] text-text-muted truncate max-w-[240px]">{{ ui.text(activeStageTab.description) }}</span>
           </div>
           <div class="flex items-center gap-1 border-l border-surface-4 pl-3">
+            <BaseButton
+              variant="ghost"
+              size="sm"
+              class="!h-7 !px-2 text-text-secondary hover:text-accent"
+              :disabled="!canUndoGeneration"
+              @click="undoLastGenerationChange()"
+            >
+              <RotateCcw :size="12" />
+              <span class="ml-1 text-[11px]">{{ ui.text('Undo') }}</span>
+            </BaseButton>
             <BaseButton v-if="project" variant="ghost" size="sm" class="!h-7 !px-2 text-text-secondary hover:text-accent" @click="markProjectDirty">
               <Save :size="12" />
               <span class="text-[11px] ml-1">{{ ui.text('Sync') }}</span>
@@ -1285,7 +1499,7 @@ defineExpose({
               </div>
               <div class="flex flex-wrap items-center justify-end gap-2">
               <BaseButton variant="ghost" size="sm" class="!h-8" @click="addChapter"><Plus :size="14" class="mr-1.5" />{{ ui.text('Add Chapter') }}</BaseButton>
-              <BaseButton variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('smart-chapter-plan')"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(shouldGenerateCurrentChapterPlan ? currentChapterPlanActionLabel : 'Generate Next Chapter') }}</BaseButton>
+              <BaseButton v-if="!selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('smart-chapter-plan')"><Sparkles :size="14" class="mr-1.5" />{{ ui.text(currentChapterPlanActionLabel) }}</BaseButton>
               <BaseButton v-if="selectedChapterPlanComplete" variant="secondary" size="sm" class="!h-8" :loading="genStore.isGenerating" @click="sendGenerationCommandToVibe('review-current-chapter-plan')"><CheckCircle2 :size="14" class="mr-1.5" />{{ ui.text('Quick Review & Rewrite') }}</BaseButton>
               <BaseButton variant="primary" size="sm" class="!h-8" @click="saveChapters"><Save :size="14" class="mr-1.5" />{{ ui.text('Save Chapters') }}</BaseButton>
               </div>
@@ -1303,7 +1517,15 @@ defineExpose({
                     v-for="chapter in chaptersDraft"
                     :key="chapter.id"
                     class="group w-full rounded-lg border px-3 py-2.5 text-left transition-all"
-                    :class="selectedChapterId === chapter.id ? 'border-accent/40 bg-accent-subtle/50 shadow-sm' : 'border-transparent text-text-secondary hover:border-surface-4 hover:bg-surface-3'"
+                    :class="[
+                      selectedChapterId === chapter.id ? 'border-accent/40 bg-accent-subtle/50 shadow-sm' : 'border-transparent text-text-secondary hover:border-surface-4 hover:bg-surface-3',
+                      dragOverChapterId === chapter.id && draggingChapterId !== chapter.id ? 'ring-1 ring-accent/40 border-accent/40' : '',
+                    ]"
+                    draggable="true"
+                    @dragstart="onChapterDragStart(chapter.id, $event)"
+                    @dragover="onChapterDragOver(chapter.id, $event)"
+                    @drop="onChapterDrop(chapter.id, $event)"
+                    @dragend="onChapterDragEnd"
                     @click="selectedChapterId = chapter.id"
                   >
                     <div class="flex items-start gap-2">
@@ -1349,10 +1571,16 @@ defineExpose({
                         <BaseTag :variant="selectedChapterPlanComplete ? 'success' : 'warning'" size="sm">{{ ui.text(selectedChapterPlanComplete ? 'Ready' : 'Incomplete') }}</BaseTag>
                       </div>
                     </div>
-                    <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
-                      <Trash2 :size="14" />
-                      <span>{{ ui.text('Delete Chapter') }}</span>
-                    </BaseButton>
+                    <div class="ml-auto flex shrink-0 items-center gap-2">
+                      <BaseButton variant="warning" size="sm" @click="requestClearChapterPlan">
+                        <Trash2 :size="14" />
+                        <span>{{ ui.text('Clear Chapter Plan') }}</span>
+                      </BaseButton>
+                      <BaseButton variant="danger" size="sm" @click="handleDeleteChapter(selectedChapter.id)">
+                        <Trash2 :size="14" />
+                        <span>{{ ui.text('Delete Chapter') }}</span>
+                      </BaseButton>
+                    </div>
                   </div>
                   <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-4">
                     <div class="h-full rounded-full bg-accent transition-all" :style="{ width: `${selectedChapterPlanState.percent}%` }"></div>
@@ -1544,6 +1772,7 @@ defineExpose({
     <ConfirmDialog v-model="showClearConfirm" title="Clear Content" message="Clear current stage content?" variant="danger" confirm-text="Clear" @confirm="performClearChapter" />
     <ConfirmDialog v-model="showDeleteConfirm" title="Delete" message="Delete chapter?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
     <ConfirmDialog v-model="showDoubleDeleteConfirm" title="Warning" message="Chapter has content. Delete anyway?" variant="danger" confirm-text="Delete" @confirm="performDeleteChapter" />
+    <ConfirmDialog v-model="showClearChapterPlanConfirm" title="Clear Chapter Plan" message="Clear this chapter planning data?" variant="danger" confirm-text="Clear" @confirm="performClearChapterPlan" />
     <BaseDialog v-model="showGenerateCharactersDialog" title="Generate Characters" width="520px">
       <div class="space-y-5">
         <div>

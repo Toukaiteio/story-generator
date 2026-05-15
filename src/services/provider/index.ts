@@ -64,8 +64,9 @@ export class ProviderManager {
   }
 
   private buildToolChoiceCompatState(toolOptions?: ToolCallOptions): ToolChoiceCompatState {
+    const hasExplicitToolChoice = !!toolOptions && Object.prototype.hasOwnProperty.call(toolOptions, 'toolChoice')
     const toolChoice = toolOptions?.toolChoice
-    if (!toolChoice || typeof toolChoice !== 'object') {
+    if (!hasExplicitToolChoice || toolChoice === undefined) {
       return {
         canFallback: false,
         active: false,
@@ -74,16 +75,20 @@ export class ProviderManager {
       }
     }
 
-    const targetToolName = toolChoice.function?.name?.trim()
+    const targetToolName = typeof toolChoice === 'object'
+      ? toolChoice.function?.name?.trim()
+      : ''
     const instruction = targetToolName
       ? `Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. You must call the function tool "${targetToolName}" as the next action and place the final structured result in that tool call arguments.`
       : 'Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. Prefer function calling and complete the response via an appropriate tool call when possible.'
+    const downgradedOptions = { ...(toolOptions ?? {}) } as ToolCallOptions
+    delete (downgradedOptions as Partial<ToolCallOptions>).toolChoice
 
     return {
       canFallback: true,
       active: false,
       instruction,
-      downgradedOptions: { ...(toolOptions ?? {}), toolChoice: 'auto' },
+      downgradedOptions,
     }
   }
 
@@ -92,6 +97,9 @@ export class ProviderManager {
     if (!message.includes('tool_choice')) return false
     if (message.includes('thinking mode') && (message.includes('required') || message.includes('object'))) return true
     if (message.includes('does not support being set to required or object')) return true
+    if (message.includes('does not support this tool_choice')) return true
+    if (message.includes('does not support tool_choice')) return true
+    if (message.includes('tool_choice is not supported')) return true
     if (message.includes('invalidparameter') && message.includes('tool_choice')) return true
     return false
   }

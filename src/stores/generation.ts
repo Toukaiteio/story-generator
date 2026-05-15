@@ -1048,12 +1048,32 @@ export const useGenerationStore = defineStore('generation', () => {
           items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
         })
       }
+      const autoCloseRemainingTodos = async () => {
+        const items = Array.isArray(toolContext._todoList) ? [...toolContext._todoList] : []
+        if (!items.length) return false
+        let changed = false
+        for (const item of items) {
+          if (item?.status === 'done' || item?.status === 'blocked') continue
+          item.status = 'done'
+          item.notes = 'Auto-closed after successful outline tool execution.'
+          changed = true
+        }
+        if (!changed) return false
+        toolContext._todoList = items
+        await publishTodoList()
+        options.onToolStatus?.({
+          name: 'update_todolist',
+          status: 'warning',
+          detail: 'Todo list was auto-closed after successful outline edit to avoid retry deadlock.',
+        })
+        return true
+      }
       const forceToolChoice = (name: string): ToolCallOptions => ({
         toolChoice: { type: 'function', function: { name } },
       })
       const editToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
         if (round === 0) return forceToolChoice('update_todolist')
-        if (pendingFinalResult || getOpenTodos().length) return forceToolChoice('update_todolist')
+        if (pendingFinalResult && getOpenTodos().length) return forceToolChoice('update_todolist')
         if (!hasCurrentContent && round >= 1) return forceToolChoice('replace_chapter_content')
         return undefined
       }
@@ -1622,41 +1642,59 @@ export const useGenerationStore = defineStore('generation', () => {
           items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
         })
       }
+      const autoCloseRemainingTodos = async () => {
+        const items = Array.isArray(toolContext._todoList) ? [...toolContext._todoList] : []
+        if (!items.length) return false
+        let changed = false
+        for (const item of items) {
+          if (item?.status === 'done' || item?.status === 'blocked') continue
+          item.status = 'done'
+          item.notes = 'Auto-closed after successful outline edit tool execution.'
+          changed = true
+        }
+        if (!changed) return false
+        toolContext._todoList = items
+        await publishTodoList()
+        options.onToolStatus?.({
+          name: 'update_todolist',
+          status: 'warning',
+          detail: 'Todo list was auto-closed after successful outline edit to avoid retry deadlock.',
+        })
+        return true
+      }
       const forceToolChoice = (name: string): ToolCallOptions => ({
         toolChoice: { type: 'function', function: { name } },
       })
+      let hasOutlineChange = false
       const outlineToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
         if (round === 0) return forceToolChoice('update_todolist')
-        if (pendingFinalResult || getOpenTodos().length) return forceToolChoice('update_todolist')
+        if (pendingFinalResult && getOpenTodos().length) return forceToolChoice('update_todolist')
+        if (!hasOutlineChange && round >= 2) return forceToolChoice('rewrite_chapter_outline')
         return undefined
       }
 
       let pendingFinalResult: { title: string; outline: ChapterOutline; summary: string; toolName: string } | null = null
       for (let round = 0; round < 6; round++) {
         if (pendingFinalResult) {
-          const openTodos = getOpenTodos()
-          if (!openTodos.length) {
-            ensureNonEmptyTitle()
-            const missingFields = getMissingOutlineFields()
-            if (!missingFields.length) {
-              return pendingFinalResult
+          ensureNonEmptyTitle()
+          const missingFields = getMissingOutlineFields()
+          if (!missingFields.length) {
+            if (getOpenTodos().length) {
+              await autoCloseRemainingTodos()
             }
-            options.onToolStatus?.({
-              name: pendingFinalResult.toolName,
-              status: 'warning',
-              detail: `Outline is still incomplete: ${missingFields.join(', ')}. Requesting auto-repair.`,
-            })
-            currentMessages.push({
-              role: 'user',
-              content: `The outline is still incomplete. Missing required fields: ${missingFields.join(', ')}. Call outline tools again now to fill every missing field. Do not finish until all required fields are non-empty.`,
-            })
-            pendingFinalResult = null
-            continue
+            return pendingFinalResult
           }
+          options.onToolStatus?.({
+            name: pendingFinalResult.toolName,
+            status: 'warning',
+            detail: `Outline is still incomplete: ${missingFields.join(', ')}. Requesting auto-repair.`,
+          })
           currentMessages.push({
             role: 'user',
-            content: `The outline edit is prepared, but the todolist is not complete. Mark completed items done before finishing. Open items: ${openTodos.map((item: any) => `${item.id}: ${item.title} (${item.status})`).join('; ')}`,
+            content: `The outline is still incomplete. Missing required fields: ${missingFields.join(', ')}. Call outline tools again now to fill every missing field. Do not finish until all required fields are non-empty.`,
           })
+          pendingFinalResult = null
+          continue
         }
 
         let streamedContent = ''
@@ -1689,7 +1727,12 @@ export const useGenerationStore = defineStore('generation', () => {
 
         if (!response.tool_calls.length) {
           currentMessages.push({ role: 'assistant', content: response.content || null, reasoning_content: response.reasoning_content ?? null })
-          currentMessages.push({ role: 'user', content: 'Use an outline tool to complete the request. Do not return outline text directly.' })
+          currentMessages.push({
+            role: 'user',
+            content: round >= 3
+              ? 'Call rewrite_chapter_outline now with all required fields (title, objective, conflict, keyEvents, characterActions, infoReveals, endingHook). Do not return plain text.'
+              : 'Use an outline tool to complete the request. Do not return outline text directly.',
+          })
           continue
         }
 
@@ -1790,12 +1833,43 @@ export const useGenerationStore = defineStore('generation', () => {
               after,
             })
             pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : `Updated ${field}.`, toolCall.name)
+            hasOutlineChange = true
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-            if (!getOpenTodos().length) return pendingFinalResult
+            ensureNonEmptyTitle()
+            if (!getMissingOutlineFields().length) {
+              if (getOpenTodos().length) {
+                await autoCloseRemainingTodos()
+              }
+              return pendingFinalResult
+            }
             continue
           }
 
           if (toolCall.name === 'rewrite_chapter_outline') {
+            const requiredArgs: Array<keyof ChapterOutline> = ['objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook']
+            const missingArgs = requiredArgs.filter((key) => {
+              const value = (toolCall.arguments as any)?.[key]
+              if (key === 'keyEvents' || key === 'characterActions' || key === 'infoReveals') {
+                return !normalizeList(value).length
+              }
+              return !String(value ?? '').trim()
+            })
+            if (missingArgs.length) {
+              const result = { ok: false, error: `Missing required arguments for rewrite_chapter_outline: ${missingArgs.join(', ')}` }
+              options.onToolStatus?.({
+                callId: toolCall.id,
+                name: toolCall.name,
+                status: 'error',
+                detail: result.error,
+              })
+              currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
+              currentMessages.push({
+                role: 'user',
+                content: `rewrite_chapter_outline failed because required arguments were missing: ${missingArgs.join(', ')}. Retry rewrite_chapter_outline with all required fields filled.`,
+              })
+              continue
+            }
+
             const before = outlineToText()
             currentState.title = String(toolCall.arguments?.title ?? currentState.title).trim() || currentState.title
             currentState.outline = {
@@ -1818,8 +1892,15 @@ export const useGenerationStore = defineStore('generation', () => {
               after,
             })
             pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : 'Rewrote chapter outline.', toolCall.name)
+            hasOutlineChange = true
             currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-            if (!getOpenTodos().length) return pendingFinalResult
+            ensureNonEmptyTitle()
+            if (!getMissingOutlineFields().length) {
+              if (getOpenTodos().length) {
+                await autoCloseRemainingTodos()
+              }
+              return pendingFinalResult
+            }
             continue
           }
 
@@ -1827,7 +1908,17 @@ export const useGenerationStore = defineStore('generation', () => {
         }
       }
 
-      if (pendingFinalResult && !getOpenTodos().length) return pendingFinalResult
+      if (pendingFinalResult) {
+        ensureNonEmptyTitle()
+        const missingFields = getMissingOutlineFields()
+        if (!missingFields.length) {
+          if (getOpenTodos().length) {
+            await autoCloseRemainingTodos()
+          }
+          return pendingFinalResult
+        }
+        throw new Error(`Vibe AI could not complete the outline edit after retrying. Missing required fields: ${missingFields.join(', ')}`)
+      }
       throw new Error('Vibe AI could not complete the outline edit after retrying.')
     } catch (error: any) {
       options.onToolStatus?.({ name: 'rewrite_chapter_outline', status: 'error', detail: error?.message || 'Unknown error' })

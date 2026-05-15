@@ -581,7 +581,8 @@ const relationshipContext = computed(() => {
   return `Relationship context is not inlined to reduce prompt size. Use relationship query tools for specific character pairs at chapterIndex ${Math.max(-1, chapter.value.index - 1)} when available.`
 })
 
-function applyVibeContent(nextContent: string) {
+function applyVibeContent(payload: string | { content: string; chapterId?: string }) {
+  const nextContent = typeof payload === 'string' ? payload : payload.content
   if (!project.value || !chapter.value) {
     content.value = nextContent
     return

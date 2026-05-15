@@ -96,26 +96,29 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   async chatWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], toolOptions?: ToolCallOptions): Promise<FunctionCallingResponse> {
     const url = `${this.buildBaseUrl(options)}/chat/completions`
+    const body: Record<string, unknown> = {
+      model: options.model,
+      messages: this.normalizeMessages(messages),
+      max_tokens: options.maxTokens,
+      temperature: options.temperature,
+      stream: false,
+      tools: tools.map(tool => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        },
+      })),
+    }
+    if (toolOptions && Object.prototype.hasOwnProperty.call(toolOptions, 'toolChoice') && toolOptions.toolChoice !== undefined) {
+      body.tool_choice = toolOptions.toolChoice
+    }
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
       signal: options.signal,
-      body: JSON.stringify({
-        model: options.model,
-        messages: this.normalizeMessages(messages),
-        max_tokens: options.maxTokens,
-        temperature: options.temperature,
-        stream: false,
-        tools: tools.map(tool => ({
-          type: 'function',
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
-        })),
-        tool_choice: toolOptions?.toolChoice ?? 'auto',
-      }),
+      body: JSON.stringify(body),
     })
 
     if (!response.ok) {
@@ -226,26 +229,29 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   async streamWithTools(messages: ChatMessage[], options: ChatOptions, tools: ToolDefinition[], callbacks: StreamWithToolsCallbacks, toolOptions?: ToolCallOptions): Promise<void> {
     const url = `${this.buildBaseUrl(options)}/chat/completions`
+    const body: Record<string, unknown> = {
+      model: options.model,
+      messages: this.normalizeMessages(messages),
+      max_tokens: options.maxTokens,
+      temperature: options.temperature,
+      stream: true,
+      tools: tools.map(tool => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        },
+      })),
+    }
+    if (toolOptions && Object.prototype.hasOwnProperty.call(toolOptions, 'toolChoice') && toolOptions.toolChoice !== undefined) {
+      body.tool_choice = toolOptions.toolChoice
+    }
     const response = await fetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
       signal: options.signal,
-      body: JSON.stringify({
-        model: options.model,
-        messages: this.normalizeMessages(messages),
-        max_tokens: options.maxTokens,
-        temperature: options.temperature,
-        stream: true,
-        tools: tools.map(tool => ({
-          type: 'function',
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
-        })),
-        tool_choice: toolOptions?.toolChoice ?? 'auto',
-      }),
+      body: JSON.stringify(body),
     })
 
     if (!response.ok) {

@@ -28,6 +28,23 @@ const orderedChapters = computed(() =>
   [...(project.value?.chapters ?? [])].sort((a, b) => a.index - b.index)
 )
 
+function generationChildUnsaved(nodeId: string) {
+  if (!project.value) return false
+  if (nodeId === 'generation-planning') return Boolean(ui.unsavedWorkspaceNodes[`planning-${project.value.id}`])
+  if (nodeId === 'generation-chapter-outline') return Boolean(ui.unsavedWorkspaceNodes[`chapters-${project.value.id}`])
+  return false
+}
+
+function hasUnsavedInGeneration() {
+  if (!project.value) return false
+  return Boolean(ui.unsavedWorkspaceNodes[`planning-${project.value.id}`] || ui.unsavedWorkspaceNodes[`chapters-${project.value.id}`])
+}
+
+function hasUnsavedInCharacters() {
+  if (!project.value) return false
+  return project.value.characters.some(character => Boolean(ui.unsavedWorkspaceNodes[`character-${character.id}`]))
+}
+
 function toggleSection(section: string) {
   if (expandedSections.value.has(section)) {
     expandedSections.value.delete(section)
@@ -53,15 +70,17 @@ const tree = computed<TreeNode[]>(() => {
       id: 'config',
       label: 'Story Configuration',
       icon: Settings,
+      unsaved: Boolean(ui.unsavedWorkspaceNodes.config),
     },
     {
       id: 'generation-section',
       label: 'Generation Flow',
       icon: Wand2,
       section: 'generation',
+      unsaved: hasUnsavedInGeneration(),
       children: [
-        { id: 'generation-planning', label: 'Story Planning', icon: List },
-        { id: 'generation-chapter-outline', label: 'Chapter Plan', icon: FileText },
+        { id: 'generation-planning', label: 'Story Planning', icon: List, unsaved: generationChildUnsaved('generation-planning') },
+        { id: 'generation-chapter-outline', label: 'Chapter Plan', icon: FileText, unsaved: generationChildUnsaved('generation-chapter-outline') },
         { id: 'generation-chapter-outline-review', label: 'Meeting', icon: FileText },
         { id: 'generation-writing', label: 'Writing', icon: FileText },
         { id: 'generation-proofreading', label: 'Proofreading', icon: FileText },
@@ -73,8 +92,9 @@ const tree = computed<TreeNode[]>(() => {
       label: 'Outline',
       icon: List,
       section: 'outline',
+      unsaved: Boolean(ui.unsavedWorkspaceNodes.outline),
       children: project.value.outline
-        ? [{ id: 'outline', label: 'Story Outline', icon: FileText }]
+        ? [{ id: 'outline', label: 'Story Outline', icon: FileText, unsaved: Boolean(ui.unsavedWorkspaceNodes.outline) }]
         : [],
     },
     {
@@ -94,10 +114,12 @@ const tree = computed<TreeNode[]>(() => {
       label: `Characters (${project.value.characters.length})`,
       icon: Users,
       section: 'characters',
+      unsaved: hasUnsavedInCharacters(),
       children: project.value.characters.map(c => ({
         id: `character-${c.id}`,
         label: c.name,
         icon: Users,
+        unsaved: Boolean(ui.unsavedWorkspaceNodes[`character-${c.id}`]),
       })),
     },
   ]
@@ -143,6 +165,11 @@ function handleNodeClick(node: TreeNode) {
           />
           <component :is="node.icon" :size="14" class="shrink-0" />
           <span class="truncate text-xs">{{ ui.text(node.label) }}</span>
+          <span
+            v-if="node.unsaved"
+            class="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-warning shadow-[0_0_0_3px_rgba(245,158,11,0.12)]"
+            :title="ui.text('Unsaved changes')"
+          ></span>
         </button>
 
         <Transition name="fade">

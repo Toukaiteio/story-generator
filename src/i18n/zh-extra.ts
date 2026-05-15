@@ -74,7 +74,6 @@ export default {
   'Must Include': '必须包含',
   'Chapter Beats': '章节节拍',
   'Add Chapter': '添加章节',
-  'Generate Next Chapter': '生成下一章',
   'Save Chapters': '保存章节',
   'need planning': '待完善',
   'planning fields complete': '个规划字段已完成',

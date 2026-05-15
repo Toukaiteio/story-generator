@@ -77,7 +77,8 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
 
   private buildToolChoice(toolOptions?: ToolCallOptions) {
     const choice = toolOptions?.toolChoice
-    if (!choice || choice === 'auto' || choice === 'none') return choice ?? 'auto'
+    if (choice === undefined) return undefined
+    if (choice === 'auto' || choice === 'none') return choice
     return {
       type: 'function',
       name: choice.function.name,
@@ -154,7 +155,10 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
 
     if (tools?.length) {
       body.tools = this.buildTools(tools)
-      body.tool_choice = this.buildToolChoice(toolOptions)
+      const toolChoice = this.buildToolChoice(toolOptions)
+      if (toolChoice !== undefined) {
+        body.tool_choice = toolChoice
+      }
     }
 
     return body

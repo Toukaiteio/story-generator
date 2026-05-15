@@ -42,6 +42,14 @@ function removeLegacyJsonStorage(key: string) {
   }
 }
 
+function toSerializableStorageValue<T>(value: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T
+  } catch {
+    return value
+  }
+}
+
 export function readJsonStorage<T>(key: string, fallback: T): T {
   const electronStorage = canUseElectronStorage() ? getElectronStorage() : null
   if (electronStorage) {
@@ -74,10 +82,11 @@ export function readJsonStorage<T>(key: string, fallback: T): T {
 }
 
 export function writeJsonStorage(key: string, value: unknown) {
+  const serializableValue = toSerializableStorageValue(value)
   const electronStorage = canUseElectronStorage() ? getElectronStorage() : null
   if (electronStorage) {
     try {
-      const ok = electronStorage.writeJson(key, value)
+      const ok = electronStorage.writeJson(key, serializableValue)
       if (ok) {
         removeLegacyJsonStorage(key)
         return
@@ -87,7 +96,7 @@ export function writeJsonStorage(key: string, value: unknown) {
     }
   }
 
-  writeLegacyJsonStorage(key, value)
+  writeLegacyJsonStorage(key, serializableValue)
 }
 
 export function removeJsonStorage(key: string) {

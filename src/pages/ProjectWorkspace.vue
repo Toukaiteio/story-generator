@@ -36,10 +36,103 @@ const unsavedScan = computed(() =>
 )
 const unsavedEntries = computed(() => unsavedScan.value.entries)
 const staleUnsavedChapterIds = computed(() => unsavedScan.value.staleChapterIds)
-const hasUnsavedWorkspaceFlags = computed(() =>
-  Object.values(ui.unsavedWorkspaceNodes).some(Boolean)
+type UnsavedLocation = {
+  id: string
+  projectId: string
+  workspaceNode: string
+  title: string
+  detail: string
+  isChapter: boolean
+  chapterEntry?: UnsavedChapterLocation
+}
+
+function generationNodeFromUnsavedFlag(flagNode: string, projectId: string) {
+  if (flagNode === `planning-${projectId}`) return 'generation-planning'
+  if (flagNode === `chapters-${projectId}`) return 'generation-chapter-outline'
+  return flagNode
+}
+
+function resolveProjectIdForUnsavedNode(node: string): string | null {
+  if (node.startsWith('chapter-')) {
+    const chapterId = node.slice('chapter-'.length)
+    for (const project of projectStore.projects) {
+      if (project.chapters.some(chapter => chapter.id === chapterId)) return project.id
+    }
+    return null
+  }
+  if (node.startsWith('character-')) {
+    const characterId = node.slice('character-'.length)
+    for (const project of projectStore.projects) {
+      if (project.characters.some(character => character.id === characterId)) return project.id
+    }
+    return null
+  }
+  const planningMatch = /^planning-(.+)$/.exec(node)
+  if (planningMatch?.[1]) return planningMatch[1]
+  const chaptersMatch = /^chapters-(.+)$/.exec(node)
+  if (chaptersMatch?.[1]) return chaptersMatch[1]
+  return projectStore.activeProject?.id ?? null
+}
+
+function buildNonChapterUnsavedLocations(): UnsavedLocation[] {
+  const locations: UnsavedLocation[] = []
+  for (const [node, unsaved] of Object.entries(ui.unsavedWorkspaceNodes)) {
+    if (!unsaved || node.startsWith('chapter-')) continue
+    const projectId = resolveProjectIdForUnsavedNode(node)
+    if (!projectId) continue
+    const project = projectStore.projects.find(item => item.id === projectId)
+    if (!project) continue
+    const workspaceNode = generationNodeFromUnsavedFlag(node, projectId)
+
+    let nodeLabel = ui.text(workspaceNode)
+    if (workspaceNode.startsWith('character-')) {
+      const characterId = workspaceNode.slice('character-'.length)
+      const character = project.characters.find(item => item.id === characterId)
+      nodeLabel = character?.name || ui.text('Character')
+    } else if (workspaceNode === 'config') {
+      nodeLabel = ui.text('Story Configuration')
+    } else if (workspaceNode === 'outline') {
+      nodeLabel = ui.text('Story Outline')
+    } else if (workspaceNode.startsWith('generation-')) {
+      nodeLabel = ui.text(workspaceNode.replace('generation-', ''))
+    }
+
+    locations.push({
+      id: `${projectId}:${workspaceNode}`,
+      projectId,
+      workspaceNode,
+      title: `${project.name} / ${nodeLabel}`,
+      detail: ui.text('The current workspace has unsaved changes.'),
+      isChapter: false,
+    })
+  }
+  return locations
+}
+
+const unsavedLocations = computed<UnsavedLocation[]>(() => {
+  const chapterLocations = unsavedEntries.value.map(entry => ({
+    id: `${entry.projectId}:${entry.workspaceNode}`,
+    projectId: entry.projectId,
+    workspaceNode: entry.workspaceNode,
+    title: formatUnsavedLocation(entry),
+    detail: entry.hasDraftSnapshot
+      ? ui.text('Draft snapshot cached locally and not saved to the project yet.')
+      : ui.text('This chapter is still marked as unsaved.'),
+    isChapter: true,
+    chapterEntry: entry,
+  }))
+  const merged = [...chapterLocations, ...buildNonChapterUnsavedLocations()]
+  const unique = new Map<string, UnsavedLocation>()
+  for (const location of merged) {
+    if (!unique.has(location.id)) unique.set(location.id, location)
+  }
+  return [...unique.values()]
+})
+
+const hasUnsavedWork = computed(() => unsavedLocations.value.length > 0)
+const activeUnsavedLocation = computed(() =>
+  unsavedLocations.value.find(item => item.workspaceNode === ui.activeWorkspaceNode) ?? null
 )
-const hasUnsavedWork = computed(() => unsavedEntries.value.length > 0 || hasUnsavedWorkspaceFlags.value)
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
   if (!hasUnsavedWork.value) return
@@ -53,19 +146,28 @@ function formatUnsavedLocation(entry: UnsavedChapterLocation) {
   return `${entry.projectName} / ${chapterLabel}: ${chapterTitle}`
 }
 
-async function locateUnsavedEntry(entry: UnsavedChapterLocation) {
-  showUnsavedCloseDialog.value = false
-  if (route.params.id !== entry.projectId) {
-    await router.push({ name: 'Workspace', params: { id: entry.projectId } })
+async function locateUnsavedLocation(location: UnsavedLocation, options: { keepDialogOpen?: boolean } = {}) {
+  if (!options.keepDialogOpen) {
+    showUnsavedCloseDialog.value = false
   }
-  projectStore.setActiveProject(entry.projectId)
-  ui.setWorkspaceNode(entry.workspaceNode)
+  if (route.params.id !== location.projectId) {
+    await router.push({ name: 'Workspace', params: { id: location.projectId } })
+  }
+  projectStore.setActiveProject(location.projectId)
+  ui.setWorkspaceNode(location.workspaceNode)
 }
 
 async function locateFirstUnsavedEntry() {
-  const first = unsavedEntries.value[0]
+  const first = unsavedLocations.value[0]
   if (!first) return
-  await locateUnsavedEntry(first)
+  await locateUnsavedLocation(first)
+}
+
+async function autoLocateFirstUnsavedOnClosePrompt() {
+  const first = unsavedLocations.value[0]
+  if (!first) return
+  if (route.params.id === first.projectId && ui.activeWorkspaceNode === first.workspaceNode) return
+  await locateUnsavedLocation(first, { keepDialogOpen: true })
 }
 
 function discardUnsavedAndClose() {
@@ -73,8 +175,29 @@ function discardUnsavedAndClose() {
   window.electronAPI?.window?.confirmCloseHandled?.('discard')
 }
 
+function isEditableTarget(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null
+  if (!target) return false
+  const tag = target.tagName?.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  if ((target as HTMLElement).isContentEditable) return true
+  return Boolean(target.closest('[contenteditable=\"true\"]'))
+}
+
 async function handleGlobalSaveShortcut(event: KeyboardEvent) {
-  if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+  const ctrlOrMeta = event.ctrlKey || event.metaKey
+  if (!ctrlOrMeta) return
+
+  const key = event.key.toLowerCase()
+  if (key === 'z') {
+    if (isEditableTarget(event)) return
+    if (activeView.value !== 'generation') return
+    event.preventDefault()
+    generationStudioRef.value?.undoFromShortcut?.()
+    return
+  }
+
+  if (key !== 's') return
   event.preventDefault()
   if (activeView.value === 'generation') {
     await generationStudioRef.value?.saveFromShortcut?.()
@@ -114,6 +237,7 @@ onMounted(async () => {
       return
     }
     showUnsavedCloseDialog.value = true
+    void autoLocateFirstUnsavedOnClosePrompt()
   }) ?? null
   // Ensure projects are loaded before setting active project
   if (projectStore.projects.length === 0) {
@@ -202,6 +326,21 @@ const activeView = computed(() => {
         </template>
         <template #second>
           <div class="h-full min-h-0 overflow-hidden">
+            <div
+              v-if="activeUnsavedLocation"
+              class="mx-3 mt-3 mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-xs font-semibold text-warning">{{ ui.text('Unsaved in current page') }}</p>
+                  <p class="truncate text-xs text-text-secondary">{{ activeUnsavedLocation.title }}</p>
+                </div>
+                <BaseButton variant="secondary" size="sm" @click="locateUnsavedLocation(activeUnsavedLocation)">
+                  <LocateFixed :size="12" />
+                  <span>{{ ui.text('Locate') }}</span>
+                </BaseButton>
+              </div>
+            </div>
             <!-- Config view with Knowledge Base sidebar -->
             <template v-if="activeView === 'config'">
               <PanelGroup direction="horizontal" :initial-size="350" :min-size="280" :max-size="450" limit-second>
@@ -249,19 +388,17 @@ const activeView = computed(() => {
           </div>
         </div>
 
-        <div v-if="unsavedEntries.length" class="space-y-2">
+        <div v-if="unsavedLocations.length" class="space-y-2">
           <p class="text-xs font-semibold uppercase tracking-wider text-text-muted">{{ ui.text('Unsaved locations') }}</p>
           <button
-            v-for="entry in unsavedEntries"
-            :key="`${entry.projectId}:${entry.chapterId}`"
+            v-for="entry in unsavedLocations"
+            :key="entry.id"
             class="flex w-full items-center justify-between gap-3 rounded-lg border border-surface-4 bg-surface-2 px-4 py-3 text-left transition-colors hover:border-accent/30 hover:bg-surface-3"
-            @click="locateUnsavedEntry(entry)"
+            @click="locateUnsavedLocation(entry)"
           >
             <div class="min-w-0">
-              <p class="truncate text-sm font-medium text-text-primary">{{ formatUnsavedLocation(entry) }}</p>
-              <p class="mt-1 text-xs text-text-secondary">
-                {{ entry.hasDraftSnapshot ? ui.text('Draft snapshot cached locally and not saved to the project yet.') : ui.text('This chapter is still marked as unsaved.') }}
-              </p>
+              <p class="truncate text-sm font-medium text-text-primary">{{ entry.title }}</p>
+              <p class="mt-1 text-xs text-text-secondary">{{ entry.detail }}</p>
             </div>
             <span class="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-1 text-xs font-semibold text-accent">
               <LocateFixed :size="12" />

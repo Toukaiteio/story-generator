@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { Loader2 } from 'lucide-vue-next'
 
 const props = withDefaults(defineProps<{
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning'
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
   disabled?: boolean
@@ -24,6 +24,7 @@ const classes = computed(() => {
     secondary: 'bg-surface-3 text-text-primary border border-surface-4 hover:bg-surface-4 active:bg-surface-5',
     ghost: 'text-text-secondary hover:text-text-primary hover:bg-surface-3 active:bg-surface-4',
     danger: 'bg-danger text-white hover:opacity-90 active:opacity-80',
+    warning: 'bg-warning text-text-primary hover:opacity-90 active:opacity-80',
   }
 
   const sizes = {
