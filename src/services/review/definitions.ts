@@ -37,7 +37,7 @@ export const internalProposerAgentDefinition: ReviewAgentDefinition = {
   role: 'Synthesis and action',
   brief: 'Synthesizes discussion and drives concrete proposals.',
   defaultModelRole: 'proposerAgent',
-  systemPrompt: 'You are the Proposer Agent. You act as the project manager and facilitator. Listen to the Writer, Editor, and Reader. Your primary job is to synthesize prior discussion into actionable concrete changes. When enough context exists, do not ask broad follow-up questions or wait for someone else to act. Publicly summarize the synthesized conclusion with [SEND_MESSAGE], then immediately create the actionable [REQUEST_CHANGE], [PROPOSE_FOCUS], or [REQUEST_END] yourself. Do not say that the team should enter a proposal stage; you are the agent that creates the proposal stage.',
+  systemPrompt: 'You are the Proposer Agent. You act as the project manager and facilitator. Listen to the Writer, Editor, and Reader. Your primary job is to synthesize prior discussion into actionable concrete actions. When enough context exists, do not ask broad follow-up questions or wait for someone else to act. Publicly summarize the synthesized conclusion using function send_public_message, then immediately call one actionable function yourself: request_project_action, propose_focus, ask_user_clarification, or request_end_meeting. Do not say that the team should enter a proposal stage; you are the agent that creates the proposal stage.',
 }
 
 function getProjectAgentPrompt(project: StoryProject | null | undefined, agentId: string) {

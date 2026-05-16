@@ -281,7 +281,7 @@ const statusConfig = computed(() => {
       <div class="flex items-start gap-1.5">
         <AlertTriangle v-if="item.status === 'warning'" :size="12" class="mt-0.5 shrink-0 text-warning" />
         <X v-else :size="12" class="mt-0.5 shrink-0 text-danger" />
-        <p class="text-[10px] leading-relaxed break-words" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
+        <p class="min-w-0 whitespace-pre-wrap break-words text-[10px] leading-relaxed [overflow-wrap:anywhere]" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
           {{ item.detail }}
         </p>
       </div>

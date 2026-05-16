@@ -4,7 +4,15 @@ import type { Chapter } from '@/types/chapter'
 
 export type ReviewAgentStatus = 'idle' | 'waiting' | 'requesting' | 'speaking' | 'blocked'
 export type ReviewMessageRole = 'user' | 'agent' | 'system'
-export type ReviewContextElement = 'story-config' | 'master-outline' | 'characters' | 'knowledge-base' | 'selected-chapter' | 'chapter-plan' | 'chapter-draft'
+export type ReviewContextElement =
+  | 'story-config'
+  | 'master-outline'
+  | 'characters'
+  | 'knowledge-base'
+  | 'selected-chapter'
+  | 'chapter-plan'
+  | 'chapter-plan-overview'
+  | 'chapter-draft'
 
 export interface ReviewSpeechRequest {
   id: string
@@ -90,11 +98,37 @@ export interface ReviewChangeVote {
   createdAt: string
 }
 
+export type ReviewExecutionPhase = 'plan' | 'act' | 'verify' | 'report'
+export type ReviewExecutionErrorClass = 'schema_error' | 'not_found' | 'conflict' | 'persist_mismatch' | 'unknown'
+
+export interface ReviewExecutionLedgerEntry {
+  id: string
+  phase: ReviewExecutionPhase
+  step: string
+  status: 'running' | 'success' | 'warning' | 'error'
+  detail?: string
+  attempt?: number
+  errorClass?: ReviewExecutionErrorClass
+  createdAt: string
+}
+
 export interface ReviewChangeVoteSession {
   id: string
   requestedByAgentId: string
   requestedByAgentName: string
   request: ReviewChangeRequest
+  draft?: boolean
+  refinementRound?: number
+  executionContractVersion?: string
+  executionPhase?: ReviewExecutionPhase
+  executionStatus?: string
+  executionState?: 'running' | 'success' | 'warning' | 'error'
+  executionTimeline?: Array<{
+    line: string
+    state: 'running' | 'success' | 'warning' | 'error'
+    createdAt: string
+  }>
+  executionLedger?: ReviewExecutionLedgerEntry[]
   status: 'voting' | 'applying' | 'applied' | 'rejected' | 'failed'
   votes: ReviewChangeVote[]
   amendmentDepth?: number

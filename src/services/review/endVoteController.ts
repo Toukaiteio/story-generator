@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import { providerManager } from '@/services/provider'
+import type { ToolDefinition } from '@/services/provider'
 import { decodeProviderModelRef } from '@/services/provider/catalog'
 import type { ProviderModelRef } from '@/types/provider'
 import type {
@@ -13,6 +14,65 @@ import type {
 } from './types'
 import { parseAskUserVote, parseEndVote, stripReasoningText } from './utils'
 import { buildAskUserVoteMessages, buildEndVoteMessages } from './context'
+
+const END_VOTE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'submit_end_vote',
+    description: 'Submit your vote for ending the meeting.',
+    parameters: {
+      type: 'object',
+      properties: {
+        vote: { type: 'string', enum: ['approve', 'reject', 'yes', 'no'] },
+        reason: { type: 'string' },
+      },
+      required: ['vote', 'reason'],
+    },
+  },
+]
+
+const ASK_USER_VOTE_TOOLS: ToolDefinition[] = [
+  {
+    name: 'submit_ask_user_vote',
+    description: 'Submit your vote on whether user clarification is required.',
+    parameters: {
+      type: 'object',
+      properties: {
+        vote: { type: 'string', enum: ['approve', 'reject', 'yes', 'no'] },
+        reason: { type: 'string' },
+      },
+      required: ['vote', 'reason'],
+    },
+  },
+]
+
+function normalizeVoteToken(value: unknown): 'approve' | 'reject' {
+  const token = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return token === 'approve' || token === 'yes' ? 'approve' : 'reject'
+}
+
+function parseEndVoteFromToolCalls(toolCalls: Array<{ name: string; arguments: Record<string, any> }>) {
+  const call = [...toolCalls].reverse().find(item => item.name === 'submit_end_vote')
+  if (!call) return null
+  const vote = normalizeVoteToken(call.arguments?.vote)
+  const reason = typeof call.arguments?.reason === 'string' && call.arguments.reason.trim()
+    ? call.arguments.reason.trim()
+    : vote === 'approve'
+      ? 'The agent agrees the meeting goal is resolved.'
+      : 'The agent thinks unresolved issues remain.'
+  return { vote, reason }
+}
+
+function parseAskUserVoteFromToolCalls(toolCalls: Array<{ name: string; arguments: Record<string, any> }>) {
+  const call = [...toolCalls].reverse().find(item => item.name === 'submit_ask_user_vote')
+  if (!call) return null
+  const vote = normalizeVoteToken(call.arguments?.vote)
+  const reason = typeof call.arguments?.reason === 'string' && call.arguments.reason.trim()
+    ? call.arguments.reason.trim()
+    : vote === 'approve'
+      ? 'Clarification is needed.'
+      : 'Clarification is not necessary.'
+  return { vote, reason }
+}
 
 interface ProviderStoreLike {
   providers: any[]
@@ -100,15 +160,18 @@ export function createEndVoteController(deps: EndVoteControllerDeps) {
     deps.setAgentStatus(agent.id, 'speaking', false)
 
     try {
-      const content = await providerManager.chat(
+      const response = await providerManager.chatWithTools(
         buildEndVoteMessages(agent, deps.messages.value, deps.context(), deps.currentFocus.value, deps.selectedContextElements.value, session),
         model,
+        END_VOTE_TOOLS,
         700,
         0.2,
+        { toolChoice: 'auto' },
         abortController.signal
       )
       if (deps.endVoteSession.value?.id !== sessionId || abortController.signal.aborted) return
-      const parsed = parseEndVote(stripReasoningText(content))
+      const parsed = parseEndVoteFromToolCalls(response.tool_calls)
+        ?? parseEndVote(stripReasoningText(response.content || ''))
       const vote: ReviewEndVote = {
         agentId: agent.id,
         agentName: agent.name,
@@ -222,9 +285,18 @@ export function createEndVoteController(deps: EndVoteControllerDeps) {
     deps.activeAbortControllers.set(agent.id, abortController)
     deps.setAgentStatus(agent.id, 'speaking', false)
     try {
-      const content = await providerManager.chat(buildAskUserVoteMessages(agent, deps.messages.value, deps.context(), session), model, 500, 0.2, abortController.signal)
+      const response = await providerManager.chatWithTools(
+        buildAskUserVoteMessages(agent, deps.messages.value, deps.context(), session),
+        model,
+        ASK_USER_VOTE_TOOLS,
+        500,
+        0.2,
+        { toolChoice: 'auto' },
+        abortController.signal
+      )
       if (deps.askUserSession.value?.id !== sessionId || abortController.signal.aborted) return
-      const parsed = parseAskUserVote(stripReasoningText(content))
+      const parsed = parseAskUserVoteFromToolCalls(response.tool_calls)
+        ?? parseAskUserVote(stripReasoningText(response.content || ''))
       deps.askUserSession.value.votes.push({ agentId: agent.id, agentName: agent.name, vote: parsed.vote, reason: parsed.reason, createdAt: new Date().toISOString() })
     } catch (error: any) {
       if (abortController.signal.aborted || error?.name === 'AbortError') return

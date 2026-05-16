@@ -3,6 +3,8 @@ import { useProviderStore } from '@/stores/provider'
 import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
 import { loadVibeConversation, saveVibeConversation } from '@/services/vibeChatStorage'
+import { providerManager } from '@/services/provider'
+import { decodeProviderModelRef } from '@/services/provider/catalog'
 import type { StoryProject } from '@/types/project'
 import type {
   ReviewAgentDefinition,
@@ -29,6 +31,8 @@ import {
 import {
   parseLooseJson,
   normalizeChangeAction,
+  stripReasoningText,
+  extractPublicAgentMessage,
 } from './utils'
 import {
   normalizePublicMessage,
@@ -86,6 +90,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
   const brainstormingMode = ref(false)
   const mandatoryBrainstormActive = ref(false)
   const openDiscussionTurnCount = ref(0)
+  const proposerDutyAttemptCount = ref(0)
+  const proposerDutyAwaiting = ref(false)
+  const proposerDutyStalled = ref(false)
+  const proposerSegmentedFallbackRunning = ref(false)
   const inputText = ref('')
   const userTyping = ref(false)
   const loading = ref(false)
@@ -220,6 +228,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
       changeVoteSnapshot: {
         ...session,
         request: { ...session.request },
+        executionTimeline: Array.isArray(session.executionTimeline) ? [...session.executionTimeline] : [],
+        executionLedger: Array.isArray(session.executionLedger)
+          ? session.executionLedger.map(entry => ({ ...entry }))
+          : [],
         votes: session.votes.map(vote => ({
           ...vote,
           amendment: vote.amendment ? { ...vote.amendment } : undefined,
@@ -303,7 +315,7 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
           currentFocus.value = typeof state.focus === 'string' ? state.focus : currentFocus.value
           selectedContextElements.value = Array.isArray(state.selectedContextElements)
             ? state.selectedContextElements.filter((item: any) =>
-              ['story-config', 'master-outline', 'characters', 'knowledge-base', 'selected-chapter', 'chapter-plan', 'chapter-draft'].includes(item)
+              ['story-config', 'master-outline', 'characters', 'knowledge-base', 'selected-chapter', 'chapter-plan', 'chapter-plan-overview', 'chapter-draft'].includes(item)
             )
             : selectedContextElements.value
           pendingProposal.value = state.pendingProposal && typeof state.pendingProposal === 'object' ? state.pendingProposal : null
@@ -512,6 +524,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     mandatoryBrainstormActive.value = false
     brainstormRoundCompleted.value = false
     pendingChangeRequests.value = []
+    proposerDutyAttemptCount.value = 0
+    proposerDutyAwaiting.value = false
+    proposerDutyStalled.value = false
+    proposerSegmentedFallbackRunning.value = false
     scheduleSave()
     await nextTick()
     releaseBlockedAgents()
@@ -528,7 +544,7 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
         'Analyze the latest user request before taking action.',
         'Clarify what the user wants, what final effect would satisfy it, and whether a project edit is required.',
         'If the team needs alignment but no edit is needed, request target: consensus voting.',
-        'If an edit is needed, request a project change vote with scope, purpose, and concrete content.',
+        'If a read/write action is needed, request a project action vote with scope, purpose, and concrete content.',
       ].join(' '))
     }
   }
@@ -673,6 +689,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     addSystemMessage(`User approved new meeting focus: ${proposal.content}`)
     pendingProposal.value = null
     meetingEnded.value = false
+    proposerDutyAttemptCount.value = 0
+    proposerDutyAwaiting.value = false
+    proposerDutyStalled.value = false
+    proposerSegmentedFallbackRunning.value = false
     requestAllAgents([
       `The user approved the new meeting focus: ${proposal.content}`,
       'Continue the meeting in open discussion mode.',
@@ -687,6 +707,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     addSystemMessage(`User rejected focus change${reason?.trim() ? `: ${reason.trim()}` : '.'}`)
     pendingProposal.value = null
     meetingEnded.value = false
+    proposerDutyAttemptCount.value = 0
+    proposerDutyAwaiting.value = false
+    proposerDutyStalled.value = false
+    proposerSegmentedFallbackRunning.value = false
     requestAllAgents([
       `The user rejected the proposed focus: ${proposal.content}`,
       reason?.trim() ? `User reason: ${reason.trim()}` : 'No rejection reason was provided.',
@@ -762,6 +786,187 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
   })
   const { requestChangeVote, flushPendingChangeRequest } = changeVoteController
 
+  type ProposerSegmentField = 'target' | 'action' | 'scope' | 'purpose' | 'content'
+
+  function normalizeProposerTarget(value: string): ReviewChangeRequest['target'] | null {
+    const text = value.trim().toLowerCase()
+    if (!text) return null
+    if (text.includes('chapter-plan') || text.includes('chapter plan') || text.includes('章节规划') || text.includes('章节大纲') || text.includes('chapter outline')) {
+      return 'chapter-plan'
+    }
+    if (text.includes('master-outline') || text.includes('master outline') || text.includes('主线大纲') || text.includes('故事大纲') || text.includes('主大纲')) {
+      return 'master-outline'
+    }
+    if (text.includes('characters') || text.includes('character') || text.includes('角色') || text.includes('人物')) {
+      return 'characters'
+    }
+    if (text.includes('consensus') || text.includes('共识')) {
+      return 'consensus'
+    }
+    return null
+  }
+
+  function normalizeProposerSegmentAnswer(raw: string): string {
+    const clean = stripReasoningText(raw || '')
+    const publicPart = extractPublicAgentMessage(clean)
+    return (publicPart || clean).trim()
+  }
+
+  function buildProposerSegmentPrompt(
+    field: ProposerSegmentField,
+    draft: Partial<ReviewChangeRequest>,
+    discussion: string,
+  ) {
+    const base = [
+      `Meeting language: ${context().project?.language || 'the project Primary Language'}.`,
+      'You are in segmented proposal assembly mode.',
+      'Return only the requested field value, no explanations, no markdown fences, no extra labels.',
+      'If you are unsure, return your best concrete value instead of asking questions.',
+      '',
+      `Current focus:\n${currentFocus.value || 'No focus set.'}`,
+      '',
+      'Recent discussion:',
+      discussion || 'No recent discussion.',
+      '',
+      `Collected fields so far:`,
+      `target: ${draft.target || '(empty)'}`,
+      `action: ${draft.action || '(empty)'}`,
+      `scope: ${draft.scope || '(empty)'}`,
+      `purpose: ${draft.purpose || '(empty)'}`,
+      `content: ${draft.content ? `${draft.content.slice(0, 240)}${draft.content.length > 240 ? '...' : ''}` : '(empty)'}`,
+      '',
+    ]
+
+    if (field === 'target') {
+      base.push('Question: choose exactly one target from master-outline | chapter-plan | characters | consensus.')
+    } else if (field === 'action') {
+      base.push('Question: choose exactly one action from create | read | update | delete.')
+    } else if (field === 'scope') {
+      base.push('Question: provide one concise scope line describing which part should change.')
+    } else if (field === 'purpose') {
+      base.push('Question: provide one concise purpose line describing why this change is needed for user satisfaction.')
+    } else {
+      base.push('Question: provide the concrete change content to apply. JSON or prose are both acceptable.')
+    }
+
+    return base.join('\n')
+  }
+
+  async function runProposerSegmentedFallback() {
+    if (proposerSegmentedFallbackRunning.value || meetingEnded.value) return false
+    const proposer = proposerAgent.value
+    if (!proposer.enabled) return false
+
+    providerManager.setProviders(providerStore.providers)
+    const preferred = decodeProviderModelRef(proposer.modelValue)
+    const model = providerStore.getAvailableModelRefForRole(proposer.defaultModelRole, preferred)
+      ?? providerStore.getAvailableModelRefForRole('chapterPlanner')
+      ?? providerStore.getAvailableModelRefForRole('proofreader')
+      ?? providerStore.getDefaultModelRefForRole(proposer.defaultModelRole)
+    if (!model) {
+      addSystemMessage('Proposer segmented fallback failed: no available model is configured for the Proposer Agent.')
+      return false
+    }
+
+    proposerSegmentedFallbackRunning.value = true
+    proposerDutyAwaiting.value = true
+    setAgentStatus(proposer.id, 'speaking', false)
+    if (!activeSpeakerIds.value.includes(proposer.id)) {
+      activeSpeakerIds.value.push(proposer.id)
+    }
+    loading.value = true
+
+    try {
+      addSystemMessage('Proposer Agent failed to emit a concrete proposal block in round 1. Starting segmented proposal assembly round.')
+      const discussion = messages.value
+        .slice(-16)
+        .map(msg => {
+          if (msg.role === 'agent') return `[${msg.agentName || 'Agent'}] ${msg.content}`
+          if (msg.role === 'user') return `[User] ${msg.content}`
+          return `[System] ${msg.content}`
+        })
+        .join('\n\n')
+
+      const draft: Partial<ReviewChangeRequest> = {}
+      const fields: ProposerSegmentField[] = ['target', 'action', 'scope', 'purpose', 'content']
+
+      for (const field of fields) {
+        const prompt = buildProposerSegmentPrompt(field, draft, discussion)
+        const response = await providerManager.chat(
+          [
+            {
+              role: 'system',
+              content: [
+                proposer.customSystemPrompt || proposer.systemPrompt,
+                '',
+                'You are being asked to provide one field for a structured project-change proposal.',
+                'Return only the field value requested by the user prompt.',
+              ].join('\n'),
+            },
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          model,
+          field === 'content' ? 1800 : 500,
+          0.2,
+        )
+        const answer = normalizeProposerSegmentAnswer(response)
+        if (!answer) throw new Error(`Segmented proposal answer is empty for field: ${field}`)
+        if (field === 'target') {
+          const normalizedTarget = normalizeProposerTarget(answer)
+          if (!normalizedTarget) throw new Error(`Invalid target from proposer segmented answer: ${answer}`)
+          draft.target = normalizedTarget
+          continue
+        }
+        if (field === 'action') {
+          draft.action = normalizeChangeAction(answer)
+          continue
+        }
+        if (field === 'scope') {
+          draft.scope = answer
+          continue
+        }
+        if (field === 'purpose') {
+          draft.purpose = answer
+          continue
+        }
+        draft.content = answer
+      }
+
+      if (!draft.target || !draft.action || !draft.scope || !draft.purpose || !draft.content) {
+        throw new Error('Segmented proposal assembly finished with missing required fields.')
+      }
+
+      requestChangeVote(proposer, {
+        target: draft.target,
+        action: draft.action,
+        scope: draft.scope,
+        purpose: draft.purpose,
+        content: draft.content,
+      })
+      addSystemMessage('Segmented proposal assembly succeeded. The meeting engine auto-created a concrete proposal and moved it to voting.')
+      proposerDutyAttemptCount.value = 0
+      proposerDutyStalled.value = false
+      return true
+    } catch (error: any) {
+      addSystemMessage(`Segmented proposal assembly failed: ${error?.message || 'Unknown error'}`)
+      return false
+    } finally {
+      proposerSegmentedFallbackRunning.value = false
+      proposerDutyAwaiting.value = false
+      if (activeSpeakerIds.value.includes(proposer.id)) {
+        activeSpeakerIds.value = activeSpeakerIds.value.filter(id => id !== proposer.id)
+      }
+      if (proposer.status === 'speaking' || proposer.status === 'waiting' || proposer.status === 'requesting' || proposer.status === 'blocked') {
+        setAgentStatus(proposer.id, 'idle', false)
+      }
+      loading.value = activeSpeakerIds.value.length > 0
+      scheduleSave()
+    }
+  }
+
   function stopActiveTurns() {
     runGeneration.value += 1
     for (const controller of activeAbortControllers.values()) {
@@ -774,6 +979,8 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     loading.value = false
     brainstormingMode.value = false
     mandatoryBrainstormActive.value = false
+    proposerDutyAwaiting.value = false
+    proposerSegmentedFallbackRunning.value = false
     for (const agent of agents.value) {
       if (agent.status === 'speaking' || agent.status === 'waiting' || agent.status === 'requesting' || agent.status === 'blocked') {
         setAgentStatus(agent.id, 'idle', false)
@@ -787,6 +994,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     askUserSession.value = null
     changeVoteSession.value = null
     meetingEnded.value = true
+    proposerDutyAttemptCount.value = 0
+    proposerDutyAwaiting.value = false
+    proposerDutyStalled.value = false
+    proposerSegmentedFallbackRunning.value = false
     addSystemMessage(reason)
     scheduleSave()
   }
@@ -872,8 +1083,43 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
           if (!request) break
           const agent = getAgentStateById(request.agentId)
           if (!agent) continue
+          const beforeActionState = {
+            hasPendingProposal: Boolean(pendingProposal.value),
+            endVoteStatus: endVoteSession.value?.status ?? null,
+            askUserStatus: askUserSession.value?.status ?? null,
+            changeVoteStatus: changeVoteSession.value?.status ?? null,
+            pendingChangeCount: pendingChangeRequests.value.length,
+          }
           await runAgentTurn(agent, request)
           if (queueGeneration !== runGeneration.value) return
+          if (request.agentId === 'proposer' && request.requestedBy === 'agent') {
+            proposerDutyAwaiting.value = false
+            const proposerProducedAction =
+              Boolean(pendingProposal.value)
+              || endVoteSession.value?.status === 'voting'
+              || askUserSession.value?.status === 'ready'
+              || askUserSession.value?.status === 'voting'
+              || changeVoteSession.value?.status === 'voting'
+              || changeVoteSession.value?.status === 'applying'
+              || pendingChangeRequests.value.length > beforeActionState.pendingChangeCount
+              || (!beforeActionState.hasPendingProposal && Boolean(pendingProposal.value))
+            if (proposerProducedAction) {
+              proposerDutyAttemptCount.value = 0
+              proposerDutyStalled.value = false
+            } else {
+              proposerDutyAttemptCount.value += 1
+              if (proposerDutyAttemptCount.value === 1) {
+                const recovered = await runProposerSegmentedFallback()
+                if (!recovered) {
+                  proposerDutyStalled.value = true
+                  addSystemMessage('Proposer Agent could not produce a concrete proposal in round 1, and segmented round-2 assembly also failed. Auto-round continuation is paused to avoid infinite prompting. Please send user guidance or manually request an agent turn.')
+                }
+              } else if (proposerDutyAttemptCount.value >= 2) {
+                proposerDutyStalled.value = true
+                addSystemMessage('Proposer Agent failed to create a concrete proposal after multiple attempts. Auto-round continuation is paused to avoid infinite prompting. Please send user guidance or manually request an agent turn.')
+              }
+            }
+          }
         }
 
         if (
@@ -887,29 +1133,35 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
           !userTyping.value &&
           !inputText.value.trim()
         ) {
+          if (proposerDutyStalled.value) {
+            return
+          }
           const internalProposer = proposerAgent.value.enabled ? proposerAgent.value : null
           if (
             internalProposer &&
             openDiscussionTurnCount.value > 0 &&
             !queueHasAgent(internalProposer.id) &&
-            !activeSpeakerIds.value.includes(internalProposer.id)
+            !activeSpeakerIds.value.includes(internalProposer.id) &&
+            !proposerDutyAwaiting.value &&
+            !proposerSegmentedFallbackRunning.value &&
+            proposerDutyAttemptCount.value < 2
           ) {
-            const lastProposerMemory = internalProposer.privateMemory[internalProposer.privateMemory.length - 1] || ''
-            const hasRecentProposalDuty = lastProposerMemory.includes('Proposer duty round')
-            if (!hasRecentProposalDuty) {
-              internalProposer.privateMemory = [
-                ...internalProposer.privateMemory,
-                `Proposer duty round ${new Date().toLocaleString()}: after observing the first open-discussion pass, you must now synthesize the discussion into one concrete proposal action.`,
-              ].slice(-12)
-              requestTurn(internalProposer.id, [
-                'Proposer duty round.',
-                'The first open discussion pass by the other agents has finished.',
-                'You did not participate in that pass. Now synthesize their discussion.',
-                'You must create exactly one concrete next-step tool action in this turn if enough information exists: preferably [REQUEST_CHANGE], otherwise [ASK_USER], [PROPOSE_FOCUS], or [REQUEST_END].',
-                'Do not ask a broad follow-up question. Do not delegate proposal creation to others.',
-              ].join('\n'))
-              return
-            }
+            proposerDutyAwaiting.value = true
+            internalProposer.privateMemory = [
+              ...internalProposer.privateMemory,
+              `Proposer duty round ${new Date().toLocaleString()}: synthesize open-discussion outcomes into one concrete proposal action.`,
+            ].slice(-12)
+            requestTurn(internalProposer.id, [
+              'Proposer duty round.',
+              'The first open discussion pass by the other agents has finished.',
+              'Now synthesize their discussion into one concrete next-step action.',
+              'You MUST call exactly one actionable function in this turn if enough information exists: prefer request_project_action, otherwise ask_user_clarification, propose_focus, or request_end_meeting.',
+              'Do not ask broad follow-up questions. Do not delegate proposal creation. Do not return only commentary.',
+              'Your proposal must incorporate at least two concrete points from earlier agent messages (for example specific chapter, scene, character, or constraint details) and reflect them in scope/purpose/content.',
+              'If you choose request_project_action, call it with target, action, scope, purpose, and content.',
+              'If you include a public explanation, call send_public_message(content) first, then still call exactly one actionable function.',
+            ].join('\n'))
+            return
           }
 
           const enabledAgentCount = agents.value.filter(a => a.enabled).length
@@ -921,8 +1173,8 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
               requestAllAgents([
                 'Converge now.',
                 'Do not continue general discussion.',
-                'In this round, each agent must do one of these if justified: create [REQUEST_CHANGE], create [ASK_USER], create [PROPOSE_FOCUS], or create [REQUEST_END].',
-                'If a project edit is already clearly needed, create [REQUEST_CHANGE] now instead of describing it abstractly.',
+                'In this round, each agent must do one of these if justified: call request_project_action, call ask_user_clarification, call propose_focus, or call request_end_meeting.',
+                'If a project read/write action is already clearly needed, call request_project_action now instead of describing it abstractly.',
               ].join('\n'), {
                 mandatoryBrainstorm: false,
                 resetTurnCount: false,
@@ -967,6 +1219,10 @@ export function useMultiAgentReviewChat(context: () => MultiAgentReviewContext) 
     mandatoryBrainstormActive.value = false
     brainstormRoundCompleted.value = false
     pendingChangeRequests.value = []
+    proposerDutyAttemptCount.value = 0
+    proposerDutyAwaiting.value = false
+    proposerDutyStalled.value = false
+    proposerSegmentedFallbackRunning.value = false
     agents.value = getReviewAgentDefinitions(context().project).map(definition => createAgentState(definition, context().project))
     proposerAgent.value = createAgentState({
       ...internalProposerAgentDefinition,

@@ -8,7 +8,7 @@ import { AnthropicAdapter } from './anthropic'
 import { GoogleAdapter } from './google'
 import { buildContinueMessages, createParagraphGuard, guardResponseText } from './responseGuard'
 import { applyDsmlCompatToFunctionResponse } from './dsmlCompat'
-import { calculateBudget, estimateMessageTokens, estimateMessagesTokens, fitMessagesToContextSmart } from '@/services/context'
+import { calculateBudget, estimateMessageTokens, estimateMessagesTokens, fitMessagesToContextSmart, sanitizeToolCallContinuity } from '@/services/context'
 
 type ToolChoiceCompatState = {
   canFallback: boolean
@@ -132,7 +132,7 @@ export class ProviderManager {
     if (!hasConfiguredContext) {
       const totalTokens = estimateMessagesTokens(messages)
       if (totalTokens < this.unknownContextCompressionTriggerTokens) {
-        return messages
+        return sanitizeToolCallContinuity(messages).messages
       }
       effectiveContextTokens = Math.max(
         this.unknownContextVirtualWindowTokens,
@@ -140,7 +140,9 @@ export class ProviderManager {
       )
     }
 
-    if (!effectiveContextTokens || effectiveContextTokens <= 0) return messages
+    if (!effectiveContextTokens || effectiveContextTokens <= 0) {
+      return sanitizeToolCallContinuity(messages).messages
+    }
     const { messages: fitted } = fitMessagesToContextSmart(
       messages,
       effectiveContextTokens,
@@ -154,17 +156,18 @@ export class ProviderManager {
     const maxInputTokens = hasConfiguredContext
       ? budget.available
       : Math.min(budget.available, this.unknownContextForcedInputLimitTokens)
-    const fittedTokens = estimateMessagesTokens(fitted)
-    if (fittedTokens <= maxInputTokens) return fitted
+    const continuitySafeFitted = sanitizeToolCallContinuity(fitted).messages
+    const fittedTokens = estimateMessagesTokens(continuitySafeFitted)
+    if (fittedTokens <= maxInputTokens) return continuitySafeFitted
 
-    const longestUserIndex = fitted
+    const longestUserIndex = continuitySafeFitted
       .map((message, index) => ({ index, tokens: message.role === 'user' ? estimateMessageTokens(message) : -1 }))
       .sort((a, b) => b.tokens - a.tokens)[0]?.index
 
     if (longestUserIndex == null || longestUserIndex < 0) return fitted
-    const target = fitted[longestUserIndex]
+    const target = continuitySafeFitted[longestUserIndex]
     const source = String(target.content || '')
-    if (!source.trim()) return fitted
+    if (!source.trim()) return continuitySafeFitted
 
     const otherTokens = fittedTokens - estimateMessageTokens(target)
     const maxContentTokens = Math.max(80, maxInputTokens - otherTokens - 12)
@@ -186,10 +189,10 @@ export class ProviderManager {
       }
     }
 
-    if (!best) return fitted
-    const next = [...fitted]
+    if (!best) return continuitySafeFitted
+    const next = [...continuitySafeFitted]
     next[longestUserIndex] = { ...target, content: best }
-    return next
+    return sanitizeToolCallContinuity(next).messages
   }
 
   getProviderConfigForModel(modelRef: ProviderModelRef): ProviderConfig | null {

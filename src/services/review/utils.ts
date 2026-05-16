@@ -139,9 +139,10 @@ function normalizeJsonStyleChangeRequest(parsed: any): ReviewChangeRequest | nul
     ? parsed.purpose.trim()
     : `Apply the requested ${action} change to ${target}.`
   const content = typeof data === 'string' ? data : JSON.stringify(data ?? parsed, null, 2)
-  if (!content.trim()) return null
+  const normalizedContent = content.trim() || (action === 'read' ? 'N/A' : '')
+  if (!normalizedContent) return null
 
-  return { target, action, scope, purpose, content }
+  return { target, action, scope, purpose, content: normalizedContent }
 }
 
 export function normalizeChangeAction(value: unknown): ReviewChangeAction {
@@ -207,7 +208,102 @@ export function normalizeChapterOutlinePatch(chapter: Chapter, request: ReviewCh
   if (/^conflict\b/i.test(scope)) return { ...base, conflict: content }
   if (/^endingHook\b/i.test(scope)) return { ...base, endingHook: content }
 
+  const inferred = inferOutlineFromStructuredText(content)
+  if (inferred) {
+    return {
+      objective: inferred.objective ?? base.objective,
+      conflict: inferred.conflict ?? base.conflict,
+      keyEvents: inferred.keyEvents ?? base.keyEvents,
+      characterActions: inferred.characterActions ?? base.characterActions,
+      infoReveals: inferred.infoReveals ?? base.infoReveals,
+      endingHook: inferred.endingHook ?? base.endingHook,
+    }
+  }
+
   throw new Error('Chapter plan changes need either outline JSON or a supported field scope such as keyEvents[2], characterActions, objective, conflict, infoReveals, or endingHook.')
+}
+
+function inferOutlineFromStructuredText(content: string): Partial<Chapter['outline']> | null {
+  const text = content.trim()
+  if (!text) return null
+
+  const sections = splitStructuredSections(text)
+  if (!sections.size) return null
+
+  const parseList = (value: string) => value
+    .split(/\r?\n/)
+    .map(item => item.replace(/^[-*\d.)\s]+/, '').trim())
+    .filter(Boolean)
+
+  const outline: Partial<Chapter['outline']> = {}
+
+  const objective = firstSection(sections, ['objective', '目标', '章节目标'])
+  if (objective) outline.objective = objective
+
+  const conflict = firstSection(sections, ['conflict', '冲突', '核心冲突'])
+  if (conflict) outline.conflict = conflict
+
+  const keyEvents = firstSection(sections, ['keyevents', 'key events', '关键事件'])
+  if (keyEvents) outline.keyEvents = parseList(keyEvents)
+
+  const characterActions = firstSection(sections, ['characteractions', 'character actions', '角色行动'])
+  if (characterActions) outline.characterActions = parseList(characterActions)
+
+  const infoReveals = firstSection(sections, ['inforeveals', 'info reveals', '信息揭示'])
+  if (infoReveals) outline.infoReveals = parseList(infoReveals)
+
+  const endingHook = firstSection(sections, ['endinghook', 'ending hook', '结尾钩子'])
+  if (endingHook) outline.endingHook = endingHook
+
+  const hasAny = Boolean(
+    outline.objective
+    || outline.conflict
+    || (outline.keyEvents && outline.keyEvents.length)
+    || (outline.characterActions && outline.characterActions.length)
+    || (outline.infoReveals && outline.infoReveals.length)
+    || outline.endingHook
+  )
+
+  return hasAny ? outline : null
+}
+
+function splitStructuredSections(text: string): Map<string, string> {
+  const lines = text.split(/\r?\n/)
+  const map = new Map<string, string>()
+  let currentKey = ''
+  let buffer: string[] = []
+
+  const flush = () => {
+    if (!currentKey) return
+    const merged = buffer.join('\n').trim()
+    if (merged) map.set(normalizeSectionKey(currentKey), merged)
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    const match = line.match(/^([A-Za-z ]+|[\u4e00-\u9fa5]{2,8})\s*[:：]\s*(.*)$/)
+    if (!match) {
+      if (currentKey) buffer.push(rawLine)
+      continue
+    }
+    flush()
+    currentKey = match[1]
+    buffer = [match[2] || '']
+  }
+  flush()
+  return map
+}
+
+function normalizeSectionKey(key: string) {
+  return key.toLowerCase().replace(/\s+/g, '').trim()
+}
+
+function firstSection(map: Map<string, string>, aliases: string[]) {
+  for (const alias of aliases) {
+    const value = map.get(normalizeSectionKey(alias))
+    if (value) return value
+  }
+  return ''
 }
 
 export function extractFocusProposal(agent: ReviewAgentState, content: string): ReviewProposal | null {
@@ -256,7 +352,10 @@ export function extractAskUserRequest(content: string): ReviewAskUserRequest | n
 }
 
 export function extractChangeRequests(content: string): ReviewChangeRequest[] {
-  const blocks = extractTaggedBlocks(content, 'REQUEST_CHANGE')
+  const blocks = [
+    ...extractTaggedBlocks(content, 'REQUEST_ACTION'),
+    ...extractTaggedBlocks(content, 'REQUEST_CHANGE'),
+  ]
   const requests: ReviewChangeRequest[] = []
 
   for (const block of blocks) {
@@ -283,11 +382,54 @@ export function extractChangeRequests(content: string): ReviewChangeRequest[] {
   const scope = readField('scope')
   const purpose = readField('purpose')
   const changeContent = readField('content')
-    if (!target || !scope || !purpose || !changeContent) continue
-    requests.push({ target, action, scope, purpose, content: changeContent })
+  const normalizedContent = changeContent || (action === 'read' ? 'N/A' : '')
+    if (!target || !scope || !purpose || !normalizedContent) continue
+    requests.push({ target, action, scope, purpose, content: normalizedContent })
   }
 
   return requests
+}
+
+export function inferImplicitChangeRequest(
+  content: string,
+  options: { hasChapter?: boolean } = {}
+): ReviewChangeRequest | null {
+  const cleaned = sanitizePublicAgentMessage(stripMeetingControlBlocks(content || ''))
+  if (!cleaned) return null
+
+  const targetHints = {
+    chapterPlan: /(chapter[\s-]*(?:plan|outline)|章节(?:规划|计划|大纲)|当前章|本章)/i,
+    characters: /(characters?|角色|人物|成员|cast)/i,
+    masterOutline: /(master[\s-]*outline|主线大纲|故事大纲|主大纲|整体大纲|全局大纲)/i,
+  }
+  const editVerb = /(rewrite|revise|update|modify|replace|refine|improve|写入|重写|修改|更新|完善|调整|补充|新增|删除)/i
+  if (!editVerb.test(cleaned)) return null
+
+  let target: ReviewChangeTarget | null = null
+  if (targetHints.chapterPlan.test(cleaned) && options.hasChapter) {
+    target = 'chapter-plan'
+  } else if (targetHints.masterOutline.test(cleaned)) {
+    target = 'master-outline'
+  } else if (targetHints.characters.test(cleaned)) {
+    target = 'characters'
+  } else if (targetHints.chapterPlan.test(cleaned)) {
+    // If chapter hints exist but no chapter is selected, fall back to master outline.
+    target = 'master-outline'
+  }
+  if (!target) return null
+
+  const firstSentence = cleaned
+    .split(/\r?\n+/)
+    .map(line => line.trim())
+    .find(Boolean) || 'Apply synthesized meeting change.'
+
+  return {
+    target,
+    action: 'update',
+    scope: target === 'chapter-plan' ? 'chapter-plan' : target,
+    purpose: firstSentence.slice(0, 220),
+    content: cleaned,
+  }
 }
 
 export function extractChangeRequest(content: string): ReviewChangeRequest | null {
@@ -378,6 +520,7 @@ export function stripMeetingControlBlocks(content: string) {
   return content
     .replace(/\[(?:SEND_MESSAGE|PUBLIC_MESSAGE)\][\s\S]*?\[\/(?:SEND_MESSAGE|PUBLIC_MESSAGE)\]/gi, '')
     .replace(/\[(?:SEND_MESSAGE|PUBLIC_MESSAGE)\]/gi, '')
+    .replace(/\[REQUEST_ACTION\][\s\S]*?\[\/REQUEST_ACTION\]/gi, '')
     .replace(/\[REQUEST_CHANGE\][\s\S]*?\[\/REQUEST_CHANGE\]/gi, '')
     .replace(/\[ASK_USER\][\s\S]*?\[\/ASK_USER\]/gi, '')
     .replace(/\[REQUEST_END:\s*([^\]]+)\]/gi, '')
@@ -390,12 +533,21 @@ export function stripMeetingControlBlocks(content: string) {
 }
 
 export function sanitizePublicAgentMessage(content: string) {
-  return content
+  const cleaned = content
+    .replace(/^\s*\[[^\]]*?\bAgent\]\s*/i, '')
     .split(/\r?\n/)
     .filter(line => !/^\s*(?:Current Meeting Opening \/ Focus|Speaking Permission|Current Phase|Recent Public Meeting Context|New Public Messages Since Your Last Turn|Your Private Memory|Tool Usage Instruction|Rules)\s*:/i.test(line))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+  if (!cleaned) return ''
+  if (
+    /^(let me|让我|我先).{0,80}(?:查看|检查|复查|read|check|review).{0,80}(?:故事配置|story configuration|完整的故事配置)/i.test(cleaned)
+    || /^(i need to|需要先).{0,80}(?:查看|检查|read|check).{0,80}(?:配置|configuration)/i.test(cleaned)
+  ) {
+    return ''
+  }
+  return cleaned
 }
 
 export function extractPublicAgentMessage(content: string) {
@@ -468,7 +620,8 @@ export function buildPostToolReviewFocus(session: ReviewChangeVoteSession, resul
     'Continue the meeting instead of stopping automatically.',
     'Review whether the applied change or consensus satisfies the latest user request.',
     'If more work is needed, propose the next change or consensus vote.',
-    'If the issue is truly resolved, request ending the meeting with [REQUEST_END: reason].',
+    'If the issue is truly resolved, call request_end_meeting with a concise reason.',
+    'Do not repeat an already-applied write proposal; propose only the next delta if needed.',
     `Accepted target: ${session.request.target}`,
     `Accepted scope: ${session.request.scope}`,
   ].join('\n')

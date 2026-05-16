@@ -32,6 +32,12 @@ export interface SmartCompressionResult extends CompressionResult {
   compressedGroups: number
 }
 
+export interface ToolCallContinuityResult {
+  messages: ChatMessage[]
+  strippedAssistantToolCalls: number
+  droppedOrphanToolMessages: number
+}
+
 type MessageGroupKind = 'system' | 'single' | 'tool-round'
 
 interface MessageGroup {
@@ -228,6 +234,86 @@ function groupMessagesForChatCompletions(messages: ChatMessage[]): MessageGroup[
 
 function flattenGroups(groups: MessageGroup[]): ChatMessage[] {
   return groups.flatMap(group => group.messages)
+}
+
+/**
+ * Ensures assistant tool-call messages and tool result messages stay protocol-safe.
+ *
+ * Rules:
+ * 1. A tool message without a directly preceding assistant tool-call round is dropped.
+ * 2. An assistant message with incomplete tool results has its tool_calls stripped.
+ *    The assistant content/reasoning is kept when present.
+ */
+export function sanitizeToolCallContinuity(messages: ChatMessage[]): ToolCallContinuityResult {
+  const sanitized: ChatMessage[] = []
+  let strippedAssistantToolCalls = 0
+  let droppedOrphanToolMessages = 0
+
+  let index = 0
+  while (index < messages.length) {
+    const message = messages[index]
+
+    if (message.role === 'tool') {
+      droppedOrphanToolMessages++
+      index++
+      continue
+    }
+
+    if (message.role !== 'assistant' || !message.tool_calls?.length) {
+      sanitized.push(message)
+      index++
+      continue
+    }
+
+    const expectedIds = new Set(
+      message.tool_calls
+        .map(toolCall => String(toolCall.id || '').trim())
+        .filter(Boolean)
+    )
+    if (!expectedIds.size) {
+      const stripped = { ...message }
+      delete stripped.tool_calls
+      const hasContent = typeof stripped.content === 'string' && stripped.content.trim().length > 0
+      const hasReasoning = typeof stripped.reasoning_content === 'string' && stripped.reasoning_content.trim().length > 0
+      if (hasContent || hasReasoning) sanitized.push(stripped)
+      strippedAssistantToolCalls++
+      index++
+      continue
+    }
+
+    const matchedToolMessages: ChatMessage[] = []
+    const matchedIds = new Set<string>()
+    let cursor = index + 1
+    while (cursor < messages.length && messages[cursor].role === 'tool') {
+      const toolMessage = messages[cursor]
+      const toolCallId = String(toolMessage.tool_call_id || '').trim()
+      if (!expectedIds.has(toolCallId)) break
+      matchedIds.add(toolCallId)
+      matchedToolMessages.push(toolMessage)
+      cursor++
+    }
+
+    if (matchedIds.size === expectedIds.size) {
+      sanitized.push(message)
+      sanitized.push(...matchedToolMessages)
+    } else {
+      const stripped = { ...message }
+      delete stripped.tool_calls
+      const hasContent = typeof stripped.content === 'string' && stripped.content.trim().length > 0
+      const hasReasoning = typeof stripped.reasoning_content === 'string' && stripped.reasoning_content.trim().length > 0
+      if (hasContent || hasReasoning) sanitized.push(stripped)
+      strippedAssistantToolCalls++
+      droppedOrphanToolMessages += matchedToolMessages.length
+    }
+
+    index = cursor
+  }
+
+  return {
+    messages: sanitized,
+    strippedAssistantToolCalls,
+    droppedOrphanToolMessages,
+  }
 }
 
 /**

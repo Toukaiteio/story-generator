@@ -129,9 +129,9 @@ const queuedAgentSet = computed(() => new Set(props.queueAgentIds))
         </div>
 
         <transition name="fade">
-          <div v-if="agent.toolState.error" class="mt-3 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-[10px] text-danger animate-in slide-in-from-top-1">
+          <div v-if="agent.toolState.error" class="mt-3 flex min-w-0 items-start gap-2 rounded-xl border border-danger/20 bg-danger/5 px-3 py-2 text-[10px] text-danger animate-in slide-in-from-top-1">
             <ShieldAlert :size="12" class="shrink-0 mt-0.5" />
-            <p>{{ agent.toolState.error }}</p>
+            <p class="min-w-0 whitespace-pre-wrap break-words leading-relaxed [overflow-wrap:anywhere]">{{ agent.toolState.error }}</p>
           </div>
         </transition>
       </article>

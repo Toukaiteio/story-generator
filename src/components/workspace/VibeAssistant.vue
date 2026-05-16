@@ -23,7 +23,7 @@ import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
 import { agentTodoListState, clearAgentTodoList, type AgentTodoItem } from '@/services/agent/todolist'
 import type { ChapterOutline } from '@/types/chapter'
 import { markdownToHtml } from '@/services/markdown'
-import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, RotateCcw, User, Copy, Wand2, ChevronDown, Brain, History, Plus, Trash2 } from 'lucide-vue-next'
+import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, User, Copy, Wand2, ChevronDown, Brain, History, Plus, Trash2 } from 'lucide-vue-next'
 
 interface ChatMessageBlock {
   id: StoredVibeChatMessageBlock['id']
@@ -80,7 +80,6 @@ const expandedReasoningMessageIds = ref<Set<string>>(new Set())
 const manuallyExpandedToolMessageIds = ref<Set<string>>(new Set())
 const currentReasoning = ref('')
 const streamingAssistantId = ref('')
-const showResetConfirm = ref(false)
 const showRewindConfirm = ref(false)
 const pendingRewindMessageId = ref('')
 const showHistoryMenu = ref(false)
@@ -1137,20 +1136,11 @@ async function createAndSwitchConversation() {
 }
 
 async function clearChat() {
-  showResetConfirm.value = false
   showRewindConfirm.value = false
   pendingRewindMessageId.value = ''
   showHistoryMenu.value = false
   await persistChatNow()
   await createAndSwitchConversation()
-}
-
-function requestClearChat() {
-  if (hasConversationContent.value) {
-    showResetConfirm.value = true
-    return
-  }
-  void clearChat()
 }
 
 async function switchConversation(conversationId: string) {
@@ -1482,9 +1472,9 @@ defineExpose({
         <button
           class="p-1.5 text-text-muted hover:text-accent hover:bg-accent/5 rounded transition-all"
           :title="tr('New Conversation')"
-          @click="requestClearChat"
+          @click="clearChat"
         >
-          <RotateCcw :size="13" />
+          <Plus :size="13" />
         </button>
       </div>
       <div
@@ -1529,29 +1519,6 @@ defineExpose({
           </div>
         </div>
         <p v-else class="text-[11px] text-text-muted">{{ tr('No saved history in this scope yet.') }}</p>
-      </div>
-      <div
-        v-if="showResetConfirm"
-        class="absolute right-3 top-9 z-50 w-72 rounded-lg border border-surface-4 bg-surface-1 p-3 shadow-xl"
-      >
-        <p class="text-xs font-semibold text-text-primary">{{ tr('Create a new conversation?') }}</p>
-        <p class="mt-1 text-[11px] leading-relaxed text-text-secondary">
-          {{ tr('The current conversation will be kept in history, and a new conversation will start for this same category/event/topic scope.') }}
-        </p>
-        <div class="mt-3 flex justify-end gap-2">
-          <button
-            class="rounded-md px-2.5 py-1.5 text-[11px] font-medium text-text-secondary hover:bg-surface-2 hover:text-text-primary"
-            @click="showResetConfirm = false"
-          >
-            {{ tr('Cancel') }}
-          </button>
-          <button
-            class="rounded-md bg-danger px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-danger/90"
-            @click="clearChat"
-          >
-            {{ tr('Start New') }}
-          </button>
-        </div>
       </div>
     </div>
 

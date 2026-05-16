@@ -15,7 +15,9 @@ import ToolCallStatus from '@/components/ui/ToolCallStatus.vue'
 import VibeModelPicker from './VibeModelPicker.vue'
 import MeetingSettingsSidebar from './review/MeetingSettingsSidebar.vue'
 import MeetingParticipantsSidebar from './review/MeetingParticipantsSidebar.vue'
-import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Info, LayoutList, MessageSquare, PauseCircle, RotateCcw, Settings, ShieldAlert, Sparkles, User, Users, ArrowUp, Square, X } from 'lucide-vue-next'
+import AgentAvatar from './review/AgentAvatar.vue'
+import ProposalCard from './review/ProposalCard.vue'
+import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Info, LayoutList, MessageSquare, PauseCircle, RotateCcw, Settings, Sparkles, User, Users, ArrowUp, Square } from 'lucide-vue-next'
 
 const props = defineProps<{
   project: StoryProject | null | undefined
@@ -31,7 +33,6 @@ const chatEndRef = ref<HTMLElement | null>(null)
 const editingAgentId = ref<string | null>(null)
 const agentPromptDraft = ref('')
 const agentModelDraft = ref('')
-const continueReason = ref('')
 const showLeftSidebar = ref(true)
 const showRightSidebar = ref(true)
 const showAddAgentDialog = ref(false)
@@ -42,10 +43,6 @@ const newAgentRole = ref('')
 const newAgentBrief = ref('')
 const newAgentPrompt = ref('')
 const newAgentModelRole = ref<'chapterPlanner' | 'proofreader'>('chapterPlanner')
-const isProposalBannerCollapsed = ref(false)
-const isChangeVoteBannerCollapsed = ref(false)
-const hiddenProposalId = ref<string | null>(null)
-const hiddenChangeVoteId = ref<string | null>(null)
 
 const maxContextTurns = computed({
   get: () => props.project?.reviewAgentSettings?.maxContextTurns ?? 15,
@@ -76,6 +73,7 @@ const contextOptions: Array<{ key: ReviewContextElement; label: string; detail: 
   { key: 'master-outline', label: 'Master Outline', detail: 'Project-level outline and direction' },
   { key: 'characters', label: 'Characters', detail: 'Current cast and roles' },
   { key: 'knowledge-base', label: 'Knowledge Base', detail: 'Linked project documents and retrieved references' },
+  { key: 'chapter-plan-overview', label: 'All Chapter Plans', detail: 'Cross-chapter planning progress and status summary' },
   { key: 'selected-chapter', label: 'Selected Chapter', detail: 'Chapter title, status, summary' },
   { key: 'chapter-plan', label: 'Chapter Plan', detail: 'Structured chapter planning fields' },
   { key: 'chapter-draft', label: 'Chapter Draft', detail: 'Existing draft text if available' },
@@ -86,6 +84,7 @@ const referenceLabelMap: Record<ReviewContextElement, string> = {
   'master-outline': 'Master Outline',
   'characters': 'Characters',
   'knowledge-base': 'Knowledge Base',
+  'chapter-plan-overview': 'All Chapter Plans',
   'selected-chapter': 'Selected Chapter',
   'chapter-plan': 'Chapter Plan',
   'chapter-draft': 'Chapter Draft',
@@ -109,17 +108,7 @@ const editingAgent = computed(() =>
   review.agents.value.find(agent => agent.id === editingAgentId.value) ?? null
 )
 
-const visiblePendingProposal = computed(() =>
-  review.pendingProposal.value && hiddenProposalId.value !== review.pendingProposal.value.id
-    ? review.pendingProposal.value
-    : null
-)
 
-const visibleChangeVoteSession = computed(() =>
-  review.changeVoteSession.value && hiddenChangeVoteId.value !== review.changeVoteSession.value.id
-    ? review.changeVoteSession.value
-    : null
-)
 
 function isElementSelected(element: ReviewContextElement) {
   return review.selectedContextElements.value.includes(element)
@@ -149,6 +138,7 @@ function cleanMessage(content: string) {
     .replace(/\[\[([a-z-]+)\]\]/gi, (_match, element: string) => referenceLabelMap[element as ReviewContextElement] || element)
     .replace(/\[PROPOSE_FOCUS:\s*([^\]]+)\]/gi, '')
     .replace(/\[REQUEST_END:\s*([^\]]+)\]/gi, '')
+    .replace(/\[REQUEST_ACTION\][\s\S]*?\[\/REQUEST_ACTION\]/gi, '')
     .replace(/\[REQUEST_CHANGE\][\s\S]*?\[\/REQUEST_CHANGE\]/gi, '')
     .replace(/\[ASK_USER\][\s\S]*?\[\/ASK_USER\]/gi, '')
     .replace(/\[CHANGE_VOTE:\s*(?:yes|no|approve|reject)\s*\]/gi, '')
@@ -178,24 +168,16 @@ function openReference(element: string) {
     ui.setWorkspaceNode('generation-chapter-outline')
     return
   }
+  if (element === 'chapter-plan-overview') {
+    ui.setWorkspaceNode('generation-chapter-outline')
+    return
+  }
   if (element === 'selected-chapter' || element === 'chapter-draft') {
     ui.setWorkspaceNode(props.chapter?.id ? `chapter-${props.chapter.id}` : 'generation-writing')
   }
 }
 
-function changeVoteTagVariant(status: string) {
-  if (status === 'applied') return 'success'
-  if (status === 'rejected' || status === 'failed') return 'danger'
-  return 'warning'
-}
 
-function changeVoteStatusLabel(status: string) {
-  if (status === 'applied') return tr('Applied')
-  if (status === 'rejected') return tr('Rejected')
-  if (status === 'failed') return tr('Failed')
-  if (status === 'applying') return tr('Applying')
-  return tr('Voting')
-}
 
 function submitUserMessage() {
   void review.sendUserMessage()
@@ -242,16 +224,7 @@ async function addAgentFromDialog() {
   showAddAgentDialog.value = false
 }
 
-function rejectProposalWithReason() {
-  review.rejectProposal(continueReason.value)
-  continueReason.value = ''
-}
 
-function rejectEndVoteWithReason() {
-  if (review.rejectEndVoteSession(continueReason.value)) {
-    continueReason.value = ''
-  }
-}
 
 function confirmRestoreDefaultAgents() {
   showRestoreAgentsConfirm.value = false
@@ -263,40 +236,14 @@ function confirmResetConversation() {
   review.clearConversation()
 }
 
-function hideCurrentProposalBanner() {
-  if (!review.pendingProposal.value) return
-  hiddenProposalId.value = review.pendingProposal.value.id
-}
 
-function hideCurrentChangeVoteBanner() {
-  if (!review.changeVoteSession.value) return
-  hiddenChangeVoteId.value = review.changeVoteSession.value.id
-}
-
-function reopenProposalBanner() {
-  hiddenProposalId.value = null
-}
-
-function reopenChangeVoteBanner() {
-  hiddenChangeVoteId.value = null
-}
 
 watch(() => review.messages.value.length, async () => {
   await nextTick()
   chatEndRef.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
 })
 
-watch(() => review.pendingProposal.value?.id || null, proposalId => {
-  hiddenProposalId.value = null
-  isProposalBannerCollapsed.value = false
-  if (!proposalId) hiddenProposalId.value = null
-})
 
-watch(() => review.changeVoteSession.value?.id || null, sessionId => {
-  hiddenChangeVoteId.value = null
-  isChangeVoteBannerCollapsed.value = false
-  if (!sessionId) hiddenChangeVoteId.value = null
-})
 </script>
 
 <template>
@@ -320,500 +267,327 @@ watch(() => review.changeVoteSession.value?.id || null, sessionId => {
     <!-- Main Content: Chat Stream -->
     <main class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
       <!-- Top Header -->
-      <header class="flex h-[52px] shrink-0 items-center justify-between border-b border-surface-4 bg-surface-1/80 px-4 backdrop-blur-md">
-        <div class="flex min-w-0 items-center gap-3">
+      <header class="flex h-[44px] shrink-0 items-center justify-between border-b border-surface-4 bg-surface-1/80 px-3 backdrop-blur-md">
+        <div class="flex min-w-0 items-center gap-2">
           <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary lg:hidden"
+            class="flex h-7 w-7 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
             @click="showLeftSidebar = !showLeftSidebar"
           >
-            <LayoutList :size="16" />
-          </button>
-          <button
-            class="hidden h-8 w-8 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary lg:flex"
-            @click="showLeftSidebar = !showLeftSidebar"
-          >
-            <ChevronLeft v-if="showLeftSidebar" :size="16" />
-            <ChevronRight v-else :size="16" />
+            <ChevronLeft v-if="showLeftSidebar" :size="14" />
+            <ChevronRight v-else :size="14" />
           </button>
 
-          <div class="h-4 w-[1px] bg-surface-4"></div>
+          <div class="h-3 w-[1px] bg-surface-4"></div>
 
           <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <Users :size="16" class="text-accent" />
-              <h3 class="truncate text-sm font-bold text-text-primary">{{ tr('Meeting') }}</h3>
-              <div v-if="review.loading.value" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent/10 text-accent border border-accent/20">
-                <Spinner :size="12" />
-                <span class="text-[10px] font-bold uppercase tracking-wider">{{ tr('Speaking') }}</span>
+            <div class="flex items-center gap-1.5">
+              <Users :size="14" class="text-accent" />
+              <h3 class="truncate text-xs font-bold text-text-primary">{{ tr('Meeting') }}</h3>
+              <div v-if="review.loading.value" class="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                <Spinner :size="10" />
+                <span class="text-[9px] font-bold uppercase tracking-wider">{{ tr('Active') }}</span>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5">
           <BaseButton
             v-if="!review.meetingEnded.value && (review.messages.value.some(m => m.role !== 'system') || queueItems.length > 0)"
             variant="danger"
             size="sm"
-            class="!h-8"
+            class="!h-7 !px-2 !text-[10px]"
             @click="endMeetingNow"
           >
-            <Square :size="13" />
-            <span>{{ tr('End Meeting') }}</span>
+            <Square :size="11" />
+            <span>{{ tr('End') }}</span>
           </BaseButton>
-          <div class="hidden items-center gap-1.5 rounded-full border border-surface-4 bg-surface-2 px-3 py-1.5 md:flex">
-            <FileText :size="12" class="text-text-muted" />
-            <span class="max-w-[150px] truncate text-[11px] font-medium text-text-secondary">{{ activeChapterTitle }}</span>
+          <div class="hidden items-center gap-1 rounded-full border border-surface-4 bg-surface-2 px-2 py-1 md:flex">
+            <FileText :size="10" class="text-text-muted" />
+            <span class="max-w-[120px] truncate text-[10px] font-medium text-text-secondary">{{ activeChapterTitle }}</span>
           </div>
           <button
-            class="flex h-8 w-8 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
+            class="flex h-7 w-7 items-center justify-center rounded-lg border border-surface-4 bg-surface-2 text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
             @click="showRightSidebar = !showRightSidebar"
           >
-            <Users :size="16" />
+            <Users :size="14" />
           </button>
         </div>
       </header>
 
-      <div
-        v-if="(review.pendingProposal.value && hiddenProposalId === review.pendingProposal.value.id) || (review.changeVoteSession.value && hiddenChangeVoteId === review.changeVoteSession.value.id)"
-        class="border-b border-surface-4 bg-surface-1/70 px-6 py-2"
-      >
-        <div class="mx-auto flex max-w-4xl flex-wrap items-center gap-2">
-          <button
-            v-if="review.pendingProposal.value && hiddenProposalId === review.pendingProposal.value.id"
-            class="inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/5 px-3 py-1 text-[11px] font-semibold text-accent transition-colors hover:bg-accent/10"
-            @click="reopenProposalBanner"
-          >
-            <Sparkles :size="12" />
-            <span>{{ tr('Show focus proposal') }}</span>
-          </button>
-          <button
-            v-if="review.changeVoteSession.value && hiddenChangeVoteId === review.changeVoteSession.value.id"
-            class="inline-flex items-center gap-2 rounded-full border border-warning/25 bg-warning/5 px-3 py-1 text-[11px] font-semibold text-warning transition-colors hover:bg-warning/10"
-            @click="reopenChangeVoteBanner"
-          >
-            <FileText :size="12" />
-            <span>{{ tr('Show project change vote') }}</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Proposal Banner -->
-      <transition
-        enter-active-class="transition duration-300 ease-out"
-        enter-from-class="transform -translate-y-4 opacity-0"
-        enter-to-class="transform translate-y-0 opacity-100"
-        leave-active-class="transition duration-200 ease-in"
-        leave-from-class="transform translate-y-0 opacity-100"
-        leave-to-class="transform -translate-y-4 opacity-0"
-      >
-        <div v-if="visiblePendingProposal" class="z-10 bg-accent/10 border-b border-accent/20 px-6 py-4 shadow-sm">
-          <div class="mx-auto max-w-4xl flex items-start gap-4">
-            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-lg shadow-accent/20">
-              <Sparkles :size="20" />
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-xs font-bold uppercase tracking-wider text-accent">{{ visiblePendingProposal.agentName }}</span>
-                <span class="text-xs text-text-muted">{{ tr('proposes a change') }}</span>
-              </div>
-              <div class="mt-1 flex items-start justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <p class="text-sm font-semibold text-text-primary">
-                    {{ tr('Update Meeting Focus') }}
-                  </p>
-                  <p v-if="!isProposalBannerCollapsed" class="mt-1 text-sm text-text-secondary italic leading-relaxed">
-                    "{{ visiblePendingProposal.content }}"
-                  </p>
-                </div>
-                <div class="flex shrink-0 items-center gap-2">
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-lg border border-accent/20 bg-white/60 text-text-muted transition-colors hover:text-text-primary"
-                    @click="isProposalBannerCollapsed = !isProposalBannerCollapsed"
-                  >
-                    <ChevronDown :size="16" class="transition-transform" :class="isProposalBannerCollapsed ? '-rotate-90' : ''" />
-                  </button>
-                  <button
-                    class="flex h-8 w-8 items-center justify-center rounded-lg border border-accent/20 bg-white/60 text-text-muted transition-colors hover:text-danger"
-                    @click="hideCurrentProposalBanner"
-                  >
-                    <X :size="15" />
-                  </button>
-                </div>
-              </div>
-              <div v-if="!isProposalBannerCollapsed" class="mt-4 flex items-center gap-3">
-                <div class="flex-1"></div>
-                <div class="flex gap-2">
-                  <BaseButton variant="ghost" size="sm" class="!h-9" @click="rejectProposalWithReason">
-                    {{ tr('Reject') }}
-                  </BaseButton>
-                  <BaseButton variant="primary" size="sm" class="!h-9 px-6" @click="review.approveProposal">
-                    {{ tr('Approve') }}
-                  </BaseButton>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </transition>
-
-      <!-- Change Vote Banner -->
-      <transition
-        enter-active-class="transition duration-300 ease-out"
-        enter-from-class="transform -translate-y-4 opacity-0"
-        enter-to-class="transform translate-y-0 opacity-100"
-        leave-active-class="transition duration-200 ease-in"
-        leave-from-class="transform translate-y-0 opacity-100"
-        leave-to-class="transform -translate-y-4 opacity-0"
-      >
-        <div v-if="visibleChangeVoteSession" class="z-10 border-b border-accent/20 bg-accent/10 px-6 py-4 shadow-sm">
-          <div class="mx-auto max-w-4xl">
-            <div class="flex items-start gap-4">
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow-lg shadow-accent/20">
-                <Sparkles :size="20" />
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span class="text-xs font-bold uppercase tracking-wider text-accent">{{ visibleChangeVoteSession.requestedByAgentName }}</span>
-                      <span class="text-xs text-text-muted">{{ tr(visibleChangeVoteSession.request.target === 'consensus' ? 'requested a meeting consensus' : 'requested a project change') }}</span>
-                      <BaseTag variant="accent" size="sm">{{ tr(visibleChangeVoteSession.request.target) }}</BaseTag>
-                      <BaseTag
-                        :variant="changeVoteTagVariant(visibleChangeVoteSession.status)"
-                        size="sm"
-                      >
-                        {{ changeVoteStatusLabel(visibleChangeVoteSession.status) }}
-                      </BaseTag>
-                    </div>
-                    <p class="mt-1 text-sm font-semibold text-text-primary">{{ visibleChangeVoteSession.request.scope }}</p>
-                    <p v-if="!isChangeVoteBannerCollapsed" class="mt-1 text-sm leading-relaxed text-text-secondary">{{ visibleChangeVoteSession.request.purpose }}</p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <button
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-accent/20 bg-white/60 text-text-muted transition-colors hover:text-text-primary"
-                      @click="isChangeVoteBannerCollapsed = !isChangeVoteBannerCollapsed"
-                    >
-                      <ChevronDown :size="16" class="transition-transform" :class="isChangeVoteBannerCollapsed ? '-rotate-90' : ''" />
-                    </button>
-                    <button
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-accent/20 bg-white/60 text-text-muted transition-colors hover:text-danger"
-                      @click="hideCurrentChangeVoteBanner"
-                    >
-                      <X :size="15" />
-                    </button>
-                  </div>
-                </div>
-                <div v-if="!isChangeVoteBannerCollapsed">
-                  <p class="mt-1 text-xs leading-relaxed text-text-muted">
-                    {{ tr('Project changes are voted on by meeting agents and applied automatically by the project change tool after majority approval.') }}
-                  </p>
-
-                  <div v-if="visibleChangeVoteSession.votes.length" class="mt-3 grid gap-2 sm:grid-cols-2">
-                    <div
-                      v-for="vote in visibleChangeVoteSession.votes"
-                      :key="`${vote.agentId}-${vote.createdAt}`"
-                      class="rounded-xl border border-surface-4 bg-surface-1/70 px-3 py-2"
-                    >
-                      <div class="flex items-center justify-between gap-2">
-                        <span class="truncate text-xs font-semibold text-text-primary">{{ tr(vote.agentName) }}</span>
-                        <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm">{{ tr(vote.vote === 'approve' ? 'Approve' : 'Reject') }}</BaseTag>
-                      </div>
-                      <p class="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-muted">{{ vote.reason }}</p>
-                    </div>
-                  </div>
-
-                  <div v-if="visibleChangeVoteSession.result || visibleChangeVoteSession.error" class="mt-3 rounded-xl border border-surface-4 bg-surface-1/70 px-3 py-2 text-xs text-text-secondary">
-                    {{ visibleChangeVoteSession.result || visibleChangeVoteSession.error }}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </transition>
-
-      <!-- End Vote Banner -->
-      <transition
-        enter-active-class="transition duration-300 ease-out"
-        enter-from-class="transform -translate-y-4 opacity-0"
-        enter-to-class="transform translate-y-0 opacity-100"
-        leave-active-class="transition duration-200 ease-in"
-        leave-from-class="transform translate-y-0 opacity-100"
-        leave-to-class="transform -translate-y-4 opacity-0"
-      >
-        <div v-if="review.endVoteSession.value" class="z-10 border-b border-warning/25 bg-warning/10 px-6 py-4 shadow-sm">
-          <div class="mx-auto max-w-4xl">
-            <div class="flex items-start gap-4">
-              <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning text-white shadow-lg shadow-warning/20">
-                <ShieldAlert :size="20" />
-              </div>
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="text-xs font-bold uppercase tracking-wider text-warning">{{ review.endVoteSession.value.requestedByAgentName }}</span>
-                  <span class="text-xs text-text-muted">{{ tr('requested ending the meeting') }}</span>
-                  <BaseTag variant="warning" size="sm">
-                    {{ review.endVoteSession.value.votes.length }}/{{ review.agents.value.filter(agent => agent.enabled).length }} {{ tr('votes') }}
-                  </BaseTag>
-                </div>
-                <p class="mt-1 text-sm font-semibold text-text-primary">{{ tr(review.endVoteSession.value.status === 'voting' ? 'Agent voting in progress' : 'Agent voting complete') }}</p>
-                <p class="mt-1 text-sm leading-relaxed text-text-secondary italic">"{{ review.endVoteSession.value.reason }}"</p>
-                <p class="mt-1 text-xs leading-relaxed text-text-muted">
-                  {{ tr('End voting runs in the background. You can keep reviewing changes and decide later.') }}
-                </p>
-
-                <div v-if="review.endVoteSession.value.votes.length" class="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div
-                    v-for="vote in review.endVoteSession.value.votes"
-                    :key="`${vote.agentId}-${vote.createdAt}`"
-                    class="rounded-xl border border-surface-4 bg-surface-1/70 px-3 py-2"
-                  >
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="truncate text-xs font-semibold text-text-primary">{{ tr(vote.agentName) }}</span>
-                      <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm">{{ tr(vote.vote === 'approve' ? 'Approve' : 'Reject') }}</BaseTag>
-                    </div>
-                    <p class="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-muted">{{ vote.reason }}</p>
-                  </div>
-                </div>
-
-                <div v-if="review.endVoteSession.value.status === 'ready'" class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <input
-                    v-model="continueReason"
-                    class="h-9 flex-1 rounded-xl border border-surface-4 bg-surface-1 px-3 text-sm text-text-primary outline-none focus:border-warning/60"
-                    :placeholder="tr('Reject reason is required to continue discussing...')"
-                  />
-                  <div class="flex gap-2">
-                    <BaseButton variant="ghost" size="sm" class="!h-9" :disabled="!continueReason.trim()" @click="rejectEndVoteWithReason">
-                      {{ tr('Continue Discussion') }}
-                    </BaseButton>
-                    <BaseButton variant="danger" size="sm" class="!h-9 px-6" @click="review.approveEndVoteSession">
-                      {{ tr('End Meeting') }}
-                    </BaseButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </transition>
-
       <!-- Chat Area -->
-      <div class="flex-1 overflow-y-auto custom-scrollbar bg-surface-0/50">
-        <div class="mx-auto flex max-w-4xl flex-col gap-6 px-6 py-10">
-          <div v-if="!review.messages.value.length" class="flex flex-col items-center justify-center py-20 text-center">
-            <div class="flex h-20 w-20 items-center justify-center rounded-3xl bg-surface-2 text-surface-5 mb-6">
-              <MessageSquare :size="40" stroke-width="1.5" />
+      <div class="flex-1 overflow-y-auto custom-scrollbar">
+        <div class="mx-auto flex max-w-4xl flex-col gap-1 px-4 py-5">
+          <div v-if="!review.messages.value.length && !review.pendingProposal.value && !review.changeVoteSession.value && !review.endVoteSession.value" class="flex flex-col items-center justify-center py-20 text-center">
+            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-text-muted mb-4">
+              <MessageSquare :size="28" stroke-width="1.5" />
             </div>
-            <h4 class="text-lg font-bold text-text-primary">{{ tr('Start the Meeting') }}</h4>
-            <p class="mt-2 max-w-sm text-sm text-text-muted leading-relaxed">
-              {{ tr('Choose your context elements and describe an opening topic to begin the multi-agent discussion.') }}
+            <h4 class="text-sm font-bold text-text-primary">{{ tr('Start the Meeting') }}</h4>
+            <p class="mt-1.5 max-w-xs text-xs text-text-muted leading-relaxed">
+              {{ tr('Choose context elements and describe a topic to begin the multi-agent discussion.') }}
             </p>
-            <BaseButton variant="primary" size="md" class="mt-8 px-8" @click="startMeetingRound">
-              <Sparkles :size="18" class="mr-2" />
+            <BaseButton variant="primary" size="md" class="mt-6 px-6" @click="startMeetingRound">
+              <Sparkles :size="14" class="mr-1.5" />
               <span>{{ tr('Open Meeting') }}</span>
             </BaseButton>
           </div>
 
-          <article
-            v-for="(message, index) in review.messages.value"
-            :key="message.id"
-            class="group relative animate-in fade-in slide-in-from-bottom-2 duration-500"
-            :style="{ animationDelay: `${index * 50}ms` }"
-          >
-            <!-- System Message -->
-            <div v-if="message.role === 'system'" class="flex justify-center">
-              <div class="max-w-[85%] rounded-2xl bg-surface-2 px-4 py-2 border border-surface-4 shadow-sm">
-                <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
-                  <Info :size="12" />
+          <template v-for="(message, index) in review.messages.value" :key="message.id">
+            <!-- Proposal Card (embedded before system messages that carry changeVoteSnapshot) -->
+            <ProposalCard
+              v-if="message.changeVoteSnapshot && message.changeVoteSnapshot.status !== 'applied' && message.changeVoteSnapshot.status !== 'rejected' && message.changeVoteSnapshot.status !== 'failed'"
+              variant="change"
+              :change-vote="message.changeVoteSnapshot"
+              :total-agents="review.agents.value.length"
+              :enable-agents="review.agents.value.filter(a => a.enabled).length"
+              class="mt-4"
+              @approve="review.approveProposal"
+              @reject="(reason) => review.rejectProposal(reason)"
+            />
+
+            <!-- System Message (minimalist) -->
+            <div
+              v-if="message.role === 'system'"
+              class="group flex flex-col"
+              :class="index > 0 ? 'mt-4' : ''"
+            >
+              <div class="flex items-center gap-2 select-none">
+                <div class="flex items-center justify-center w-5 h-5 rounded-sm bg-surface-3">
+                  <Info :size="11" class="text-text-muted" />
+                </div>
+                <span class="text-[11px] font-semibold text-text-muted">{{ tr('System') }}</span>
+                <span class="text-[9px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+              </div>
+              <div class="pl-7 text-[11px] leading-relaxed">
+                <div class="rounded text-[11px] px-2 py-1 bg-surface-2 text-text-secondary inline-block">
                   {{ cleanMessage(message.content) }}
-                </p>
-                <details v-if="message.changeVoteSnapshot" class="mt-3 overflow-hidden rounded-xl border border-surface-4 bg-surface-1/80 text-left">
-                  <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-semibold text-text-primary">
-                    <span>{{ tr('Proposal Vote Details') }}</span>
+                </div>
+
+                <details v-if="message.changeVoteSnapshot" class="mt-2 overflow-hidden rounded-lg border border-surface-4 bg-surface-2/50 text-left">
+                  <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[11px] font-medium text-text-secondary hover:text-text-primary transition-colors">
+                    <span>{{ tr('Vote Result') }}</span>
                     <div class="flex items-center gap-2">
-                      <BaseTag :variant="changeVoteTagVariant(message.changeVoteSnapshot.status)" size="sm">
-                        {{ changeVoteStatusLabel(message.changeVoteSnapshot.status) }}
+                      <BaseTag
+                        :variant="message.changeVoteSnapshot.status === 'applied' ? 'success' : message.changeVoteSnapshot.status === 'failed' ? 'danger' : 'warning'"
+                        size="sm"
+                        class="!px-1 !py-0 !text-[8px]"
+                      >
+                        {{ message.changeVoteSnapshot.status === 'applied' ? tr('Applied') : message.changeVoteSnapshot.status === 'failed' ? tr('Failed') : message.changeVoteSnapshot.status === 'rejected' ? tr('Rejected') : tr('Voting') }}
                       </BaseTag>
-                      <ChevronDown :size="14" class="text-text-muted" />
+                      <ChevronDown :size="12" class="text-text-muted" />
                     </div>
                   </summary>
-                  <div class="border-t border-surface-4 px-4 py-3">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <BaseTag variant="accent" size="sm">{{ tr(message.changeVoteSnapshot.request.target) }}</BaseTag>
-                      <span class="text-[11px] text-text-muted">{{ tr('Requested by') }} {{ message.changeVoteSnapshot.requestedByAgentName }}</span>
+                  <div class="border-t border-surface-4 px-3 py-2 space-y-2">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <BaseTag variant="accent" size="sm" class="!px-1 !py-0 !text-[8px]">{{ tr(message.changeVoteSnapshot.request.target) }}</BaseTag>
+                      <span class="text-[10px] text-text-muted">{{ tr('by') }} {{ message.changeVoteSnapshot.requestedByAgentName }}</span>
                     </div>
-                    <p class="mt-2 text-sm font-semibold text-text-primary">{{ message.changeVoteSnapshot.request.scope }}</p>
-                    <p class="mt-1 text-xs leading-relaxed text-text-secondary">{{ message.changeVoteSnapshot.request.purpose }}</p>
-                    <div v-if="message.changeVoteSnapshot.votes.length" class="mt-3 grid gap-2 sm:grid-cols-2">
+                    <p class="text-[11px] font-semibold text-text-primary">{{ message.changeVoteSnapshot.request.scope }}</p>
+                    <p v-if="message.changeVoteSnapshot.request.purpose" class="text-[10px] text-text-muted leading-relaxed">{{ message.changeVoteSnapshot.request.purpose }}</p>
+                    <div v-if="message.changeVoteSnapshot.votes.length" class="flex flex-wrap items-center gap-1.5 mt-1">
                       <div
                         v-for="vote in message.changeVoteSnapshot.votes"
                         :key="`${message.id}-${vote.agentId}-${vote.createdAt}`"
-                        class="rounded-xl border border-surface-4 bg-surface-0/70 px-3 py-2"
+                        class="flex items-center gap-1 rounded px-1.5 py-0.5 bg-surface-1"
                       >
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="truncate text-xs font-semibold text-text-primary">{{ tr(vote.agentName) }}</span>
-                          <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm">{{ tr(vote.vote === 'approve' ? 'Approve' : 'Reject') }}</BaseTag>
-                        </div>
-                        <p class="mt-1 text-[11px] leading-relaxed text-text-muted">{{ vote.reason }}</p>
+                        <AgentAvatar :name="vote.agentName" :size="12" />
+                        <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm" class="!px-1 !py-0 !text-[8px]">{{ vote.vote === 'approve' ? '✓' : '✗' }}</BaseTag>
                       </div>
                     </div>
-                    <div v-if="message.changeVoteSnapshot.result || message.changeVoteSnapshot.error" class="mt-3 rounded-xl border border-surface-4 bg-surface-0/70 px-3 py-2 text-xs text-text-secondary">
+                    <div v-if="message.changeVoteSnapshot.result || message.changeVoteSnapshot.error" class="text-[10px] text-text-secondary rounded px-2 py-1 mt-1" :class="message.changeVoteSnapshot.error ? 'bg-danger/5 text-danger' : 'bg-surface-1'">
                       {{ message.changeVoteSnapshot.result || message.changeVoteSnapshot.error }}
                     </div>
                   </div>
                 </details>
-                <div v-if="message.tool" class="mt-3 border-t border-surface-4/50 pt-3 text-left">
+                <div v-if="message.tool" class="mt-2">
                   <ToolCallStatus :item="message.tool" />
                 </div>
               </div>
             </div>
 
-            <!-- User/Agent Message -->
-            <div v-else class="flex flex-col" :class="message.role === 'user' ? 'items-end' : 'items-start'">
-              <div class="flex items-center gap-2 mb-2 px-1">
-                <template v-if="message.role === 'user'">
-                  <span class="text-[10px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString() }}</span>
-                  <span class="text-xs font-bold text-accent">{{ tr('You') }}</span>
-                  <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-accent/10 text-accent">
-                    <User :size="12" stroke-width="3" />
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-success/10 text-success">
-                    <Bot :size="12" stroke-width="2" />
-                  </div>
-                  <span class="text-xs font-bold text-text-primary">{{ messageSpeaker(message) }}</span>
-                  <BaseTag variant="default" size="sm" class="!px-1 !py-0 !text-[8px] uppercase tracking-tighter">{{ tr('Public') }}</BaseTag>
-                  <span class="text-[10px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString() }}</span>
-                </template>
+            <!-- User/Agent Message (minimalist Cursor style) -->
+            <div
+              v-else
+              class="group flex flex-col"
+              :class="index > 0 ? (review.messages.value[index - 1].role === message.role ? 'gap-0.5 mt-0.5' : 'gap-1 mt-4') : 'gap-1'"
+            >
+              <!-- Role Label (only when role changes from previous message) -->
+              <div v-if="index === 0 || review.messages.value[index - 1].role !== message.role" class="flex items-center justify-between select-none">
+                <div class="flex items-center gap-2">
+                  <template v-if="message.role === 'user'">
+                    <div class="flex items-center justify-center w-5 h-5 rounded-full bg-surface-3 text-text-primary">
+                      <User :size="11" />
+                    </div>
+                    <span class="text-[11px] font-semibold text-text-primary">{{ tr('You') }}</span>
+                  </template>
+                  <template v-else>
+                    <AgentAvatar :name="messageSpeaker(message)" :size="20" />
+                    <span class="text-[11px] font-semibold text-text-primary">{{ messageSpeaker(message) }}</span>
+                    <BaseTag variant="default" size="sm" class="!px-1 !py-0 !text-[8px] uppercase tracking-tighter">{{ tr('Public') }}</BaseTag>
+                  </template>
+                </div>
+                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span class="text-[10px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                </div>
               </div>
 
-              <div
-                class="relative max-w-[85%] rounded-2xl border px-5 py-4 shadow-sm transition-all"
-                :class="[
-                  message.role === 'user'
-                    ? 'rounded-tr-none border-accent/20 bg-accent/5 text-text-primary shadow-accent/5'
-                    : 'rounded-tl-none border-surface-4 bg-surface-1 text-text-secondary'
-                ]"
-              >
-                <p v-if="cleanMessage(message.content)" class="whitespace-pre-wrap text-sm leading-relaxed">{{ cleanMessage(message.content) }}</p>
+              <!-- Content Body -->
+              <div class="pl-7 text-[13px] leading-relaxed text-text-primary whitespace-pre-wrap break-words relative">
+                <p v-if="cleanMessage(message.content)">{{ cleanMessage(message.content) }}</p>
 
-                <div v-if="message.tool" class="mt-4 border-t border-surface-4/50 pt-4">
+                <div v-if="message.tool" class="mt-2">
                   <ToolCallStatus :item="message.tool" />
                 </div>
 
-                <div v-if="referenceLinks(message.content).length" class="mt-4 flex flex-wrap gap-2 border-t border-surface-4/50 pt-3">
+                <div v-if="referenceLinks(message.content).length" class="mt-2 flex flex-wrap gap-1.5">
                   <button
                     v-for="link in referenceLinks(message.content)"
                     :key="`${message.id}-${link.element}-${link.label}`"
-                    class="group/link flex items-center gap-1.5 rounded-lg border border-surface-4 bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-text-secondary transition-all hover:border-accent/40 hover:bg-accent/5 hover:text-accent"
+                    class="group/link flex items-center gap-1 rounded border border-surface-4 bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-text-secondary transition-all hover:border-accent/40 hover:text-accent"
                     @click="openReference(link.element)"
                   >
-                    <FileText :size="12" class="text-text-muted group-hover/link:text-accent" />
+                    <FileText :size="10" class="text-text-muted group-hover/link:text-accent" />
                     <span>{{ link.label }}</span>
                   </button>
                 </div>
               </div>
             </div>
-          </article>
+          </template>
 
-          <!-- Thinking Indicators -->
-          <div v-if="review.loading.value" class="space-y-4">
+          <!-- Active Proposal Card (inline) -->
+          <ProposalCard
+            v-if="review.pendingProposal.value"
+            variant="focus"
+            :proposal="review.pendingProposal.value"
+            :total-agents="review.agents.value.length"
+            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :class="review.messages.value.length ? 'mt-4' : ''"
+            @approve="review.approveProposal"
+            @reject="(reason) => review.rejectProposal(reason)"
+          />
+
+          <!-- Active Change Vote Card (inline) -->
+          <ProposalCard
+            v-if="review.changeVoteSession.value"
+            variant="change"
+            :change-vote="review.changeVoteSession.value"
+            :total-agents="review.agents.value.length"
+            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :class="(review.messages.value.length || review.pendingProposal.value) ? 'mt-4' : ''"
+            @approve="review.approveProposal"
+            @reject="(reason) => review.rejectProposal(reason)"
+          />
+
+          <!-- Active End Vote Card (inline) -->
+          <ProposalCard
+            v-if="review.endVoteSession.value"
+            variant="end"
+            :end-vote="review.endVoteSession.value"
+            :total-agents="review.agents.value.length"
+            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :class="(review.messages.value.length || review.pendingProposal.value || review.changeVoteSession.value) ? 'mt-4' : ''"
+            @approve="review.approveEndVoteSession"
+            @reject="(reason) => review.rejectEndVoteSession(reason)"
+          />
+
+          <!-- Thinking Indicators (minimalist) -->
+          <div v-if="review.loading.value" class="space-y-1 mt-2">
             <div
               v-for="agentId in review.activeSpeakerIds.value"
               :key="agentId"
-              class="flex items-center gap-2 px-1 text-xs text-text-muted animate-in fade-in slide-in-from-bottom-2 duration-300"
+              class="flex items-center gap-2 pl-7 text-[11px] text-text-muted"
             >
-              <Spinner :size="12" />
-              <span class="font-semibold text-text-secondary">{{ tr(review.agents.value.find(a => a.id === agentId)?.name || 'Agent') }}</span>
-              <span>{{ tr('is thinking...') }}</span>
+              <AgentAvatar :name="review.agents.value.find(a => a.id === agentId)?.name || 'Agent'" :size="16" />
+              <span class="font-medium text-text-secondary">{{ review.agents.value.find(a => a.id === agentId)?.name || tr('Agent') }}</span>
+              <span class="text-text-muted">{{ tr('thinking...') }}</span>
+              <div class="flex items-center gap-1 opacity-60">
+                <div class="h-1 w-1 rounded-full bg-text-muted animate-bounce" style="animation-delay: 0ms"></div>
+                <div class="h-1 w-1 rounded-full bg-text-muted animate-bounce" style="animation-delay: 150ms"></div>
+                <div class="h-1 w-1 rounded-full bg-text-muted animate-bounce" style="animation-delay: 300ms"></div>
+              </div>
             </div>
           </div>
 
-          <div ref="chatEndRef" class="h-4"></div>
+          <div ref="chatEndRef" class="h-2"></div>
         </div>
       </div>
 
       <!-- Input Section -->
-      <footer class="shrink-0 border-t border-surface-4 bg-surface-1/50 p-6 backdrop-blur-sm">
+      <footer class="shrink-0 border-t border-surface-4 bg-surface-1/95 p-3">
         <div class="mx-auto max-w-4xl relative">
-          <!-- Status Banner -->
           <transition name="slide-up">
-            <div v-if="review.userTyping.value" class="absolute -top-8 left-0 right-0 flex items-center justify-center gap-2 text-[10px] font-medium text-warning animate-pulse">
-              <PauseCircle :size="12" />
+            <div v-if="review.userTyping.value" class="absolute -top-6 left-0 right-0 flex items-center justify-center gap-1.5 text-[10px] font-medium text-warning animate-pulse">
+              <PauseCircle :size="10" />
               <span>{{ tr('Input active: queued agents paused') }}</span>
             </div>
           </transition>
 
-          <div class="relative flex items-end gap-3 rounded-2xl border border-surface-4 bg-surface-2 p-3 shadow-xl transition-all focus-within:border-accent/50 focus-within:ring-4 focus-within:ring-accent/5">
+          <div class="relative flex items-end gap-2 rounded-2xl border border-surface-4 bg-surface-2/80 px-3 py-2 shadow-sm transition-all focus-within:border-accent/40 focus-within:bg-surface-2">
             <div
               v-if="review.askUserSession.value?.status === 'ready'"
-              class="absolute bottom-full left-0 right-0 mb-3 rounded-2xl border border-accent/25 bg-surface-2 p-4 shadow-xl"
+              class="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-accent/25 bg-surface-2 p-3 shadow-xl"
             >
-              <div class="flex items-start gap-3">
-                <Info :size="16" class="mt-0.5 shrink-0 text-accent" />
+              <div class="flex items-start gap-2">
+                <Info :size="14" class="mt-0.5 shrink-0 text-accent" />
                 <div class="min-w-0 flex-1">
-                  <p class="text-xs font-bold uppercase tracking-widest text-accent">{{ tr('User clarification needed') }}</p>
-                  <p class="mt-1 text-sm font-semibold text-text-primary">{{ review.askUserSession.value.request.question }}</p>
-                  <p class="mt-1 text-xs leading-relaxed text-text-muted">{{ review.askUserSession.value.request.reason }}</p>
-                  <div class="mt-3 flex flex-wrap gap-2">
+                  <p class="text-[10px] font-bold uppercase tracking-widest text-accent">{{ tr('User clarification needed') }}</p>
+                  <p class="mt-1 text-xs font-semibold text-text-primary">{{ review.askUserSession.value.request.question }}</p>
+                  <p class="mt-0.5 text-[10px] leading-relaxed text-text-muted">{{ review.askUserSession.value.request.reason }}</p>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
                     <button
                       v-for="option in review.askUserSession.value.request.options"
                       :key="option"
-                      class="rounded-xl border border-surface-4 bg-surface-1 px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      class="rounded-lg border border-surface-4 bg-surface-1 px-2.5 py-1 text-[10px] font-medium text-text-secondary transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                       @click="review.answerAskUser(option)"
                     >
                       {{ option }}
                     </button>
                   </div>
-                  <p class="mt-2 text-[10px] text-text-muted">{{ tr('Or type a custom answer in the message box.') }}</p>
                 </div>
               </div>
             </div>
             <textarea
               ref="inputTextarea"
               :value="review.inputText.value"
-              rows="2"
-              class="min-h-[48px] max-h-40 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-text-primary outline-none placeholder:text-text-muted custom-scrollbar"
+              rows="1"
+              class="min-h-[40px] max-h-32 flex-1 resize-none bg-transparent px-0 py-1 text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted/70 custom-scrollbar"
               :placeholder="tr('Add a high-priority user message to the meeting...')"
               @input="review.handleInput(($event.target as HTMLTextAreaElement).value)"
               @keydown.ctrl.enter.prevent="submitUserMessage"
             ></textarea>
             <button
               :disabled="!review.inputText.value.trim() && !review.loading.value"
-              class="grid h-10 w-10 shrink-0 place-items-center rounded-full p-0 text-white shadow-sm transition-all hover:shadow-lg active:scale-95 disabled:bg-surface-4 disabled:text-text-muted disabled:shadow-none"
+              class="grid h-8 w-8 shrink-0 place-items-center rounded-full p-0 text-white shadow-sm transition-all hover:shadow-md active:scale-95 disabled:bg-surface-4 disabled:text-text-muted disabled:shadow-none"
               :class="review.loading.value ? 'bg-warning shadow-warning/20 hover:shadow-warning/25' : 'bg-accent shadow-accent/20 hover:shadow-accent/25'"
               :title="tr(review.loading.value ? 'Processing...' : 'Send')"
               @click="submitUserMessage"
             >
-              <ArrowUp :size="20" stroke-width="2.5" />
+              <ArrowUp :size="16" stroke-width="2.5" />
             </button>
           </div>
 
-          <div class="mt-3 flex items-center justify-between px-2">
-            <div class="flex items-center gap-3">
-              <p class="text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Ctrl + Enter to send') }}</p>
-              <div v-if="review.meetingEnded.value" class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-success/10 text-success">
-                <Check :size="10" />
-                <span class="text-[9px] font-bold uppercase">{{ tr('Meeting Ended') }}</span>
+          <div class="mt-2 flex items-center justify-between px-1">
+            <div class="flex items-center gap-2">
+              <span class="text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Ctrl + Enter') }}</span>
+              <div v-if="review.meetingEnded.value" class="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-success/10 text-success">
+                <Check :size="9" />
+                <span class="text-[9px] font-bold uppercase">{{ tr('Ended') }}</span>
               </div>
-              <div v-else-if="!review.loading.value && !queueItems.length" class="flex items-center gap-2">
-                <span class="text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Meeting Idle') }}</span>
+              <div v-else-if="!review.loading.value && !queueItems.length" class="flex items-center gap-1.5">
+                <span class="text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Idle') }}</span>
                 <button 
-                  class="flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[9px] font-bold uppercase text-accent transition-colors hover:bg-accent/20"
+                  class="flex items-center gap-1 rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase text-accent transition-colors hover:bg-accent/20"
                   @click="startMeetingRound"
                 >
-                  <RotateCcw :size="10" />
-                  <span>{{ tr('Trigger Next Round') }}</span>
+                  <RotateCcw :size="9" />
+                  <span>{{ tr('Next Round') }}</span>
                 </button>
               </div>
             </div>
-            <div class="flex items-center gap-4">
-              <button class="text-[10px] text-text-muted hover:text-accent flex items-center gap-1 transition-colors" @click="review.clearConversation">
-                <RotateCcw :size="10" />
-                <span>{{ tr('Clear History') }}</span>
-              </button>
-            </div>
+            <button class="text-[9px] text-text-muted hover:text-accent flex items-center gap-1 transition-colors" @click="review.clearConversation">
+              <RotateCcw :size="9" />
+              <span>{{ tr('Clear') }}</span>
+            </button>
           </div>
         </div>
       </footer>

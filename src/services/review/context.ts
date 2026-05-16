@@ -25,6 +25,7 @@ const REVIEW_ELEMENT_TOKEN_BUDGET: Record<ReviewContextElement, number> = {
   'knowledge-base': 1400,
   'selected-chapter': 500,
   'chapter-plan': 1200,
+  'chapter-plan-overview': 1300,
   'chapter-draft': 1300,
 }
 
@@ -96,6 +97,44 @@ function buildElementContext(context: MultiAgentReviewContext, element: ReviewCo
   const chapter = context.chapter
   if (!project) return 'No active project is selected.'
 
+  if (element === 'chapter-plan-overview') {
+    const chapters = Array.isArray(project.chapters) ? project.chapters : []
+    if (!chapters.length) {
+      return truncateToTokenBudget(
+        `${elementLink('chapter-plan-overview', 'All Chapter Plans')}\nNo chapters exist in this project yet.`,
+        REVIEW_ELEMENT_TOKEN_BUDGET['chapter-plan-overview']
+      )
+    }
+
+    const lines = chapters.map((item, idx) => {
+      const outline = item?.outline || {}
+      const keyEvents = Array.isArray(outline.keyEvents) ? outline.keyEvents.filter(Boolean).length : 0
+      const actions = Array.isArray(outline.characterActions) ? outline.characterActions.filter(Boolean).length : 0
+      const reveals = Array.isArray(outline.infoReveals) ? outline.infoReveals.filter(Boolean).length : 0
+      const objective = typeof outline.objective === 'string' ? outline.objective.trim() : ''
+      const conflict = typeof outline.conflict === 'string' ? outline.conflict.trim() : ''
+      const hook = typeof outline.endingHook === 'string' ? outline.endingHook.trim() : ''
+      const hasPlan = Boolean(objective || conflict || hook || keyEvents || actions || reveals)
+      return [
+        `Chapter ${idx + 1}: ${item?.title?.trim() || 'Untitled'}`,
+        `- id: ${item?.id || 'unknown'}`,
+        `- status: ${item?.status || 'unknown'}`,
+        `- plan_exists: ${hasPlan ? 'yes' : 'no'}`,
+        `- objective: ${objective ? 'set' : 'empty'}`,
+        `- conflict: ${conflict ? 'set' : 'empty'}`,
+        `- key_events: ${keyEvents}`,
+        `- character_actions: ${actions}`,
+        `- info_reveals: ${reveals}`,
+        `- ending_hook: ${hook ? 'set' : 'empty'}`,
+      ].join('\n')
+    })
+
+    return truncateToTokenBudget(
+      `${elementLink('chapter-plan-overview', 'All Chapter Plans')}\n${lines.join('\n\n')}`,
+      REVIEW_ELEMENT_TOKEN_BUDGET['chapter-plan-overview']
+    )
+  }
+
   if (element === 'story-config') {
     return truncateToTokenBudget([
       `${elementLink('story-config', 'Story Configuration')}`,
@@ -162,7 +201,9 @@ export function buildProjectContext(
   elements: ReviewContextElement[],
   maxTokens = REVIEW_CONTEXT_DEFAULT_BUDGET_TOKENS
 ) {
-  const selected: ReviewContextElement[] = elements.length ? elements : ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
+  const selected: ReviewContextElement[] = elements.length
+    ? elements
+    : ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
   const header = 'Meeting Context Elements:'
   const footer = 'Reference rule: cite locations using [[element:label]] markers when possible. Short-form [[element]] references are also allowed.'
   let used = estimateTokens(`${header}\n${footer}`)
@@ -192,6 +233,21 @@ export function selectedContextElementsSafe(_context: MultiAgentReviewContext): 
   return ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
 }
 
+function formatToolEvidence(tool: ReviewPublicMessage['tool']) {
+  if (!tool) return ''
+  const parts: string[] = []
+  parts.push(`[System: Tool '${tool.name}' executed with status '${tool.status}']`)
+  if (tool.title) parts.push(`Tool title: ${tool.title}`)
+  if (tool.description) parts.push(`Tool description: ${tool.description}`)
+  if (tool.detail) parts.push(`Tool detail: ${tool.detail}`)
+  if (tool.after && String(tool.after).trim()) {
+    const raw = String(tool.after).trim()
+    const clipped = raw.length > 2400 ? `${raw.slice(0, 2400)}\n[Tool output truncated]` : raw
+    parts.push(`Tool output:\n${clipped}`)
+  }
+  return parts.join('\n')
+}
+
 export function buildAgentMessages(
   agent: ReviewAgentState,
   publicMessages: ReviewPublicMessage[],
@@ -216,23 +272,28 @@ export function buildAgentMessages(
     '- Your private memory below belongs only to you.',
     '- Do not claim that another agent can read your private memory.',
     '- Do not claim to have edited project files or chapter data.',
+    '- Do not claim to have checked chapter existence/progress unless the evidence is present in the current context (for example [[chapter-plan-overview]]) or in a read-tool result already visible in public messages.',
+    '- If evidence is missing, state uncertainty explicitly and ask for context or request a read action; do not present an unverified conclusion as fact.',
+    '- Story Configuration is already provided in the Meeting Context when selected. Do not repeatedly ask to re-check the full story configuration every round unless the user has changed it or a specific required field is genuinely missing.',
+    '- Prefer on-demand verification over preloading large context. If cross-chapter facts are needed, call request_project_action with action=read and target=chapter-plan (scope like "all chapters" or "chapter N"), then continue after the tool result.',
     '- Your raw assistant output is private scratch space. It is NOT automatically sent to the public meeting.',
-    '- To speak publicly, you must use the send_public_message tool by writing:\n[SEND_MESSAGE]\nyour concise public message\n[/SEND_MESSAGE]',
+    '- To speak publicly, use the function tool send_public_message with parameter content.',
+    '- You may run multiple internal tool/thinking turns before a final public statement. Use request_speech if you need another turn in your own sequence, and only call send_public_message when your conclusion is ready.',
     '- Do not copy or reveal internal instruction labels in a public message.',
     '- Modify means agree: after a voted project change is applied, it becomes accepted source-of-truth.',
-    '- Tool execution is not the end of the meeting. After a tool applies a change, review the result and only request ending through [REQUEST_END: reason].',
-    '- If you believe the meeting is over, you MUST use [REQUEST_END: reason] to start a vote. The meeting continues until everyone agrees to end or the user stops it.',
-    '- Do NOT use target: consensus unless absolutely no text in the project files needs updating. If you identify a flaw in the story, you MUST propose a concrete text replacement using [REQUEST_CHANGE] with target: master-outline, chapter-plan, or characters.',
-    '- Proposal creation is a tool action, not a vague statement. If you conclude that the project should be edited, you MUST create the proposal yourself in the same response with [REQUEST_CHANGE].',
-    '- If you want to publicly announce a proposal, combine both blocks in one response: first [SEND_MESSAGE] with a concise proposal announcement, then [REQUEST_CHANGE] with the actionable proposal payload.',
-    '- Do not say "enter proposal stage", "someone should create a proposal", or "this should be voted on" without actually creating the [REQUEST_CHANGE] block when you already have enough information.',
-    '- Do not end your public message with a question unless you are explicitly using [ASK_USER] or directly asking a specific other agent to respond next.',
+    '- Tool execution is not the end of the meeting. After a tool applies a change, review the result and request ending only through request_end_meeting(reason).',
+    '- If you believe the meeting is over, you MUST call request_end_meeting to start a vote. The meeting continues until everyone agrees to end or the user stops it.',
+    '- Do NOT use target=consensus unless absolutely no text in the project files needs updating. If you identify a flaw in the story, you MUST propose a concrete action via request_project_action with target master-outline, chapter-plan, characters, or consensus.',
+    '- Proposal creation is a tool action, not a vague statement. If you conclude that a read/write action is needed, you MUST call request_project_action yourself in the same response.',
+    '- If you want to publicly announce a proposal, call send_public_message with a concise announcement, then call request_project_action with the actionable payload.',
+    '- Do not say "enter proposal stage", "someone should create a proposal", or "this should be voted on" without actually calling request_project_action when you already have enough information.',
+    '- Do not end your public message with a question unless you are explicitly using ask_user_clarification or directly asking a specific other agent to respond next.',
     '- If you already have enough context to form a view, end with your concrete judgment, recommendation, or decision instead of a generic follow-up question.',
     options.mandatoryBrainstorm
-      ? '- Mandatory brainstorm phase: do not emit [REQUEST_CHANGE], [REQUEST_END], or [PROPOSE_FOCUS]. Use [SEND_MESSAGE] to publish role-based analysis and directions.'
+      ? '- Mandatory brainstorm phase: do not call request_project_action, request_end_meeting, or propose_focus. Use send_public_message to publish role-based analysis and directions.'
       : '- Open meeting phase: respond like a real meeting participant. Read other agents\' messages carefully. You may question, rebut, refine, combine, or support their points. Direct your message to specific agents if helpful.\n- CRITICAL: DO NOT copy, repeat, or echo the previous agent\'s message. You must add new insights, debate points, or propose a concrete action. If you agree, explain WHY from your unique perspective and push the conversation forward.',
     isFirstOpenTurn && !isProposerAgent
-      ? '- THIS IS THE FIRST OPEN-DISCUSSION TURN. You may share your first reaction, but it must still be additive. Do NOT repeat earlier points verbatim. Do not use [REQUEST_CHANGE], [REQUEST_END] or [PROPOSE_FOCUS] in this turn unless the user explicitly demanded immediate action.'
+      ? '- THIS IS THE FIRST OPEN-DISCUSSION TURN. You may share your first reaction, but it must still be additive. Do NOT repeat earlier points verbatim. Do not call request_project_action, request_end_meeting, or propose_focus in this turn unless the user explicitly demanded immediate action.'
       : '',
     !options.mandatoryBrainstorm && !isFirstOpenTurn
       ? '- You are responding after at least one other agent has already spoken in open discussion. You MUST build on, challenge, narrow, or refine earlier messages. Do not restate the same summary in different words.'
@@ -241,19 +302,23 @@ export function buildAgentMessages(
       ? '- Before making your point, silently identify what is missing, weak, mistaken, or still undecided in the earlier public messages. Your response should target that gap directly.'
       : '',
     isFatigued
-      ? '- SYSTEM WARNING: The discussion has been going on for a long time. You MUST now converge by doing one of the following in this response: create a [REQUEST_CHANGE], create an [ASK_USER], create a [PROPOSE_FOCUS], or create a [REQUEST_END]. Do not continue open-ended discussion.'
+      ? '- SYSTEM WARNING: The discussion has been going on for a long time. You MUST now converge by doing one of the following in this response: call request_project_action, call ask_user_clarification, call propose_focus, or call request_end_meeting. Do not continue open-ended discussion.'
       : '',
     isProposerAgent && !options.mandatoryBrainstorm
-      ? '- As the Proposer Agent, you have priority to synthesize earlier comments into an actionable proposal. Once the discussion contains enough information, you should be the one who creates [REQUEST_CHANGE] instead of waiting for another agent.'
+      ? '- As the Proposer Agent, you have priority to synthesize earlier comments into an actionable proposal. Once the discussion contains enough information, you should be the one who calls request_project_action instead of waiting for another agent.'
       : '',
     '- Tool Usage Instruction:',
-    '  - [SEND_MESSAGE]...[/SEND_MESSAGE]: Public speech.',
-    '  - [CALL_AGENT: agentId]: Explicitly request another agent to speak next to respond to your points.',
-    '  - [REQUEST_SPEECH]: Request another turn for yourself if you have more to add after others speak.',
-    '  - [PROPOSE_FOCUS: new focus]: Suggest shifting the meeting focus.',
-    '  - [REQUEST_CHANGE]: Propose a concrete edit to project data (outline, chapter plan, characters, or shared consensus). Include action: create|read|update|delete whenever possible.',
-    '  - [ASK_USER]: Request clarification from the user.',
-    '  - [REQUEST_END: reason]: Propose ending the meeting.',
+    '  - Use function tools only. Do not use tagged block formats in your response.',
+    '  - send_public_message(content): publish a public message.',
+    '  - call_agent(target): request another agent to speak next; target can be agent id/name or "all".',
+    '  - request_speech(note?): request another turn for yourself.',
+    '  - propose_focus(content, reason?): suggest shifting the meeting focus.',
+    '  - request_project_action(target, action, scope, purpose, content): propose a concrete read/write action on project data.',
+    '  - Read examples with request_project_action:',
+    '    - target=chapter-plan, action=read, scope="all chapters", content="N/A"',
+    '    - target=chapter-plan, action=read, scope="chapter 2", content="N/A"',
+    '  - ask_user_clarification(question, options, reason): request clarification from the user.',
+    '  - request_end_meeting(reason): propose ending the meeting.',
     '',
     buildProjectContext(context, contextElements),
     '',
@@ -274,8 +339,12 @@ export function buildAgentMessages(
     userBuffer.push(`[System: Older conversation history has been truncated/compressed to the last ${maxTurns} turns. Focus on the current context.]`)
   }
 
+  // Conversation framing rule:
+  // - self agent history -> assistant messages
+  // - all other agent/user/system messages -> user-side context
   for (const msg of contextPublicMessages) {
-    if (msg.role === 'agent' && msg.agentId === agent.id) {
+    const isSelfAgentMessage = msg.role === 'agent' && msg.agentId === agent.id
+    if (isSelfAgentMessage) {
       if (userBuffer.length > 0) {
         chatMessages.push({ role: 'user', content: userBuffer.join('\n\n') })
         userBuffer = []
@@ -283,10 +352,7 @@ export function buildAgentMessages(
         chatMessages.push({ role: 'user', content: '[System] Meeting started. Waiting for your first input.' })
       }
 
-      let assistantContent = msg.content
-      if (!msg.tool && !assistantContent.includes('[Change vote:') && !assistantContent.includes('[End vote:')) {
-        assistantContent = `[SEND_MESSAGE]\n${assistantContent}\n[/SEND_MESSAGE]`
-      }
+      const assistantContent = msg.content.replace(/^\s*\[[^\]]*?\bAgent\]\s*/i, '')
 
       const lastMsg = chatMessages[chatMessages.length - 1]
       if (lastMsg && lastMsg.role === 'assistant') {
@@ -298,7 +364,8 @@ export function buildAgentMessages(
       const speaker = msg.role === 'agent' ? (msg.agentName || 'Agent') : msg.role === 'user' ? 'User' : 'System'
       let text = `[${speaker}] ${msg.content}`
       if (msg.tool) {
-        text += `\n[System: Tool '${msg.tool.name}' executed with status '${msg.tool.status}']`
+        const toolEvidence = formatToolEvidence(msg.tool)
+        if (toolEvidence) text += `\n${toolEvidence}`
       }
       userBuffer.push(text)
     }
@@ -315,7 +382,7 @@ export function buildAgentMessages(
   if (options.mandatoryBrainstorm) {
     userBuffer.push('Current Phase: mandatory brainstorm. Focus on your specific role and share your initial thoughts.')
   } else {
-    userBuffer.push('Current Phase: open meeting discussion. Be reactive and collaborative. Use [CALL_AGENT: id] to keep the conversation moving if you need a specific reply. If you already know a project edit is needed, create the [REQUEST_CHANGE] now instead of postponing it. Do not end with a vague question when you already have enough context to state your view.')
+    userBuffer.push('Current Phase: open meeting discussion. Be reactive and collaborative. Use call_agent when you need a specific reply. If you already know a read/write action is needed, call request_project_action now instead of postponing it. Do not end with a vague question when you already have enough context to state your view.')
   }
 
   if (userBuffer.length > 0) {
@@ -362,9 +429,8 @@ export function buildEndVoteMessages(
         'The user request is the highest-priority evaluation standard.',
         'Vote yes only if the latest user request is satisfied by the current project state or accepted consensus.',
         'Vote no if the meeting merely rejected a proposal, applied a tool once, or still lacks a concrete result that satisfies the user.',
-        'Return exactly this format:',
-        '[END_VOTE: yes|no]',
-        'Reason: one concise reason grounded in your agent role.',
+        'You must submit the vote by calling function submit_end_vote(vote, reason).',
+        'Use vote=approve or vote=reject.',
       ].join('\n'),
     },
     {
@@ -412,24 +478,29 @@ export function buildChangeVoteMessages(
         'You are voting on a proposed project-element change in a multi-agent story meeting.',
         `Use ${context.project?.language || 'the project Primary Language'} for any user-facing wording.`,
         'The user request is the highest-priority evaluation standard.',
+        'Core policy: treat proposals as improvable drafts by default. The goal is to iteratively improve a proposal until it is good enough, not to wait for a perfect first version.',
+        'Primary voting criterion: incremental improvement. Approve when the proposal clearly moves the project in a better direction, even if it does not fully complete every requirement yet.',
         'Do not confuse character concepts with character entities. Vote for target characters only when the proposal clearly adds or updates concrete named cast members.',
         'After a proposal passes, wait for the project change tool result before treating the work as complete or requesting meeting end.',
         'Do not reject merely because the content is prose, bullets, or imperfect JSON. The project change tool will normalize approved proposals before execution.',
+        'For action: read, content may be "N/A" and should not be treated as missing required information.',
+        'Tool capability note: chapter-plan read supports scope "all chapters", "chapter N", and multi-chapter scopes like "chapter 1 and chapter 2".',
         'Vote no for format only when the proposal lacks enough information for the tool to infer the intended target, scope, purpose, or content.',
         'First infer what the user wants and what final effect would satisfy the user. Then judge the proposal against that goal.',
-        'Vote yes if the proposal is coherent and is the best available fit for the user request, even if it is not your ideal solution.',
+        'Vote yes if the proposal is coherent and improves user-fit, even if it is not your ideal or final solution.',
         'Vote no only for concrete user-impacting reasons: it violates explicit user constraints, worsens the requested outcome, is unsafe to apply, is malformed, or lacks required information.',
         'Do not reject merely because you prefer another style, want more discussion, or because the proposal is outside your narrow specialty while still satisfying the user.',
-        'If the proposal is mostly right but needs a targeted correction, include an amendment block after your vote. Amendment blocks can modify, delete, or insert one item.',
-        'Use this exact amendment shape when needed:\n[AMENDMENT]\naction: modify|delete|insert\nscope: which proposal item changes\npurpose: why the amendment better satisfies the user\ncontent: replacement/removal/insertion content\n[/AMENDMENT]',
+        'If the proposal is mostly right but needs a targeted correction or missing detail, include an amendment block after your vote. Amendment blocks can modify, delete, or insert one item.',
+        'Prefer proposing an amendment over voting reject when the proposal can be improved with one concrete patch.',
+        'Reject should be the last resort after refinement rounds fail or when the proposal is unsafe/contradictory.',
+        'If amendment is needed, include it in function submit_change_vote as amendment { action, scope, purpose, content }.',
         'Do not propose an amendment while voting on an amendment.',
         'If voting no due to insufficient actionable detail, your reason must explicitly name what information is missing.',
         'If voting no due to user-fit, your reason must include what alternative would better satisfy the user.',
         'Modify means agree: if you vote yes and the change is applied, you must treat the result as accepted source-of-truth in later turns.',
         'Do not later try to revert an applied change unless the user explicitly asks for a new change.',
-        'Return exactly this format:',
-        '[CHANGE_VOTE: yes|no]',
-        'Reason: one concise reason grounded in your agent role.',
+        'You must submit the vote by calling function submit_change_vote(vote, reason, amendment?).',
+        'Use vote=approve or vote=reject.',
       ].join('\n'),
     },
     {
@@ -446,9 +517,15 @@ export function buildChangeVoteMessages(
         `Purpose: ${session.request.purpose}`,
         `Proposed Content:\n${session.request.content}`,
         '',
+        `Refinement round: ${session.refinementRound || 0}`,
+        '',
+        session.draft
+          ? 'Draft proposal mode: this request is intentionally rough. Prefer adding one targeted amendment in submit_change_vote and voting approve when the amendment makes it better.'
+          : '',
+        '',
         session.amendmentDepth
           ? 'Amendment voting mode: vote on this amendment only. Do not propose another amendment.'
-          : 'Original proposal voting mode: you may include one [AMENDMENT] block if a targeted modify/delete/insert would make the proposal better satisfy the user.',
+          : 'Original proposal voting mode: you may include one amendment object if a targeted modify/delete/insert would make the proposal better satisfy the user.',
         '',
         `Your Private Memory:\n${privateMemory}`,
         '',
@@ -478,9 +555,8 @@ export function buildAskUserVoteMessages(
         `Use ${context.project?.language || 'the project Primary Language'} for any user-facing wording.`,
         'Vote yes only if the question is necessary to avoid a wrong edit or wrong direction.',
         'Vote no if agents can reasonably proceed from existing project context and user messages.',
-        'Return exactly:',
-        '[ASK_USER_VOTE: yes|no]',
-        'Reason: one concise reason.',
+        'You must submit the vote by calling function submit_ask_user_vote(vote, reason).',
+        'Use vote=approve or vote=reject.',
       ].join('\n'),
     },
     {

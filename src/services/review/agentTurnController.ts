@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import { providerManager } from '@/services/provider'
+import type { ToolDefinition } from '@/services/provider'
 import { decodeProviderModelRef } from '@/services/provider/catalog'
 import type { ProviderModelRef } from '@/types/provider'
 import type {
@@ -18,10 +19,98 @@ import {
   extractFocusProposal,
   extractPublicAgentMessage,
   extractTurnRequests,
+  inferImplicitChangeRequest,
   normalizeChangeAction,
   stripReasoningText,
 } from './utils'
 import { buildAgentMessages } from './context'
+
+const MEETING_AGENT_TOOLS: ToolDefinition[] = [
+  {
+    name: 'send_public_message',
+    description: 'Publish a message to the shared meeting chat visible to the user and all agents.',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'Public message content.' },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'request_project_action',
+    description: 'Propose a concrete project data action (read/create/update/delete) for vote.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', enum: ['master-outline', 'chapter-plan', 'characters', 'consensus'] },
+        action: { type: 'string', enum: ['create', 'read', 'update', 'delete'] },
+        scope: { type: 'string' },
+        purpose: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['target', 'action', 'scope', 'purpose', 'content'],
+    },
+  },
+  {
+    name: 'propose_focus',
+    description: 'Propose a new meeting focus that requires user approval.',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'Proposed new focus sentence.' },
+        reason: { type: 'string', description: 'Why this focus improves progress.' },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'request_end_meeting',
+    description: 'Request ending the meeting. This triggers end voting flow.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string' },
+      },
+      required: ['reason'],
+    },
+  },
+  {
+    name: 'ask_user_clarification',
+    description: 'Request a clarification question to the user (will be voted by agents first).',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string' },
+        options: { type: 'array', items: { type: 'string' } },
+        reason: { type: 'string' },
+      },
+      required: ['question', 'options', 'reason'],
+    },
+  },
+  {
+    name: 'call_agent',
+    description: 'Request another agent to speak next. Use target="all" to request all agents.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string' },
+      },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'request_speech',
+    description: 'Request another speaking turn for yourself.',
+    parameters: {
+      type: 'object',
+      properties: {
+        note: { type: 'string' },
+      },
+      required: [],
+    },
+  },
+]
 
 interface ProviderStoreLike {
   providers: any[]
@@ -64,6 +153,36 @@ function normalizeChangeRequestCompat(request: ReviewChangeRequest | null | unde
     ...request,
     action: normalizeChangeAction((request as any).action),
   }
+}
+
+function asNonEmptyString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
+}
+
+function normalizeToolChangeRequest(args: Record<string, any>): ReviewChangeRequest | null {
+  const targetRaw = asNonEmptyString(args.target)
+  const target = targetRaw === 'master-outline' || targetRaw === 'chapter-plan' || targetRaw === 'characters' || targetRaw === 'consensus'
+    ? targetRaw
+    : null
+  if (!target) return null
+  const action = normalizeChangeAction(args.action)
+  const scope = asNonEmptyString(args.scope)
+  const purpose = asNonEmptyString(args.purpose)
+  const content = asNonEmptyString(args.content) || (action === 'read' ? 'N/A' : '')
+  if (!scope || !purpose || !content) return null
+  return { target, action, scope, purpose, content }
+}
+
+function normalizeToolAskUserRequest(args: Record<string, any>): ReviewAskUserRequest | null {
+  const question = asNonEmptyString(args.question)
+  const reason = asNonEmptyString(args.reason)
+  const options = Array.isArray(args.options)
+    ? args.options.map(item => asNonEmptyString(item)).filter(Boolean)
+    : asNonEmptyString(args.options)
+      ? asNonEmptyString(args.options).split(/\r?\n|[|]/).map(item => item.trim()).filter(Boolean)
+      : []
+  if (!question || options.length < 2 || !reason) return null
+  return { question, options: options.slice(0, 6), reason }
 }
 
 export function createAgentTurnController(deps: AgentTurnControllerDeps) {
@@ -116,16 +235,96 @@ export function createAgentTurnController(deps: AgentTurnControllerDeps) {
     deps.loading.value = true
 
     try {
-      const content = await providerManager.chat(chatMessages, model, 1400, 0.45, abortController.signal)
+      const toolResponse = await providerManager.chatWithTools(
+        chatMessages,
+        model,
+        MEETING_AGENT_TOOLS,
+        1400,
+        0.45,
+        { toolChoice: 'auto' },
+        abortController.signal
+      )
       if (generation !== deps.runGeneration.value) return
-      const clean = stripReasoningText(content) || 'No concrete review notes.'
-      const proposal = extractFocusProposal(agent, clean)
-      const endRequestReason = extractEndRequest(clean)
-      const askUserRequest = extractAskUserRequest(clean)
-      const changeRequests = extractChangeRequests(clean)
-      const turnRequests = extractTurnRequests(clean)
-      const publicMessage = extractPublicAgentMessage(clean)
-      if (publicMessage) {
+      const clean = stripReasoningText(toolResponse.content || '') || 'No concrete review notes.'
+
+      const toolPublicMessages: string[] = []
+      const toolTurnRequests: string[] = []
+      const toolChangeRequests: ReviewChangeRequest[] = []
+      let toolProposal: ReviewProposal | null = null
+      let toolEndRequestReason = ''
+      let toolAskUserRequest: ReviewAskUserRequest | null = null
+
+      for (const toolCall of toolResponse.tool_calls) {
+        const args = toolCall.arguments || {}
+        if (toolCall.name === 'send_public_message') {
+          const message = asNonEmptyString(args.content)
+          if (message) toolPublicMessages.push(message)
+          continue
+        }
+        if (toolCall.name === 'request_project_action') {
+          const requestFromTool = normalizeToolChangeRequest(args)
+          if (requestFromTool) toolChangeRequests.push(requestFromTool)
+          continue
+        }
+        if (toolCall.name === 'propose_focus') {
+          const focus = asNonEmptyString(args.content)
+          if (focus) {
+            toolProposal = {
+              id: deps.createId('proposal'),
+              type: 'focus',
+              agentId: agent.id,
+              agentName: agent.name,
+              content: focus,
+              reason: asNonEmptyString(args.reason) || 'Agent proposed updating the meeting focus.',
+              createdAt: new Date().toISOString(),
+            }
+          }
+          continue
+        }
+        if (toolCall.name === 'request_end_meeting') {
+          const reason = asNonEmptyString(args.reason)
+          if (reason) toolEndRequestReason = reason
+          continue
+        }
+        if (toolCall.name === 'ask_user_clarification') {
+          const parsed = normalizeToolAskUserRequest(args)
+          if (parsed) toolAskUserRequest = parsed
+          continue
+        }
+        if (toolCall.name === 'call_agent') {
+          const target = asNonEmptyString(args.target)
+          if (target) toolTurnRequests.push(target)
+          continue
+        }
+        if (toolCall.name === 'request_speech') {
+          toolTurnRequests.push('self')
+        }
+      }
+
+      const proposal = toolProposal ?? extractFocusProposal(agent, clean)
+      const endRequestReason = toolEndRequestReason || extractEndRequest(clean)
+      const askUserRequest = toolAskUserRequest ?? extractAskUserRequest(clean)
+      const explicitChangeRequests = toolChangeRequests.length ? toolChangeRequests : extractChangeRequests(clean)
+      const inferredChangeRequest =
+        !explicitChangeRequests.length
+        && !isMandatoryBrainstormTurn
+        && agent.id !== 'proposer'
+          ? inferImplicitChangeRequest(clean, { hasChapter: Boolean(deps.context().chapter) })
+          : null
+      const changeRequests = inferredChangeRequest
+        ? [...explicitChangeRequests, inferredChangeRequest]
+        : explicitChangeRequests
+      const turnRequests = toolTurnRequests.length ? toolTurnRequests : extractTurnRequests(clean)
+      const publicMessage = toolPublicMessages.length ? toolPublicMessages.join('\n\n') : extractPublicAgentMessage(clean)
+      const shouldSuppressPlanningOnlyPublicMessage =
+        !toolPublicMessages.length
+        && !toolChangeRequests.length
+        && !toolProposal
+        && !toolEndRequestReason
+        && !toolAskUserRequest
+        && !toolTurnRequests.length
+        && /(?:let me|i need to|让我|我先).{0,100}(?:check|review|read|查看|检查|复查).{0,100}(?:story configuration|故事配置|配置)/i.test(clean)
+      if (!shouldSuppressPlanningOnlyPublicMessage && publicMessage && publicMessage.trim()) {
         deps.messages.value.push({
           id: deps.createId('agent'),
           role: 'agent',
@@ -168,6 +367,9 @@ export function createAgentTurnController(deps: AgentTurnControllerDeps) {
         deps.requestAskUserVote(agent, askUserRequest)
       }
       if (changeRequests.length) {
+        if (inferredChangeRequest) {
+          deps.addSystemMessage(`${agent.name} did not call request_project_action in function-calling mode. The meeting engine inferred an actionable request from the agent message to avoid stalling.`)
+        }
         for (const changeRequest of changeRequests) {
           const normalizedChangeRequest = normalizeChangeRequestCompat(changeRequest)
           if (!normalizedChangeRequest) continue
