@@ -45,23 +45,7 @@ export function getModelForStage(
         ? 'writer'
         : stage === 'proofreading'
           ? 'proofreader'
-          : 'polisher'
-
-  if (stage === 'planning') {
-    return providerStore.requireAgentModelRef(role)
-  }
-
-  if (stage === 'chapter-outline' || stage === 'chapter-outline-review') {
-    return providerStore.requireAgentModelRef(role)
-  }
-
-  if (stage === 'writing') {
-    return providerStore.requireAgentModelRef(role)
-  }
-
-  if (stage === 'proofreading') {
-    return providerStore.requireAgentModelRef(role)
-  }
+        : 'polisher'
 
   return providerStore.requireAgentModelRef(role)
 }
@@ -162,8 +146,14 @@ export function prepareRuntime(): FullRuntime {
   chapterTitlePlannerAgent.setModel(chapterPlannerModel, 4096, 0.7, getContextTokens(providerStore, chapterPlannerModel))
   chapterPlannerAgent.setModel(chapterPlannerModel, 3072, 0.6, getContextTokens(providerStore, chapterPlannerModel))
   writerAgent.setModel(writerModel, 4096, 0.8, getContextTokens(providerStore, writerModel))
-  proofreaderAgent.setModel(proofreaderModel, 2048, 0.3, getContextTokens(providerStore, proofreaderModel))
+  proofreaderAgent.setModel(proofreaderModel, 4096, 0.2, getContextTokens(providerStore, proofreaderModel))
   polisherAgent.setModel(polisherModel, 2048, 0.5, getContextTokens(providerStore, polisherModel))
+  /**
+   * The relationship tracker reuses the proofreader model because it performs
+   * a lightweight analysis pass over already-written content (character
+   * interactions in finished chapters). This avoids an extra model binding
+   * requirement without sacrificing inference quality.
+   */
   relationshipTrackerAgent.setModel(proofreaderModel, 2048, 0.2, getContextTokens(providerStore, proofreaderModel))
 
   return {

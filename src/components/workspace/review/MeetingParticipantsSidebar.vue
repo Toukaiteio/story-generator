@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { translatePhrase } from '@/i18n'
-import type { ReviewAgentState, ReviewAgentStatus } from '@/services/review/multiAgentReview'
+import type { ReviewAgentState, ReviewAgentStatus } from '@/services/review/types'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
-import { Bot, Brain, History, Plus, RotateCcw, Settings, ShieldAlert, Trash2 } from 'lucide-vue-next'
+import { Bot, Brain, History, Plus, RotateCcw, Settings, Trash2 } from 'lucide-vue-next'
 
 const props = defineProps<{
   show: boolean
@@ -20,11 +20,48 @@ const emit = defineEmits<{
   'open-agent-settings': [agentId: string]
   'delete-agent': [agentId: string]
   'ask-next': [agentId: string]
+  'reorder-agents': [fromIndex: number, toIndex: number]
 }>()
 
 const tr = translatePhrase
 
 const queuedAgentSet = computed(() => new Set(props.queueAgentIds))
+const dragIndex = ref<number | null>(null)
+const dropOverIndex = ref<number | null>(null)
+
+function onDragStart(index: number, event: DragEvent) {
+  dragIndex.value = index
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+  }
+}
+
+function onDragOver(index: number, event: DragEvent) {
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  dropOverIndex.value = index
+}
+
+function onDragLeave() {
+  dropOverIndex.value = null
+}
+
+function onDrop(index: number) {
+  dropOverIndex.value = null
+  if (dragIndex.value === null || dragIndex.value === index) {
+    dragIndex.value = null
+    return
+  }
+  emit('reorder-agents', dragIndex.value, index)
+  dragIndex.value = null
+}
+
+function onDragEnd() {
+  dragIndex.value = null
+  dropOverIndex.value = null
+}
 </script>
 
 <template>
@@ -58,9 +95,16 @@ const queuedAgentSet = computed(() => new Set(props.queueAgentIds))
 
     <div class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
       <article
-        v-for="agent in agents"
+        v-for="(agent, index) in agents"
         :key="agent.id"
+        draggable="true"
         class="group relative overflow-hidden rounded-2xl border border-surface-4 bg-surface-2 p-4 transition-all hover:border-surface-5 hover:shadow-md"
+        :class="dropOverIndex === index ? 'border-accent/50 ring-1 ring-accent/20' : ''"
+        @dragstart="onDragStart(index, $event)"
+        @dragover="onDragOver(index, $event)"
+        @dragleave="onDragLeave"
+        @drop.prevent="onDrop(index)"
+        @dragend="onDragEnd"
       >
         <div class="absolute top-0 left-0 h-[3px] w-full" :class="statusMeta[agent.status].dot"></div>
 

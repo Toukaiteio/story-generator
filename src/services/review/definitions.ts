@@ -107,11 +107,13 @@ export function createAgentState(definition: ReviewAgentDefinition, project?: St
 
 export function normalizeAgentState(raw: any, definition: ReviewAgentDefinition, project?: StoryProject | null): ReviewAgentState {
   const base = createAgentState(definition, project)
+  const savedStatus = raw?.status === 'waiting' || raw?.status === 'requesting' || raw?.status === 'speaking' || raw?.status === 'blocked' ? raw.status as ReviewAgentState['status'] : base.status
+  const savedWaiting = typeof raw?.waitingForTurn === 'boolean' ? raw.waitingForTurn : base.waitingForTurn
   return {
     ...base,
     enabled: base.enabled,
-    status: 'idle',
-    waitingForTurn: false,
+    status: savedStatus,
+    waitingForTurn: savedWaiting,
     lastSeenMessageIndex: Number.isFinite(Number(raw?.lastSeenMessageIndex)) ? Number(raw.lastSeenMessageIndex) : 0,
     privateMemory: Array.isArray(raw?.privateMemory) ? raw.privateMemory.map(String).slice(-12) : [],
     workspaceState: raw?.workspaceState && typeof raw.workspaceState === 'object' ? raw.workspaceState : {},

@@ -23,7 +23,7 @@ import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
 import { agentTodoListState, clearAgentTodoList, type AgentTodoItem } from '@/services/agent/todolist'
 import type { ChapterOutline } from '@/types/chapter'
 import { markdownToHtml } from '@/services/markdown'
-import { AlertTriangle, ArrowUp, Loader2, LoaderCircle, Square, Sparkles, User, Copy, Wand2, ChevronDown, Brain, History, Plus, Trash2 } from 'lucide-vue-next'
+import { AlertTriangle, ArrowUp, ChevronDown, Loader2, LoaderCircle, Square, Sparkles, User, Copy, Wand2, Brain, History, Plus, Trash2 } from 'lucide-vue-next'
 
 interface ChatMessageBlock {
   id: StoredVibeChatMessageBlock['id']
@@ -33,6 +33,10 @@ interface ChatMessageBlock {
 }
 
 interface ChatMessage {
+  /** Cached markdown HTML for assistant messages (performance optimization) */
+  _mdHtml?: string
+  /** Content fingerprint to detect changes and invalidate cache */
+  _mdFingerprint?: string
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
@@ -82,6 +86,30 @@ const currentReasoning = ref('')
 const streamingAssistantId = ref('')
 const showRewindConfirm = ref(false)
 const pendingRewindMessageId = ref('')
+
+const VIBE_WINDOW_SIZE = 60
+const vibeWindowStart = ref(0)
+
+const visibleMessages = computed(() => messages.value.slice(vibeWindowStart.value))
+const vibeOlderCount = computed(() => vibeWindowStart.value)
+
+function loadVibeOlderMessages() {
+  const newStart = Math.max(0, vibeWindowStart.value - VIBE_WINDOW_SIZE)
+  vibeWindowStart.value = newStart
+  nextTick(() => {
+    if (chatContainer.value) {
+      // Maintain approximate scroll position after loading older
+      chatContainer.value.scrollTop = 80
+    }
+  })
+}
+
+watch(messages, (msgs) => {
+  // When new messages arrive and we're near the end, auto-scroll window
+  if (vibeWindowStart.value + VIBE_WINDOW_SIZE >= msgs.length - 1) {
+    vibeWindowStart.value = Math.max(0, msgs.length - VIBE_WINDOW_SIZE)
+  }
+}, { deep: false, flush: 'post' })
 const showHistoryMenu = ref(false)
 const conversationHistory = ref<VibeConversationHistoryEntry[]>([])
 const activeConversationId = ref('')
@@ -1609,22 +1637,32 @@ defineExpose({
         </button>
       </div>
 
+      <div v-if="vibeOlderCount > 0" class="flex justify-center px-4 pt-1">
+        <button
+          class="flex items-center gap-1.5 rounded-full border border-surface-4 bg-surface-2 px-4 py-1.5 text-[10px] font-medium text-text-muted transition-colors hover:border-accent/40 hover:text-accent"
+          @click="loadVibeOlderMessages"
+        >
+          <ChevronDown :size="12" class="rotate-180" />
+          <span>{{ tr('Show') }} {{ vibeOlderCount > 60 ? VIBE_WINDOW_SIZE : vibeOlderCount }} {{ tr('older messages') }}</span>
+        </button>
+        <div class="h-2"></div>
+      </div>
       <div
-        v-for="(msg, index) in messages"
+        v-for="(msg, index) in visibleMessages"
         :key="msg.id"
         class="group flex flex-col"
-        :class="index > 0 ? (messages[index - 1].role === msg.role ? 'gap-1 mt-1' : 'gap-3 mt-4') : 'gap-3'"
+        :class="index > 0 ? (visibleMessages[index - 1].role === msg.role ? 'gap-1 mt-1' : 'gap-3 mt-4') : 'gap-3'"
       >
         <!-- Message Role Label (Minimalist Cursor Style) -->
-        <div v-if="index === 0 || messages[index - 1].role !== msg.role" class="flex items-center justify-between select-none">
+        <div v-if="index === 0 || visibleMessages[index - 1].role !== msg.role" class="flex items-center justify-between select-none">
           <div class="flex items-center gap-2">
-            <div v-if="msg.role === 'user'" class="flex items-center justify-center w-5 h-5 rounded-full bg-surface-3 text-text-primary">
+            <div v-if="msg.role === 'user'" class="flex items-center justify-center w-5 h-5 text-text-primary">
               <User :size="11" />
             </div>
-            <div v-else-if="msg.role === 'assistant'" class="flex items-center justify-center w-5 h-5 rounded-md bg-accent/10 text-accent">
+            <div v-else-if="msg.role === 'assistant'" class="flex items-center justify-center w-5 h-5 text-accent">
               <Sparkles :size="11" />
             </div>
-            <div v-else class="flex items-center justify-center w-5 h-5 rounded-sm bg-surface-3">
+            <div v-else class="flex items-center justify-center w-5 h-5">
               <AlertTriangle :size="11" :class="systemMessageTone(msg) === 'danger' ? 'text-danger' : systemMessageTone(msg) === 'warning' ? 'text-warning' : 'text-text-muted'" />
             </div>
             
@@ -1668,7 +1706,7 @@ defineExpose({
         >
           <!-- Contiguous Copy Button & Timestamp (Only visible on hover when header is hidden) -->
           <div 
-            v-if="index > 0 && messages[index - 1].role === msg.role"
+            v-if="index > 0 && visibleMessages[index - 1].role === msg.role"
             class="absolute -left-2 -top-1 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center gap-1"
           >
             <button

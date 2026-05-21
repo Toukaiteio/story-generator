@@ -13,7 +13,7 @@ export function normalizePublicMessage(raw: any): ReviewPublicMessage | null {
     agentName: typeof raw.agentName === 'string' ? raw.agentName : undefined,
     content,
     tool: raw.tool && typeof raw.tool === 'object' ? raw.tool : undefined,
-    changeVoteSnapshot: raw.changeVoteSnapshot && typeof raw.changeVoteSnapshot === 'object' ? raw.changeVoteSnapshot : undefined,
+    actionVoteSnapshot: raw.actionVoteSnapshot && typeof raw.actionVoteSnapshot === 'object' ? raw.actionVoteSnapshot : undefined,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
   }
 }
@@ -31,11 +31,15 @@ export function fromStoredMessages(messages: any[]) {
   return (messages || [])
     .map((message: any) => {
       try {
-        return normalizePublicMessage(JSON.parse(String(message.content ?? '')))
+        const parsed = JSON.parse(String(message.content ?? ''))
+        if (message.role === 'assistant') parsed.role = 'agent'
+        return normalizePublicMessage(parsed)
       } catch {
+        const role = message.role === 'assistant' ? 'agent' : message.role
+        const validRole = role === 'user' || role === 'agent' || role === 'system' ? role : 'system'
         return normalizePublicMessage({
           id: message.id,
-          role: message.role === 'assistant' ? 'agent' : message.role,
+          role: validRole,
           content: message.content,
           createdAt: message.timestamp,
         })

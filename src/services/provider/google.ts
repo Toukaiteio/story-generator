@@ -94,7 +94,7 @@ export class GoogleAdapter implements ProviderAdapter {
       ;(config as any).toolConfig = {
         functionCallingConfig: choice === 'none'
           ? { mode: 'NONE' }
-          : { mode: 'ANY', allowedFunctionNames: [choice.function.name] },
+          : { mode: 'ANY', allowedFunctionNames: [(choice as { type: 'function'; function: { name: string } }).function.name] },
       }
     }
 

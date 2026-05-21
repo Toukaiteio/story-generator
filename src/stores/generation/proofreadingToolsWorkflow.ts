@@ -1,7 +1,7 @@
 import { useProviderStore } from '@/stores/provider'
 import { getRelationshipQueryTools } from '@/services/relationship/tools'
 import { chatWithRelationshipTools, chatWithRelationshipToolsInPlace, getToolCall } from '@/services/generation/toolWorkflow'
-import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSystemPrompt, getProofreadingTools, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
+import { getChapterIssueReportTool, getEditingAuditSystemPrompt, getProofreadingSegmentTaskInstruction, getProofreadingSystemPrompt, getProofreadingTools, mapEditingAuditIssues, mapProofreadingIssues } from '@/services/generation/proofreadingTools'
 import { buildSegmentedProofreadingPrompts, buildProofreadingSegments } from '@/services/proofreading/chunking'
 import type { ProviderModelRef, ChatMessage } from '@/types/provider'
 import type { ChapterAuditIssue } from '@/services/generation/types'
@@ -152,7 +152,7 @@ export async function proofreadChapterContentWithToolWorkflow(
       '',
       `Current Chapter Segment ${segment.index + 1}/${segment.total}:`,
       `Estimated token range: ${segment.tokenStart}-${segment.tokenEnd} of ${segment.tokenTotal}.`,
-      'Task: inspect this segment line by line and call report_proofreading_issues. Report grammar, typo, wording, punctuation, consistency, pacing, and logic issues with exact excerpts from this segment. Use an empty issues array only when this segment has no concrete issues.',
+      getProofreadingSegmentTaskInstruction(),
       '',
       'Segment Text:',
       segment.content,

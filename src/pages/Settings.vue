@@ -40,10 +40,6 @@ function handleVibeRewindPointsChange(value: string) {
   ui.setVibeRewindPoints(Number(value))
 }
 
-function handleMaxContextTurnsChange(value: string) {
-  ui.setDefaultMaxContextTurns(Number(value))
-}
-
 function handleCustomSystemPromptChange(value: string) {
   ui.setCustomSystemPrompt(value)
 }
@@ -146,18 +142,6 @@ async function handleBrowseStorage() {
             <p class="mt-2 text-xs leading-relaxed text-text-muted">
               {{ ui.text('Default is 1. Before each Vibe AI request, the app saves a small snapshot of the current workspace so you can rewind from that message if the AI makes a bad edit. Older snapshots are replaced when the limit is exceeded. Set 0 to disable rewind snapshots.') }}
             </p>
-            <div class="mt-4">
-              <BaseInput
-                :model-value="String(ui.defaultMaxContextTurns)"
-                :label="ui.text('Default Meeting Context Limit (Turns)')"
-                type="number"
-                placeholder="15"
-                @update:model-value="handleMaxContextTurnsChange"
-              />
-              <p class="mt-2 text-xs leading-relaxed text-text-muted">
-                {{ ui.text('Default is 15. Automatically compress context after this many turns to save tokens and prevent distraction.') }}
-              </p>
-            </div>
           </div>
         </section>
 

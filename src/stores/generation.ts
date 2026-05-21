@@ -186,7 +186,7 @@ export const useGenerationStore = defineStore('generation', () => {
   async function proofreadChapter(projectId: string, chapterId?: string) {
     resetRunState()
     const project = validateProject(projectId)
-    const targetChapterIndex = chapterId ? resolveChapterIndexById(project, chapterId) : resolveChapterIndex(project, 'proofreading')
+    const targetChapterIndex = (chapterId ? resolveChapterIndexById(project, chapterId) : resolveChapterIndex(project, 'proofreading')) ?? -1
     if (targetChapterIndex < 0) {
       finishRun()
       throw new Error('No chapter is currently ready for proofreading')
@@ -221,7 +221,7 @@ export const useGenerationStore = defineStore('generation', () => {
   async function polishChapter(projectId: string, chapterId?: string, proofreadingIssues?: any[]) {
     resetRunState()
     const project = validateProject(projectId)
-    const targetChapterIndex = chapterId ? resolveChapterIndexById(project, chapterId) : resolveChapterIndex(project, 'polishing')
+    const targetChapterIndex = (chapterId ? resolveChapterIndexById(project, chapterId) : resolveChapterIndex(project, 'polishing')) ?? -1
     if (targetChapterIndex < 0) {
       finishRun()
       throw new Error('No chapter is currently ready for polishing')

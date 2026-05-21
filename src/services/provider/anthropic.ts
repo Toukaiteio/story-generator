@@ -16,6 +16,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const choice = toolOptions?.toolChoice
     if (!choice || choice === 'auto') return { type: 'auto' }
     if (choice === 'none') return { type: 'none' }
+    if (choice === 'required') return { type: 'any' }
     return { type: 'tool', name: choice.function.name }
   }
 

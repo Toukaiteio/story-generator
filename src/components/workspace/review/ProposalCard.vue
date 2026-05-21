@@ -1,13 +1,13 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { translatePhrase } from '@/i18n'
 import type {
   ReviewProposal,
-  ReviewChangeVoteSession,
+  ReviewActionVoteSession,
   ReviewEndVoteSession,
-  ReviewChangeVote,
+  ReviewActionVote,
   ReviewEndVote,
-} from '@/services/review/multiAgentReview'
+} from '@/services/review/types'
 import AgentAvatar from './AgentAvatar.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
@@ -28,10 +28,10 @@ type ProposalVariant = 'focus' | 'change' | 'end'
 const props = defineProps<{
   variant: ProposalVariant
   proposal?: ReviewProposal | null
-  changeVote?: ReviewChangeVoteSession | null
+  changeVote?: ReviewActionVoteSession | null
   endVote?: ReviewEndVoteSession | null
   totalAgents?: number
-  enableAgents?: number
+  enabledAgents?: number
 }>()
 
 const emit = defineEmits<{
@@ -54,9 +54,9 @@ const borderColor = computed(() => {
 })
 
 const iconBg = computed(() => {
-  if (props.variant === 'focus') return 'bg-accent/10 text-accent'
-  if (props.variant === 'change') return 'bg-accent/10 text-accent'
-  return 'bg-warning/10 text-warning'
+  if (props.variant === 'focus') return 'text-accent'
+  if (props.variant === 'change') return 'text-accent'
+  return 'text-warning'
 })
 
 const agentName = computed(() => {
@@ -79,7 +79,7 @@ const content = computed(() => {
   return ''
 })
 
-const votes = computed((): Array<ReviewChangeVote | ReviewEndVote> => {
+const votes = computed((): Array<ReviewActionVote | ReviewEndVote> => {
   if (props.variant === 'change' && props.changeVote) return props.changeVote.votes
   if (props.variant === 'end' && props.endVote) return props.endVote.votes
   return []
@@ -88,7 +88,7 @@ const votes = computed((): Array<ReviewChangeVote | ReviewEndVote> => {
 const approveCount = computed(() => votes.value.filter(v => v.vote === 'approve').length)
 const rejectCount = computed(() => votes.value.filter(v => v.vote === 'reject').length)
 const totalVotes = computed(() => votes.value.length)
-const totalPossible = computed(() => props.enableAgents || props.totalAgents || 1)
+const totalPossible = computed(() => props.enabledAgents || props.totalAgents || 1)
 const approvePct = computed(() => totalPossible.value > 0 ? (approveCount.value / totalPossible.value) * 100 : 0)
 
 const statusTag = computed(() => {
@@ -129,7 +129,7 @@ function voteIcon(vote: string) {
   >
     <!-- Header Row -->
     <div class="flex items-center gap-2">
-      <div class="flex items-center justify-center w-5 h-5 rounded" :class="iconBg">
+      <div class="flex items-center justify-center w-5 h-5" :class="iconBg">
         <Sparkles v-if="variant === 'focus'" :size="11" />
         <FileText v-else-if="variant === 'change'" :size="11" />
         <ShieldAlert v-else :size="11" />
@@ -170,7 +170,7 @@ function voteIcon(vote: string) {
       <p v-if="variant === 'focus'" class="text-[11px] text-text-secondary italic leading-relaxed">"{{ content }}"</p>
       <p v-else-if="variant === 'change' && changeVote" class="text-[11px] text-text-secondary leading-relaxed">
         <span class="font-semibold text-text-primary">{{ changeVote.request.scope }}</span>
-        <span v-if="changeVote.request.purpose" class="ml-1">— {{ changeVote.request.purpose }}</span>
+        <span v-if="changeVote.request.purpose" class="ml-1">鈥?{{ changeVote.request.purpose }}</span>
       </p>
       <p v-else-if="variant === 'end' && endVote" class="text-[11px] text-text-secondary italic leading-relaxed">"{{ content }}"</p>
 
@@ -232,8 +232,8 @@ function voteIcon(vote: string) {
           <Brain v-else :size="10" />
           <span>{{ tr('Execution') }}</span>
           <span class="opacity-70">
-            <span v-if="execSteps">· {{ execSteps }} {{ tr('steps') }}</span>
-            <span v-if="exec.executionState === 'running'">· {{ tr('running') }}</span>
+            <span v-if="execSteps">路 {{ execSteps }} {{ tr('steps') }}</span>
+            <span v-if="exec.executionState === 'running'">路 {{ tr('running') }}</span>
           </span>
           <BaseTag
             v-if="exec.executionState"
@@ -272,67 +272,67 @@ function voteIcon(vote: string) {
         </div>
       </div>
 
-      <!-- Result/Error -->
-      <div v-if="exec && (exec.result || exec.error)" class="text-[10px] text-text-secondary rounded px-2 py-1" :class="exec.error ? 'bg-danger/5 text-danger' : 'bg-surface-1'">
-        {{ exec.result || exec.error }}
-      </div>
+     <!-- Result/Error -->
+     <div v-if="exec && (exec.result || exec.error)" class="text-[10px] text-text-secondary rounded px-2 py-1" :class="exec.error ? 'bg-danger/5 text-danger' : 'bg-surface-1'">
+       {{ exec.result || exec.error }}
+     </div>
 
-      <!-- Actions -->
-      <div v-if="variant === 'focus' && proposal" class="flex items-center gap-2 pt-1">
-        <button
-          v-if="!showRejectInput"
-          class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors"
-          @click="showRejectInput = true"
-        >{{ tr('Reject') }}</button>
-        <template v-if="showRejectInput">
-          <input
-            v-model="rejectReason"
-            class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
-            :placeholder="tr('Reason (optional)')"
-            @keydown.enter.prevent="submitReject"
-          />
-          <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" @click="submitReject">{{ tr('Reject') }}</button>
-          <button class="text-[10px] font-medium text-text-muted hover:text-text-primary transition-colors" @click="showRejectInput = false; rejectReason = ''">{{ tr('Cancel') }}</button>
-        </template>
-        <div class="flex-1" />
-        <BaseButton variant="primary" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
-          {{ tr('Approve') }}
-        </BaseButton>
-      </div>
+     <!-- Actions -->
+     <div v-if="variant === 'focus' && proposal" class="flex items-center gap-2 pt-1">
+       <button
+         v-if="!showRejectInput"
+         class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors"
+         @click="showRejectInput = true"
+       >{{ tr('Reject') }}</button>
+       <template v-if="showRejectInput">
+         <input
+           v-model="rejectReason"
+           class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
+           :placeholder="tr('Reason (optional)')"
+           @keydown.enter.prevent="submitReject"
+         />
+         <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" @click="submitReject">{{ tr('Reject') }}</button>
+         <button class="text-[10px] font-medium text-text-muted hover:text-text-primary transition-colors" @click="showRejectInput = false; rejectReason = ''">{{ tr('Cancel') }}</button>
+       </template>
+       <div class="flex-1" />
+       <BaseButton variant="primary" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
+         {{ tr('Approve') }}
+       </BaseButton>
+     </div>
 
-      <div v-if="variant === 'end' && endVote && endVote.status === 'ready'" class="flex items-center gap-2 pt-1">
-        <input
-          v-model="rejectReason"
-          class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
-          :placeholder="tr('Reason to continue...')"
-        />
-        <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" :disabled="!rejectReason.trim()" @click="submitReject">{{ tr('Continue') }}</button>
-        <BaseButton variant="danger" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
-          {{ tr('End Meeting') }}
-        </BaseButton>
-      </div>
+     <div v-if="variant === 'end' && endVote && endVote.status === 'ready'" class="flex items-center gap-2 pt-1">
+       <input
+         v-model="rejectReason"
+         class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
+         :placeholder="tr('Reason to continue...')"
+       />
+       <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" :disabled="!rejectReason.trim()" @click="submitReject">{{ tr('Continue') }}</button>
+       <BaseButton variant="danger" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
+         {{ tr('End Meeting') }}
+       </BaseButton>
+     </div>
 
-      <div v-if="variant === 'change' && changeVote && changeVote.status === 'voting'" class="flex items-center gap-2 pt-1">
-        <button
-          v-if="!showRejectInput"
-          class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors"
-          @click="showRejectInput = true"
-        >{{ tr('Reject') }}</button>
-        <template v-if="showRejectInput">
-          <input
-            v-model="rejectReason"
-            class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
-            :placeholder="tr('Reason (optional)')"
-            @keydown.enter.prevent="submitReject"
-          />
-          <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" @click="submitReject">{{ tr('Reject') }}</button>
-          <button class="text-[10px] font-medium text-text-muted hover:text-text-primary transition-colors" @click="showRejectInput = false; rejectReason = ''">{{ tr('Cancel') }}</button>
-        </template>
-        <div class="flex-1" />
-        <BaseButton variant="primary" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
-          {{ tr('Approve') }}
-        </BaseButton>
-      </div>
-    </div>
-  </div>
+     <div v-if="variant === 'change' && changeVote && changeVote.status === 'voting'" class="flex items-center gap-2 pt-1">
+       <button
+         v-if="!showRejectInput"
+         class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors"
+         @click="showRejectInput = true"
+       >{{ tr('Reject') }}</button>
+       <template v-if="showRejectInput">
+         <input
+           v-model="rejectReason"
+           class="h-6 flex-1 rounded border border-surface-4 bg-surface-1 px-2 text-[10px] text-text-primary outline-none focus:border-accent/50"
+           :placeholder="tr('Reason (optional)')"
+           @keydown.enter.prevent="submitReject"
+         />
+         <button class="text-[10px] font-medium text-text-muted hover:text-danger transition-colors" @click="submitReject">{{ tr('Reject') }}</button>
+         <button class="text-[10px] font-medium text-text-muted hover:text-text-primary transition-colors" @click="showRejectInput = false; rejectReason = ''">{{ tr('Cancel') }}</button>
+       </template>
+       <div class="flex-1" />
+       <BaseButton variant="primary" size="sm" class="!h-6 !px-3 !text-[10px]" @click="emit('approve')">
+         {{ tr('Approve') }}
+       </BaseButton>
+     </div>
+   </div>
+ </div>
 </template>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { translatePhrase } from '@/i18n'
-import type { ReviewContextElement } from '@/services/review/multiAgentReview'
+import type { ReviewContextElement } from '@/services/review/types'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseTooltip from '@/components/ui/BaseTooltip.vue'
@@ -16,7 +16,6 @@ interface QueueItem {
 const props = defineProps<{
   show: boolean
   focus: string
-  maxContextTurns: number
   contextOptions: Array<{ key: ReviewContextElement; label: string; detail: string }>
   selectedContextElements: ReviewContextElement[]
   queueItems: QueueItem[]
@@ -26,7 +25,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:show': [value: boolean]
   'update:focus': [value: string]
-  'update:maxContextTurns': [value: number]
   'toggle-context': [element: ReviewContextElement]
   'reset': []
   'start': []
@@ -66,26 +64,6 @@ function isElementSelected(element: ReviewContextElement) {
           :placeholder="tr('Describe the meeting opening topic...')"
           @input="emit('update:focus', ($event.target as HTMLTextAreaElement).value)"
         ></textarea>
-      </section>
-
-      <section class="mt-8 space-y-3">
-        <div class="flex items-center justify-between">
-          <p class="text-[10px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Context Limit') }}</p>
-          <BaseTooltip :text="tr('Automatically compress context after this many turns to save tokens and prevent distraction.')">
-            <Info :size="12" class="text-text-muted" />
-          </BaseTooltip>
-        </div>
-        <div class="flex items-center gap-2 rounded-xl border border-surface-4 bg-surface-2 px-3 py-2 focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/10">
-          <input
-            :value="maxContextTurns"
-            type="number"
-            min="5"
-            max="50"
-            class="w-full bg-transparent text-sm text-text-primary outline-none"
-            @input="emit('update:maxContextTurns', Number(($event.target as HTMLInputElement).value || 0))"
-          />
-          <span class="text-xs text-text-muted">{{ tr('Turns') }}</span>
-        </div>
       </section>
 
       <section class="mt-8 space-y-3">

@@ -31,7 +31,6 @@ export interface ProjectWritingStyleSnapshot {
 }
 
 export interface ProjectReviewAgentSettings {
-  maxContextTurns?: number
   agents: Record<string, {
     name?: string
     role?: string

@@ -1,4 +1,4 @@
-import type { StoryProject } from '@/types/project'
+﻿import type { StoryProject } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import type { ChatMessage } from '@/types/provider'
 import type {
@@ -8,13 +8,13 @@ import type {
   ReviewPublicMessage,
   ReviewSpeechRequest,
   ReviewEndVoteSession,
-  ReviewChangeVoteSession,
+  ReviewActionVoteSession,
   ReviewAskUserSession,
 } from './types'
 import { elementLink } from './utils'
 import { useKnowledgeStore } from '@/stores/knowledge'
 import { buildKnowledgeContext, buildKnowledgeQuery } from '@/services/knowledge/context'
-import { estimateTokens } from '@/services/context'
+import { estimateTokens } from '@/services/knowledge/chunker'
 
 const REVIEW_CONTEXT_DEFAULT_BUDGET_TOKENS = 5600
 
@@ -229,10 +229,6 @@ export function buildProjectContext(
   return [header, ...sections, '', footer].join('\n')
 }
 
-export function selectedContextElementsSafe(_context: MultiAgentReviewContext): ReviewContextElement[] {
-  return ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']
-}
-
 function formatToolEvidence(tool: ReviewPublicMessage['tool']) {
   if (!tool) return ''
   const parts: string[] = []
@@ -255,12 +251,11 @@ export function buildAgentMessages(
   focus: string,
   contextElements: ReviewContextElement[],
   request?: ReviewSpeechRequest,
-  options: { mandatoryBrainstorm?: boolean; openDiscussionTurnCount?: number; enabledAgentCount?: number; maxContextTurns?: number } = {}
+  options: { mandatoryBrainstorm?: boolean; openDiscussionTurnCount?: number; enabledAgentCount?: number } = {}
 ): ChatMessage[] {
   const isFirstOpenTurn = !options.mandatoryBrainstorm && (options.openDiscussionTurnCount || 0) <= 1
   const isProposerAgent = agent.id === 'proposer'
   const isFatigued = !options.mandatoryBrainstorm && (options.openDiscussionTurnCount || 0) >= ((options.enabledAgentCount || 0) * 2)
-  const maxTurns = options.maxContextTurns && options.maxContextTurns > 0 ? options.maxContextTurns : 15
 
   const systemContent = [
     agent.customSystemPrompt || agent.systemPrompt,
@@ -289,6 +284,7 @@ export function buildAgentMessages(
     '- Do not say "enter proposal stage", "someone should create a proposal", or "this should be voted on" without actually calling request_project_action when you already have enough information.',
     '- Do not end your public message with a question unless you are explicitly using ask_user_clarification or directly asking a specific other agent to respond next.',
     '- If you already have enough context to form a view, end with your concrete judgment, recommendation, or decision instead of a generic follow-up question.',
+    '- Do NOT repeat or echo another agent\'s public message, analysis, or tool call. If another agent already called request_project_action with the same target/action/scope you were about to propose, do something different: add a new perspective, propose a different action, or wait for the tool result. Duplicating another agent\'s exact proposal wastes meeting time.',
     options.mandatoryBrainstorm
       ? '- Mandatory brainstorm phase: do not call request_project_action, request_end_meeting, or propose_focus. Use send_public_message to publish role-based analysis and directions.'
       : '- Open meeting phase: respond like a real meeting participant. Read other agents\' messages carefully. You may question, rebut, refine, combine, or support their points. Direct your message to specific agents if helpful.\n- CRITICAL: DO NOT copy, repeat, or echo the previous agent\'s message. You must add new insights, debate points, or propose a concrete action. If you agree, explain WHY from your unique perspective and push the conversation forward.',
@@ -331,13 +327,9 @@ export function buildAgentMessages(
 
   const contextPublicMessages = options.mandatoryBrainstorm
     ? publicMessages.slice(agent.lastSeenMessageIndex)
-    : publicMessages.slice(-maxTurns)
+    : publicMessages
 
   let userBuffer: string[] = []
-
-  if (!options.mandatoryBrainstorm && publicMessages.length > maxTurns) {
-    userBuffer.push(`[System: Older conversation history has been truncated/compressed to the last ${maxTurns} turns. Focus on the current context.]`)
-  }
 
   // Conversation framing rule:
   // - self agent history -> assistant messages
@@ -450,13 +442,13 @@ export function buildEndVoteMessages(
   ]
 }
 
-export function buildChangeVoteMessages(
+export function buildActionVoteMessages(
   agent: ReviewAgentState,
   publicMessages: ReviewPublicMessage[],
   context: MultiAgentReviewContext,
   focus: string,
   contextElements: ReviewContextElement[],
-  session: ReviewChangeVoteSession
+  session: ReviewActionVoteSession
 ): ChatMessage[] {
   const visiblePublicContext = publicMessages.length
     ? publicMessages.slice(-16).map(message => {
@@ -480,6 +472,8 @@ export function buildChangeVoteMessages(
         'The user request is the highest-priority evaluation standard.',
         'Core policy: treat proposals as improvable drafts by default. The goal is to iteratively improve a proposal until it is good enough, not to wait for a perfect first version.',
         'Primary voting criterion: incremental improvement. Approve when the proposal clearly moves the project in a better direction, even if it does not fully complete every requirement yet.',
+        'CRITICAL: For action=read proposals, you MUST vote approve unless the scope is completely unrelated to the current meeting focus. Read actions do not modify any project data — they only retrieve context. Rejecting a read wastes meeting time without protecting anything. If the scope is wrong, include an amendment with a better scope instead of rejecting.',
+        'For action=create/update/delete, apply stricter scrutiny: ensure scope, purpose, and content are sufficient for the tool to execute. But still prefer amendment over rejection when the direction is right and only details are missing.',
         'Do not confuse character concepts with character entities. Vote for target characters only when the proposal clearly adds or updates concrete named cast members.',
         'After a proposal passes, wait for the project change tool result before treating the work as complete or requesting meeting end.',
         'Do not reject merely because the content is prose, bullets, or imperfect JSON. The project change tool will normalize approved proposals before execution.',
@@ -488,19 +482,19 @@ export function buildChangeVoteMessages(
         'Vote no for format only when the proposal lacks enough information for the tool to infer the intended target, scope, purpose, or content.',
         'First infer what the user wants and what final effect would satisfy the user. Then judge the proposal against that goal.',
         'Vote yes if the proposal is coherent and improves user-fit, even if it is not your ideal or final solution.',
-        'Vote no only for concrete user-impacting reasons: it violates explicit user constraints, worsens the requested outcome, is unsafe to apply, is malformed, or lacks required information.',
-        'Do not reject merely because you prefer another style, want more discussion, or because the proposal is outside your narrow specialty while still satisfying the user.',
-        'If the proposal is mostly right but needs a targeted correction or missing detail, include an amendment block after your vote. Amendment blocks can modify, delete, or insert one item.',
-        'Prefer proposing an amendment over voting reject when the proposal can be improved with one concrete patch.',
-        'Reject should be the last resort after refinement rounds fail or when the proposal is unsafe/contradictory.',
-        'If amendment is needed, include it in function submit_change_vote as amendment { action, scope, purpose, content }.',
+        'CRITICAL - Meeting phase voting rule: Only reject when the proposal has SEVERE ERRORS AND NO ROOM FOR IMPROVEMENT at the same time. Otherwise you MUST approve. Reject is the absolute last resort.',
+        'When approving you SHOULD include an amendment to fix issues, add missing details, or adjust the direction — this keeps the process moving.',
+        'If the proposal direction is correct but details are imperfect, vote YES with an amendment. Do not reject fixable proposals.',
+         'If amendment is needed, include it in function submit_action_vote as amendment { action, scope, purpose, content }.',
         'Do not propose an amendment while voting on an amendment.',
         'If voting no due to insufficient actionable detail, your reason must explicitly name what information is missing.',
         'If voting no due to user-fit, your reason must include what alternative would better satisfy the user.',
         'Modify means agree: if you vote yes and the change is applied, you must treat the result as accepted source-of-truth in later turns.',
         'Do not later try to revert an applied change unless the user explicitly asks for a new change.',
-        'You must submit the vote by calling function submit_change_vote(vote, reason, amendment?).',
+         'You must submit the vote by calling function submit_action_vote(vote, reason, amendment?).',
         'Use vote=approve or vote=reject.',
+         'IMPORTANT: Call submit_action_vote exactly ONCE. Do not call it multiple times. If you want to include an amendment, include it in the single call. Do not write "I vote approve" in text and then call submit_action_vote with vote=reject — your function call is the authoritative vote, not your text.',
+         'If you intend to approve with an amendment, call submit_action_vote with vote="approve" and include the amendment object. Do not vote reject and expect the amendment to change the outcome.',
       ].join('\n'),
     },
     {
@@ -519,8 +513,15 @@ export function buildChangeVoteMessages(
         '',
         `Refinement round: ${session.refinementRound || 0}`,
         '',
+        session.previousRoundRejections?.length
+          ? [
+              'Previous round rejection reasons (you MUST address these, not repeat the same rejection):',
+              ...session.previousRoundRejections.map(r => `- ${r.agentName}: ${r.reason}`),
+              'If the rejection was about missing detail, include an amendment. If the rejection was about read action being unnecessary, reconsider — read actions are harmless.',
+            ].join('\n')
+          : '',
         session.draft
-          ? 'Draft proposal mode: this request is intentionally rough. Prefer adding one targeted amendment in submit_change_vote and voting approve when the amendment makes it better.'
+          ? 'Draft proposal mode: this request is intentionally rough. Prefer adding one targeted amendment in submit_action_vote and voting approve when the amendment makes it better.'
           : '',
         '',
         session.amendmentDepth
@@ -562,7 +563,7 @@ export function buildAskUserVoteMessages(
     {
       role: 'user',
       content: [
-        buildProjectContext(context, selectedContextElementsSafe(context)),
+        buildProjectContext(context, ['story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan']),
         '',
         `Clarification request from ${session.requestedByAgentName}:`,
         `Question: ${session.request.question}`,
@@ -576,7 +577,7 @@ export function buildAskUserVoteMessages(
 }
 
 export function buildSkillAgentMessages(
-  session: ReviewChangeVoteSession,
+  session: ReviewActionVoteSession,
   context: MultiAgentReviewContext,
   contextElements: ReviewContextElement[]
 ): ChatMessage[] {

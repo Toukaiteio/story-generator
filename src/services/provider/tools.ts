@@ -30,7 +30,7 @@ export interface ToolResult {
 
 export interface FunctionCallingOptions {
   tools: ToolDefinition[]
-  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } }
+  tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
 }
 
 export interface FunctionCallingResponse {

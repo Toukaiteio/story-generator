@@ -10,16 +10,16 @@ const props = withDefaults(defineProps<{
 })
 
 const palette = [
-  'bg-accent text-white',
-  'bg-success text-white',
-  'bg-warning text-white',
-  'bg-danger text-white',
-  'bg-blue-500 text-white',
-  'bg-violet-500 text-white',
-  'bg-emerald-500 text-white',
-  'bg-amber-500 text-white',
-  'bg-rose-500 text-white',
-  'bg-cyan-500 text-white',
+  'text-accent',
+  'text-success',
+  'text-warning',
+  'text-danger',
+  'text-blue-500',
+  'text-violet-500',
+  'text-emerald-500',
+  'text-amber-500',
+  'text-rose-500',
+  'text-cyan-500',
 ]
 
 const initial = computed(() => {
@@ -43,7 +43,7 @@ const fontSize = computed(() => `${Math.max(8, Math.round(props.size * 0.45))}px
 
 <template>
   <div
-    class="flex shrink-0 items-center justify-center rounded-md font-bold uppercase tracking-tight"
+    class="flex shrink-0 items-center justify-center font-bold uppercase tracking-tight"
     :class="colorClass"
     :style="{ width: pxSize, height: pxSize, fontSize }"
     :title="name"

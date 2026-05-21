@@ -23,7 +23,7 @@ export interface FunctionCallingResponse {
 }
 
 export interface ToolCallOptions {
-  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } }
+  toolChoice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } }
 }
 
 export interface StreamWithToolsCallbacks extends Omit<StreamCallbacks, 'onComplete'> {

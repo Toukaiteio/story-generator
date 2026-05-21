@@ -2,6 +2,8 @@ import type { ToolCallStatusItem } from '@/components/ui/ToolCallStatus.vue'
 import type { StoryProject } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 
+/** Multi-Agent Review shared types extracted for UI components. */
+
 export type ReviewAgentStatus = 'idle' | 'waiting' | 'requesting' | 'speaking' | 'blocked'
 export type ReviewMessageRole = 'user' | 'agent' | 'system'
 export type ReviewContextElement =
@@ -60,15 +62,42 @@ export interface ReviewAskUserRequest {
   reason: string
 }
 
-export interface ReviewAskUserSession {
+export interface ReviewAgentDefinition {
   id: string
-  requestedByAgentId: string
-  requestedByAgentName: string
-  request: ReviewAskUserRequest
-  status: 'voting' | 'ready' | 'answered' | 'rejected'
-  votes: ReviewEndVote[]
+  name: string
+  role: string
+  brief: string
+  defaultModelRole: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
+  systemPrompt: string
+  custom?: boolean
+}
+
+export interface ReviewAgentState extends ReviewAgentDefinition {
+  enabled: boolean
+  status: ReviewAgentStatus
+  waitingForTurn: boolean
+  lastSeenMessageIndex: number
+  privateMemory: string[]
+  workspaceState: Record<string, unknown>
+  modelValue: string
+  customSystemPrompt: string
+  toolState: {
+    requestSpeech: ReviewAgentStatus
+    lastRequestedAt?: string
+    lastSpokeAt?: string
+    error?: string
+  }
+}
+
+export interface ReviewPublicMessage {
+  id: string
+  role: ReviewMessageRole
+  agentId?: string
+  agentName?: string
+  content: string
+  tool?: ToolCallStatusItem
+  actionVoteSnapshot?: ReviewActionVoteSession
   createdAt: string
-  completedAt?: string
 }
 
 export type ReviewChangeTarget = 'master-outline' | 'chapter-plan' | 'characters' | 'consensus'
@@ -139,42 +168,15 @@ export interface ReviewActionVoteSession {
   completedAt?: string
 }
 
-export interface ReviewAgentDefinition {
+export interface ReviewAskUserSession {
   id: string
-  name: string
-  role: string
-  brief: string
-  defaultModelRole: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
-  systemPrompt: string
-  custom?: boolean
-}
-
-export interface ReviewAgentState extends ReviewAgentDefinition {
-  enabled: boolean
-  status: ReviewAgentStatus
-  waitingForTurn: boolean
-  lastSeenMessageIndex: number
-  privateMemory: string[]
-  workspaceState: Record<string, unknown>
-  modelValue: string
-  customSystemPrompt: string
-  toolState: {
-    requestSpeech: ReviewAgentStatus
-    lastRequestedAt?: string
-    lastSpokeAt?: string
-    error?: string
-  }
-}
-
-export interface ReviewPublicMessage {
-  id: string
-  role: ReviewMessageRole
-  agentId?: string
-  agentName?: string
-  content: string
-  tool?: ToolCallStatusItem
-  actionVoteSnapshot?: ReviewActionVoteSession
+  requestedByAgentId: string
+  requestedByAgentName: string
+  request: ReviewAskUserRequest
+  status: 'voting' | 'ready' | 'answered' | 'rejected'
+  votes: ReviewEndVote[]
   createdAt: string
+  completedAt?: string
 }
 
 export interface MultiAgentReviewContext {

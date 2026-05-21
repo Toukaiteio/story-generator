@@ -30,6 +30,10 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
+  /**
+   * Emitted with a fix instruction string. The parent component should consume this
+   * by passing the instruction to the polishing tool via replace_chapter_content.
+   */
   fix: [instruction: string]
   issuesFound: [issues: ChapterAuditIssue[]]
   issueSelected: [issue: ChapterAuditIssue]
@@ -45,7 +49,7 @@ function tr(value: string) {
 }
 
 const issues = ref<ChapterAuditIssue[]>([])
-const isProofereading = ref(false)
+const isProofreading = ref(false)
 const selectedIssueId = ref<string | null>(null)
 const editingAdjustmentId = ref<string | null>(null)
 const adjustmentDraft = ref('')
@@ -134,14 +138,21 @@ function issueCardClasses(issue: ChapterAuditIssue) {
 }
 
 watch(
-  () => [props.content, props.initialIssues] as const,
-  () => {
-    if (isProofereading.value) return
-    issues.value = [...props.initialIssues]
+  () => props.initialIssues,
+  (newIssues) => {
+    if (isProofreading.value) return
+    issues.value = [...newIssues]
     selectedIssueId.value = issues.value[0]?.id ?? null
     proofreadingTriggered.value = issues.value.length > 0
   },
   { immediate: true }
+)
+
+watch(
+  () => props.content,
+  () => {
+    proofreadingTriggered.value = false
+  }
 )
 
 function buildProofreadContextPrompt() {
@@ -160,9 +171,9 @@ function buildProofreadContextPrompt() {
 }
 
 async function proofread() {
-  if (!hasContent.value || isProofereading.value) return
+  if (!hasContent.value || isProofreading.value) return
 
-  isProofereading.value = true
+  isProofreading.value = true
   selectedIssueId.value = null
   proofreadingTriggered.value = true
   currentSegment.value = null
@@ -206,7 +217,7 @@ async function proofread() {
   } catch (error: any) {
     toast.error(error?.message || 'Proofreading failed')
   } finally {
-    isProofereading.value = false
+    isProofreading.value = false
     currentSegment.value = null
   }
 }
@@ -278,7 +289,7 @@ function cancelAdjustment() {
 }
 
 function submitToPolish() {
-  if (props.isPolishing || isProofereading.value || !openIssues.value.length) return
+  if (props.isPolishing || isProofreading.value || !openIssues.value.length) return
   emit('quickSubmitPolish')
 }
 
@@ -289,10 +300,15 @@ const submitAllPolishLabel = computed(() => {
 })
 
 function submitIssueToPolish(issue: ChapterAuditIssue) {
-  if (props.isPolishing || isProofereading.value || isIssueFixed(issue)) return
+  if (props.isPolishing || isProofreading.value || isIssueFixed(issue)) return
 
   if (isIssueIgnored(issue)) {
     toast.warning('This issue is ignored. Unignore it before sending to Polish.')
+    return
+  }
+
+  if (isBelowPolishThreshold(issue)) {
+    toast.warning('This issue is below the minimum severity threshold for polishing.')
     return
   }
 
@@ -329,7 +345,7 @@ function toggleIssueGroup(key: string) {
       </div>
 
       <template v-else>
-        <div v-if="isProofereading" class="mb-4 rounded-xl border border-accent/20 bg-accent/10 p-3">
+        <div v-if="isProofreading" class="mb-4 rounded-xl border border-accent/20 bg-accent/10 p-3">
           <div class="mb-2 flex items-center justify-between gap-3">
             <div class="flex min-w-0 items-center gap-2">
               <Sparkles :size="15" class="shrink-0 animate-pulse text-accent" />
@@ -353,7 +369,7 @@ function toggleIssueGroup(key: string) {
           </p>
         </div>
 
-        <div v-if="isProofereading && !issues.length" class="flex h-[calc(100%-5rem)] flex-col items-center justify-center text-center">
+        <div v-if="isProofreading && !issues.length" class="flex h-[calc(100%-5rem)] flex-col items-center justify-center text-center">
           <Sparkles :size="24" class="mb-3 animate-pulse text-accent" />
           <p class="text-sm font-medium text-text-primary">{{ tr('Scanning current segment...') }}</p>
           <p class="mt-1 max-w-[260px] text-xs text-text-secondary">
@@ -361,7 +377,7 @@ function toggleIssueGroup(key: string) {
           </p>
         </div>
 
-        <div v-else-if="!issues.length && !isProofereading" class="flex h-full flex-col items-center justify-center text-center">
+        <div v-else-if="!issues.length && !isProofreading" class="flex h-full flex-col items-center justify-center text-center">
           <CheckCircle2 :size="24" class="mb-3 text-success" />
           <p class="text-sm font-medium text-text-primary">{{ tr('No issues found') }}</p>
           <p class="mt-1 max-w-[260px] text-xs text-text-secondary">
@@ -376,7 +392,7 @@ function toggleIssueGroup(key: string) {
           <div>
             <p class="text-xs font-semibold text-text-primary">{{ tr('{count} issues found').replace('{count}', String(issues.length)) }}</p>
             <p class="text-[10px] text-text-muted">
-              <template v-if="isProofereading">
+              <template v-if="isProofreading">
                 Segment {{ currentSegment?.index ?? 1 }}/{{ currentSegment?.total ?? '?' }} is being scanned. More issues may appear.
               </template>
               <template v-else>
@@ -573,7 +589,7 @@ function toggleIssueGroup(key: string) {
         class="mt-3 w-full"
         variant="primary"
         size="sm"
-        :disabled="isPolishing || isProofereading"
+        :disabled="isPolishing || isProofreading"
         @click="submitIssueToPolish(selectedIssue)"
       >
         <Sparkles :size="13" :class="isPolishing ? 'animate-pulse' : ''" />
@@ -605,7 +621,7 @@ function toggleIssueGroup(key: string) {
       <p class="mb-2 text-[10px] leading-relaxed text-text-muted">
         {{ tr('Submit every open issue in the current chapter. Fixed and ignored issues are skipped.') }}
       </p>
-      <BaseButton class="w-full" variant="primary" size="sm" :disabled="isPolishing || isProofereading || !openIssues.length" @click="submitToPolish">
+      <BaseButton class="w-full" variant="primary" size="sm" :disabled="isPolishing || isProofreading || !openIssues.length" @click="submitToPolish">
         <Sparkles :size="13" :class="isPolishing ? 'animate-pulse' : ''" />
         <span>{{ tr(submitAllPolishLabel) }}</span>
       </BaseButton>

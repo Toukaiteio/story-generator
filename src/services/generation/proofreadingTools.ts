@@ -43,7 +43,7 @@ export function getChapterIssueReportTool(): ToolDefinition {
                 description: 'A concrete fix instruction that Vibe AI can apply.',
               },
             },
-            required: ['severity', 'category', 'title', 'explanation', 'suggestedFix'],
+            required: ['severity', 'category', 'title', 'excerpt', 'explanation', 'suggestedFix'],
           },
         },
       },
@@ -125,12 +125,17 @@ export function getProofreadingSystemPrompt() {
     '- Grammatical errors, typos, punctuation, duplicated or missing words, and awkward wording.',
     '- Consistency in character names, descriptions, behaviors, timeline, and chapter plan beats.',
     '- Logical continuity inside the submitted segment and with the supplied chapter context.',
+    '- Timeline and logical consistency (chronology, cause-effect chains, sequence of events).',
     '- Narrative pacing and prose style issues that would noticeably weaken the segment.',
     'The prompt intentionally includes only compact character and relationship context.',
     'Use get_character_profile and relationship query tools for specific facts before reporting character or relationship consistency issues.',
     'If you find any issue, report it with the shortest exact excerpt from the current segment.',
     'If and only if the current segment has no concrete issues, call report_proofreading_issues with {"issues": []}.',
   ].join('\n'))
+}
+
+export function getProofreadingSegmentTaskInstruction() {
+  return 'Task: inspect this segment line by line and call report_proofreading_issues. Report grammar, typo, wording, punctuation, consistency, pacing, and logic issues with exact excerpts from this segment. Include character, relationship, continuity, chapter plan, or factual issues when concrete evidence appears in this segment. Use an empty issues array only when this segment has no concrete issues.'
 }
 
 export function mapEditingAuditIssues(rawIssues: any[]): ChapterAuditIssue[] {
@@ -146,10 +151,23 @@ export function mapEditingAuditIssues(rawIssues: any[]): ChapterAuditIssue[] {
 }
 
 export function mapProofreadingIssues(rawIssues: any[]): ChapterAuditIssue[] {
+  const validCategories = [
+    'grammar',
+    'typo',
+    'style',
+    'consistency',
+    'pacing',
+    'logic',
+    'chapter_plan',
+    'character',
+    'relationship',
+    'continuity',
+    'factual',
+  ]
   return rawIssues.map((issue, index) => ({
     id: `issue-${Date.now()}-${index}`,
     severity: issue?.severity === 'high' || issue?.severity === 'medium' || issue?.severity === 'low' ? issue.severity : 'medium',
-    category: (['grammar', 'typo', 'style', 'consistency', 'pacing', 'logic'].includes(issue?.category) ? issue.category : 'grammar') as any,
+    category: (validCategories.includes(issue?.category) ? issue.category : 'grammar') as any,
     title: String(issue?.title ?? `Issue ${index + 1}`).trim(),
     excerpt: String(issue?.excerpt ?? '').trim(),
     explanation: String(issue?.explanation ?? '').trim(),

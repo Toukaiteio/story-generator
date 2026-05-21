@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/t
 import { containsMetaCommentary, countWords } from './validation'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { getProofreadingSegmentTaskInstruction } from '@/services/generation/proofreadingTools'
 
 export class ProofreaderExpert extends BaseAgent {
   type: AgentType = 'proofreader'
@@ -89,6 +90,7 @@ Your final response must be a tool call to report_proofreading_issues.
 
 Audit criteria:
 - Grammatical errors, typos, and punctuation issues.
+- Duplicated or missing words, and awkward wording.
 - Consistency in character names, descriptions, and behaviors.
 - Timeline and logical consistency.
 - Narrative pacing and prose style.
@@ -111,36 +113,6 @@ Rules:
       ? `\nProcessing segment: ${range.index + 1}/${range.total}; estimated tokens ${range.tokenStart}-${range.tokenEnd}/${range.tokenTotal} of the chapter.\n`
       : ''
 
-    if (auditTarget === 'chapter-outline') {
-      return `Audit this chapter outline for factual plausibility, internal logic, motivation, continuity, and story-world reasonableness. Do not rewrite it and do not return prose:
-
-Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}
-Primary Language: ${language || 'English'}
-Style: ${style || 'Appropriate for genre'}
-
-Chapter Outline to Audit:
-${content}
-
-Overall Story Context:
-${typeof chapterOutline === 'string' ? chapterOutline : JSON.stringify(chapterOutline, null, 2)}
-
-Compact Character Directory:
-${characters || 'No characters'}
-
-${previousSummary ? `Previously Planned Chapters:\n${previousSummary}` : ''}
-${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
-
-Focus on concrete problems only:
-- impossible, unsupported, or implausible facts inside the story world
-- weak or missing causal links between beats
-- character actions that do not match known goals, roles, or relationships
-- timeline, continuity, or setup/payoff contradictions
-- vague beats that cannot guide writing reliably
-
-Required final action:
-Call report_proofreading_issues with concrete outline issues. Use categories such as factual, logic, continuity, character, relationship, chapter_plan, pacing, or consistency. If no concrete issues are found, call report_proofreading_issues with {"issues": []}.`
-    }
-
     // For chunked processing, use a simpler prompt to avoid overwhelming output
     if (isChunked) {
       return `Audit this chapter segment for grammar, typos, consistency, and pacing issues. Do not rewrite it and do not return prose:
@@ -156,6 +128,8 @@ Text:
 ${content}
 
 Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
+
+${getProofreadingSegmentTaskInstruction()}
 
 Final response requirement: call report_proofreading_issues. If no issues are found, call report_proofreading_issues with {"issues": []}. Do not return text.`
     }
@@ -199,7 +173,10 @@ Call report_proofreading_issues with concrete issues. For each issue, provide th
 
   protected getToolResultContent(context: Record<string, any>): string | null {
     return context._proofreadingReported === true
-      ? (typeof context.content === 'string' ? context.content : '')
+      ? JSON.stringify({
+          issues: context._issues || [],
+          count: (context._issues || []).length,
+        })
       : null
   }
 

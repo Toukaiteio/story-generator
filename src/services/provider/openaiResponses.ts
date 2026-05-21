@@ -78,7 +78,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
   private buildToolChoice(toolOptions?: ToolCallOptions) {
     const choice = toolOptions?.toolChoice
     if (choice === undefined) return undefined
-    if (choice === 'auto' || choice === 'none') return choice
+    if (choice === 'auto' || choice === 'none' || choice === 'required') return choice
     return {
       type: 'function',
       name: choice.function.name,

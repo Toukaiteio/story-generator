@@ -4,7 +4,6 @@ import type { NextGenerationAction } from './types'
 export const generationStageOrder: GenerationStage[] = [
   'planning',
   'chapter-outline',
-  'chapter-outline-review',
   'writing',
   'proofreading',
   'polishing',
@@ -60,7 +59,10 @@ export function getNextGenerationAction(project: StoryProject): NextGenerationAc
   if (writingIndex !== -1) return { stage: 'writing', chapterIndex: writingIndex }
 
   const proofreadingIndex = findNextChapterPosition(project.chapters, ch =>
-    ch.content.trim() && !['proofread', 'polishing', 'polished'].includes(ch.status)
+    ch.content.trim() && (
+      ch.proofreadingIssuesStale === true ||
+      !['proofread', 'proofreading', 'polishing', 'polished'].includes(ch.status)
+    )
   )
   if (proofreadingIndex !== -1) return { stage: 'proofreading', chapterIndex: proofreadingIndex }
 
@@ -74,7 +76,7 @@ export function getNextGenerationAction(project: StoryProject): NextGenerationAc
 
 export function resolveNextChapterIndex(
   project: StoryProject,
-  stage: Exclude<NextGenerationAction['stage'], 'planning' | 'chapter-outline' | 'chapter-outline-review' | 'done'>
+  stage: Exclude<NextGenerationAction['stage'], 'planning' | 'chapter-outline' | 'done'>
 ) {
   const action = getNextGenerationAction(project)
   return action.stage === stage ? action.chapterIndex : -1

@@ -77,10 +77,12 @@ export class ProviderManager {
 
     const targetToolName = typeof toolChoice === 'object'
       ? toolChoice.function?.name?.trim()
-      : ''
-    const instruction = targetToolName
+      : toolChoice === 'required'
+        ? 'any available'
+        : ''
+    const instruction = targetToolName && targetToolName !== 'any available'
       ? `Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. You must call the function tool "${targetToolName}" as the next action and place the final structured result in that tool call arguments.`
-      : 'Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. Prefer function calling and complete the response via an appropriate tool call when possible.'
+      : 'Tool-choice compatibility fallback is active. This model endpoint does not support strict tool_choice in thinking mode. You must call one of the available function tools as the next action and place the final structured result in that tool call arguments.'
     const downgradedOptions = { ...(toolOptions ?? {}) } as ToolCallOptions
     delete (downgradedOptions as Partial<ToolCallOptions>).toolChoice
 

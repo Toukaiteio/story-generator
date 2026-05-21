@@ -12,7 +12,7 @@ export interface ProofreadingSegment {
 }
 
 const DEFAULT_MAX_SEGMENT_TOKENS = 650
-const SENTENCE_BOUNDARY = /(?<=[.!?\u3002\uff01\uff1f\uff1b;])\s*/u
+const SENTENCE_BOUNDARY = /(?<=[.!?\u3002\uff01\uff1f\uff1b;\u2026\u2014\u201d])\s*/u
 
 function splitLargeUnit(unit: string, maxTokens: number) {
   const sentences = unit
@@ -122,20 +122,19 @@ export function buildProofreadingSegments(text: string, maxTokens = DEFAULT_MAX_
 
   const tokenTotal = estimateTokens(content)
   let cursor = 0
-  let searchCursor = 0
+  let charCursor = 0
   return rawSegments.map((segment, index) => {
     const segmentTokens = estimateTokens(segment)
-    const tokenStart = cursor + 1
-    const charStart = content.indexOf(segment, searchCursor)
-    const safeCharStart = charStart >= 0 ? charStart : searchCursor
-    const charEnd = safeCharStart + segment.length
-    searchCursor = charEnd
+    const tokenStart = cursor
+    const charStart = charCursor
+    const charEnd = charStart + segment.length
+    charCursor = charEnd
     cursor += segmentTokens
     return {
       content: segment,
       index,
       total: rawSegments.length,
-      charStart: safeCharStart,
+      charStart,
       charEnd,
       tokenStart,
       tokenEnd: Math.min(cursor, tokenTotal),
@@ -144,8 +143,7 @@ export function buildProofreadingSegments(text: string, maxTokens = DEFAULT_MAX_
   })
 }
 
-export function buildSegmentedProofreadingPrompts(prompt: string, maxTokens = DEFAULT_MAX_SEGMENT_TOKENS) {
-  const marker = 'Current Chapter Content:\n'
+export function buildSegmentedProofreadingPrompts(prompt: string, maxTokens = DEFAULT_MAX_SEGMENT_TOKENS, marker = 'Current Chapter Content:\n') {
   const markerIndex = prompt.indexOf(marker)
   if (markerIndex === -1) {
     return buildProofreadingSegments(prompt, maxTokens).map(segment => ({

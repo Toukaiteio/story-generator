@@ -17,7 +17,8 @@ import MeetingSettingsSidebar from './review/MeetingSettingsSidebar.vue'
 import MeetingParticipantsSidebar from './review/MeetingParticipantsSidebar.vue'
 import AgentAvatar from './review/AgentAvatar.vue'
 import ProposalCard from './review/ProposalCard.vue'
-import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Info, LayoutList, MessageSquare, PauseCircle, RotateCcw, Settings, Sparkles, User, Users, ArrowUp, Square } from 'lucide-vue-next'
+import { stripMeetingControlBlocks } from '@/services/review/utils'
+import { Bot, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Info, LayoutList, MessageSquare, PauseCircle, RotateCcw, Sparkles, User, Users, ArrowUp, Square } from 'lucide-vue-next'
 
 const props = defineProps<{
   project: StoryProject | null | undefined
@@ -30,6 +31,7 @@ const tr = translatePhrase
 const ui = useUiStore()
 const projectStore = useProjectStore()
 const chatEndRef = ref<HTMLElement | null>(null)
+const inputTextarea = ref<HTMLTextAreaElement | null>(null)
 const editingAgentId = ref<string | null>(null)
 const agentPromptDraft = ref('')
 const agentModelDraft = ref('')
@@ -43,15 +45,6 @@ const newAgentRole = ref('')
 const newAgentBrief = ref('')
 const newAgentPrompt = ref('')
 const newAgentModelRole = ref<'chapterPlanner' | 'proofreader'>('chapterPlanner')
-
-const maxContextTurns = computed({
-  get: () => props.project?.reviewAgentSettings?.maxContextTurns ?? 15,
-  set: (val: number) => {
-    if (!props.project) return
-    const newSettings = { ...(props.project.reviewAgentSettings || { agents: {} }), maxContextTurns: val }
-    void projectStore.updateProject(props.project.id, { reviewAgentSettings: newSettings })
-  }
-})
 
 const review = useMultiAgentReviewChat(() => ({
   project: props.project,
@@ -108,6 +101,76 @@ const editingAgent = computed(() =>
   review.agents.value.find(agent => agent.id === editingAgentId.value) ?? null
 )
 
+type ProcessedMessage = ReviewPublicMessage & {
+  _clean: string
+  _refs: { element: string; label: string }[]
+}
+
+const processedMessages = computed((): ProcessedMessage[] =>
+  review.messages.value.map(msg => ({
+    ...msg,
+    _clean: cleanMessage(msg.content),
+    _refs: referenceLinks(msg.content),
+  }))
+)
+
+type SystemGroup = {
+  messages: ProcessedMessage[]
+  hasVote: boolean
+  lastVoteMessage: ProcessedMessage | undefined
+}
+
+type ChatItem = { type: 'message'; message: ProcessedMessage } | { type: 'system-group'; group: SystemGroup }
+
+const groupedMessages = computed((): ChatItem[] => {
+  const result: ChatItem[] = []
+  let currentSystemMsgs: ProcessedMessage[] = []
+
+  for (const msg of processedMessages.value) {
+    if (msg.role === 'system') {
+      currentSystemMsgs.push(msg)
+    } else {
+      if (currentSystemMsgs.length) {
+        const voteMsg = currentSystemMsgs.find(m => m.actionVoteSnapshot && m.actionVoteSnapshot.status !== 'applied' && m.actionVoteSnapshot.status !== 'rejected' && m.actionVoteSnapshot.status !== 'failed')
+        result.push({
+          type: 'system-group',
+          group: { messages: currentSystemMsgs, hasVote: Boolean(voteMsg), lastVoteMessage: voteMsg },
+        })
+        currentSystemMsgs = []
+      }
+      result.push({ type: 'message', message: msg })
+    }
+  }
+  if (currentSystemMsgs.length) {
+    const voteMsg = currentSystemMsgs.find(m => m.actionVoteSnapshot && m.actionVoteSnapshot.status !== 'applied' && m.actionVoteSnapshot.status !== 'rejected' && m.actionVoteSnapshot.status !== 'failed')
+    result.push({
+      type: 'system-group',
+      group: { messages: currentSystemMsgs, hasVote: Boolean(voteMsg), lastVoteMessage: voteMsg },
+    })
+  }
+  return result
+})
+
+const WINDOW_SIZE = 60
+const renderWindowStart = ref(Math.max(0, groupedMessages.value.length - WINDOW_SIZE))
+watch(groupedMessages, (items) => {
+  // Auto-scroll: when new messages arrive, keep window at end
+  if (renderWindowStart.value + WINDOW_SIZE >= items.length - 1) {
+    renderWindowStart.value = Math.max(0, items.length - WINDOW_SIZE)
+  }
+}, { deep: false, flush: 'post' })
+
+const visibleItems = computed(() => groupedMessages.value.slice(renderWindowStart.value))
+const olderCount = computed(() => renderWindowStart.value)
+
+function loadOlderMessages() {
+  const newStart = Math.max(0, renderWindowStart.value - WINDOW_SIZE)
+  renderWindowStart.value = newStart
+  nextTick(() => {
+    document.getElementById('chat-scroll-anchor')?.scrollIntoView({ behavior: 'instant', block: 'start' })
+  })
+}
+
 
 
 function isElementSelected(element: ReviewContextElement) {
@@ -124,6 +187,19 @@ function messageSpeaker(message: ReviewPublicMessage) {
   return tr('Meeting')
 }
 
+function speakerKey(message: ReviewPublicMessage) {
+  if (message.role === 'agent') return `agent:${message.agentId || message.agentName}`
+  if (message.role === 'user') return 'user'
+  return `system:${message.content.slice(0, 40)}`
+}
+
+function isSameSpeakerAsPrevious(currentItem: ChatItem, index: number) {
+  if (index === 0) return false
+  const prev = visibleItems.value[index - 1]
+  if (prev.type !== 'message' || currentItem.type !== 'message') return false
+  return speakerKey(prev.message) === speakerKey(currentItem.message)
+}
+
 function referenceLinks(content: string) {
   const matches = [...content.matchAll(/\[\[([a-z-]+)(?::([^\]]+))?\]\]/gi)]
   return matches.map(match => ({
@@ -133,18 +209,11 @@ function referenceLinks(content: string) {
 }
 
 function cleanMessage(content: string) {
-  return content
+  return stripMeetingControlBlocks(content)
     .replace(/\[\[([a-z-]+):([^\]]+)\]\]/gi, '$2')
     .replace(/\[\[([a-z-]+)\]\]/gi, (_match, element: string) => referenceLabelMap[element as ReviewContextElement] || element)
-    .replace(/\[PROPOSE_FOCUS:\s*([^\]]+)\]/gi, '')
-    .replace(/\[REQUEST_END:\s*([^\]]+)\]/gi, '')
-    .replace(/\[REQUEST_ACTION\][\s\S]*?\[\/REQUEST_ACTION\]/gi, '')
-    .replace(/\[REQUEST_CHANGE\][\s\S]*?\[\/REQUEST_CHANGE\]/gi, '')
-    .replace(/\[ASK_USER\][\s\S]*?\[\/ASK_USER\]/gi, '')
-    .replace(/\[CHANGE_VOTE:\s*(?:yes|no|approve|reject)\s*\]/gi, '')
     .replace(/\[End vote:\s*(?:Approve|Reject)\]/gi, '')
     .replace(/\[Change vote:\s*(?:Approve|Reject)\]/gi, '')
-    .trim()
 }
 
 function openReference(element: string) {
@@ -184,7 +253,7 @@ function submitUserMessage() {
 }
 
 function startMeetingRound() {
-  review.requestAllAgents(review.currentFocus.value)
+  review.requestAllAgents(review.currentFocus.value, { mandatoryBrainstorm: false })
 }
 
 function endMeetingNow() {
@@ -251,14 +320,12 @@ watch(() => review.messages.value.length, async () => {
     <MeetingSettingsSidebar
       :show="showLeftSidebar"
       :focus="review.currentFocus.value"
-      :max-context-turns="maxContextTurns"
       :context-options="contextOptions"
       :selected-context-elements="review.selectedContextElements.value"
       :queue-items="queueItems"
       :loading="review.loading.value"
       @update:show="showLeftSidebar = $event"
       @update:focus="review.currentFocus.value = $event"
-      @update:max-context-turns="maxContextTurns = $event"
       @toggle-context="toggleContextElement"
       @reset="showResetConfirm = true"
       @start="startMeetingRound"
@@ -318,7 +385,7 @@ watch(() => review.messages.value.length, async () => {
       <!-- Chat Area -->
       <div class="flex-1 overflow-y-auto custom-scrollbar">
         <div class="mx-auto flex max-w-4xl flex-col gap-1 px-4 py-5">
-          <div v-if="!review.messages.value.length && !review.pendingProposal.value && !review.changeVoteSession.value && !review.endVoteSession.value" class="flex flex-col items-center justify-center py-20 text-center">
+          <div v-if="!review.messages.value.length && !review.pendingProposal.value && !review.actionVoteSession.value && !review.endVoteSession.value" class="flex flex-col items-center justify-center py-20 text-center">
             <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-text-muted mb-4">
               <MessageSquare :size="28" stroke-width="1.5" />
             </div>
@@ -332,117 +399,140 @@ watch(() => review.messages.value.length, async () => {
             </BaseButton>
           </div>
 
-          <template v-for="(message, index) in review.messages.value" :key="message.id">
-            <!-- Proposal Card (embedded before system messages that carry changeVoteSnapshot) -->
-            <ProposalCard
-              v-if="message.changeVoteSnapshot && message.changeVoteSnapshot.status !== 'applied' && message.changeVoteSnapshot.status !== 'rejected' && message.changeVoteSnapshot.status !== 'failed'"
-              variant="change"
-              :change-vote="message.changeVoteSnapshot"
-              :total-agents="review.agents.value.length"
-              :enable-agents="review.agents.value.filter(a => a.enabled).length"
-              class="mt-4"
-              @approve="review.approveProposal"
-              @reject="(reason) => review.rejectProposal(reason)"
-            />
-
-            <!-- System Message (minimalist) -->
-            <div
-              v-if="message.role === 'system'"
-              class="group flex flex-col"
-              :class="index > 0 ? 'mt-4' : ''"
+          <div v-if="olderCount > 0" class="flex justify-center py-2">
+            <button
+              class="flex items-center gap-1.5 rounded-full border border-surface-4 bg-surface-2 px-4 py-1.5 text-[10px] font-medium text-text-muted transition-colors hover:border-accent/40 hover:text-accent"
+              @click="loadOlderMessages"
             >
-              <div class="flex items-center gap-2 select-none">
-                <div class="flex items-center justify-center w-5 h-5 rounded-sm bg-surface-3">
-                  <Info :size="11" class="text-text-muted" />
-                </div>
-                <span class="text-[11px] font-semibold text-text-muted">{{ tr('System') }}</span>
-                <span class="text-[9px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
-              </div>
-              <div class="pl-7 text-[11px] leading-relaxed">
-                <div class="rounded text-[11px] px-2 py-1 bg-surface-2 text-text-secondary inline-block">
-                  {{ cleanMessage(message.content) }}
-                </div>
+              <ChevronDown :size="12" class="rotate-180" />
+              <span>{{ tr('Show') }} {{ olderCount > 60 ? `${Math.min(WINDOW_SIZE, olderCount)}` : olderCount }} {{ tr('older messages') }}</span>
+            </button>
+          </div>
+          <div id="chat-scroll-anchor"></div>
 
-                <details v-if="message.changeVoteSnapshot" class="mt-2 overflow-hidden rounded-lg border border-surface-4 bg-surface-2/50 text-left">
-                  <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[11px] font-medium text-text-secondary hover:text-text-primary transition-colors">
-                    <span>{{ tr('Vote Result') }}</span>
-                    <div class="flex items-center gap-2">
-                      <BaseTag
-                        :variant="message.changeVoteSnapshot.status === 'applied' ? 'success' : message.changeVoteSnapshot.status === 'failed' ? 'danger' : 'warning'"
-                        size="sm"
-                        class="!px-1 !py-0 !text-[8px]"
-                      >
-                        {{ message.changeVoteSnapshot.status === 'applied' ? tr('Applied') : message.changeVoteSnapshot.status === 'failed' ? tr('Failed') : message.changeVoteSnapshot.status === 'rejected' ? tr('Rejected') : tr('Voting') }}
-                      </BaseTag>
-                      <ChevronDown :size="12" class="text-text-muted" />
-                    </div>
-                  </summary>
-                  <div class="border-t border-surface-4 px-3 py-2 space-y-2">
-                    <div class="flex flex-wrap items-center gap-1.5">
-                      <BaseTag variant="accent" size="sm" class="!px-1 !py-0 !text-[8px]">{{ tr(message.changeVoteSnapshot.request.target) }}</BaseTag>
-                      <span class="text-[10px] text-text-muted">{{ tr('by') }} {{ message.changeVoteSnapshot.requestedByAgentName }}</span>
-                    </div>
-                    <p class="text-[11px] font-semibold text-text-primary">{{ message.changeVoteSnapshot.request.scope }}</p>
-                    <p v-if="message.changeVoteSnapshot.request.purpose" class="text-[10px] text-text-muted leading-relaxed">{{ message.changeVoteSnapshot.request.purpose }}</p>
-                    <div v-if="message.changeVoteSnapshot.votes.length" class="flex flex-wrap items-center gap-1.5 mt-1">
-                      <div
-                        v-for="vote in message.changeVoteSnapshot.votes"
-                        :key="`${message.id}-${vote.agentId}-${vote.createdAt}`"
-                        class="flex items-center gap-1 rounded px-1.5 py-0.5 bg-surface-1"
-                      >
-                        <AgentAvatar :name="vote.agentName" :size="12" />
-                        <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm" class="!px-1 !py-0 !text-[8px]">{{ vote.vote === 'approve' ? '✓' : '✗' }}</BaseTag>
+          <template v-for="(item, index) in visibleItems" :key="item.type === 'system-group' ? `sg-${item.group.messages[0].id}` : item.message.id">
+            <!-- System Group (collapsible) -->
+            <template v-if="item.type === 'system-group'">
+              <!-- Proposal Card for vote-carrying system messages -->
+              <ProposalCard
+                v-if="item.group.hasVote"
+                variant="change"
+                :change-vote="item.group.lastVoteMessage!.actionVoteSnapshot"
+                :total-agents="review.agents.value.length"
+                :enable-agents="review.agents.value.filter(a => a.enabled).length"
+                class="mt-4"
+                @approve="review.approveProposal"
+                @reject="(reason) => review.rejectProposal(reason)"
+              />
+
+              <details
+                class="group flex flex-col"
+                :class="index > 0 && visibleItems[index - 1].type !== 'system-group' ? 'mt-3' : ''"
+              >
+                <summary class="flex cursor-pointer list-none items-start gap-1.5 py-0.5 select-none">
+                  <span class="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-surface-4 group-hover:bg-text-muted transition-colors"></span>
+                  <div class="flex min-w-0 flex-1 items-center gap-2">
+                    <span class="shrink-0 text-[10px] font-medium text-text-muted/60">{{ item.group.messages.length }} msgs</span>
+                    <p class="min-w-0 flex-1 truncate text-[11px] text-text-muted/60">
+                      {{ item.group.messages[item.group.messages.length - 1]._clean }}
+                    </p>
+                  </div>
+                  <ChevronDown :size="10" class="mt-1 shrink-0 text-text-muted/40 transition-transform group-open:rotate-180" />
+                </summary>
+                <div class="ml-2.5 space-y-0.5">
+                  <div
+                    v-for="sysMsg in item.group.messages"
+                    :key="sysMsg.id"
+                    class="flex items-start gap-1.5"
+                  >
+                    <span class="mt-[6px] h-1 w-1 shrink-0 rounded-full bg-surface-4"></span>
+                    <p class="min-w-0 flex-1 text-[11px] leading-relaxed text-text-muted/80 truncate" :title="sysMsg._clean">
+                      {{ sysMsg._clean }}
+                    </p>
+                    <span class="shrink-0 text-[9px] text-text-muted/40 pt-px">{{ new Date(sysMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+
+                    <details v-if="sysMsg.actionVoteSnapshot" class="ml-3 mt-1 overflow-hidden rounded border border-surface-4 bg-surface-2/30 text-left">
+                      <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-2.5 py-1 text-[10px] font-medium text-text-muted hover:text-text-secondary transition-colors">
+                        <span>{{ tr('Vote Result') }}</span>
+                        <div class="flex items-center gap-2">
+                          <BaseTag
+                            :variant="sysMsg.actionVoteSnapshot.status === 'applied' ? 'success' : sysMsg.actionVoteSnapshot.status === 'failed' ? 'danger' : 'warning'"
+                            size="sm"
+                            class="!px-1 !py-0 !text-[8px]"
+                          >
+                            {{ sysMsg.actionVoteSnapshot.status === 'applied' ? tr('Applied') : sysMsg.actionVoteSnapshot.status === 'failed' ? tr('Failed') : sysMsg.actionVoteSnapshot.status === 'rejected' ? tr('Rejected') : tr('Voting') }}
+                          </BaseTag>
+                          <ChevronDown :size="10" class="text-text-muted/60" />
+                        </div>
+                      </summary>
+                      <div class="border-t border-surface-4 px-2.5 py-1.5 space-y-1.5">
+                        <div class="flex flex-wrap items-center gap-1.5">
+                          <BaseTag variant="accent" size="sm" class="!px-1 !py-0 !text-[8px]">{{ tr(sysMsg.actionVoteSnapshot.request.target) }}</BaseTag>
+                          <span class="text-[10px] text-text-muted">{{ tr('by') }} {{ sysMsg.actionVoteSnapshot.requestedByAgentName }}</span>
+                        </div>
+                        <p class="text-[10px] font-semibold text-text-primary">{{ sysMsg.actionVoteSnapshot.request.scope }}</p>
+                        <p v-if="sysMsg.actionVoteSnapshot.request.purpose" class="text-[9px] text-text-muted leading-relaxed">{{ sysMsg.actionVoteSnapshot.request.purpose }}</p>
+                        <div v-if="sysMsg.actionVoteSnapshot.votes.length" class="flex flex-wrap items-center gap-1.5">
+                          <div
+                            v-for="vote in sysMsg.actionVoteSnapshot.votes"
+                            :key="`${sysMsg.id}-${vote.agentId}-${vote.createdAt}`"
+                            class="flex items-center gap-1 rounded px-1.5 py-0.5 bg-surface-1"
+                          >
+                            <AgentAvatar :name="vote.agentName" :size="10" />
+                            <BaseTag :variant="vote.vote === 'approve' ? 'success' : 'warning'" size="sm" class="!px-1 !py-0 !text-[7px]">{{ vote.vote === 'approve' ? '✓' : '✗' }}</BaseTag>
+                          </div>
+                        </div>
+                        <div v-if="sysMsg.actionVoteSnapshot.result || sysMsg.actionVoteSnapshot.error" class="text-[9px] text-text-secondary rounded px-1.5 py-1" :class="sysMsg.actionVoteSnapshot.error ? 'bg-danger/5 text-danger' : 'bg-surface-1'">
+                          {{ sysMsg.actionVoteSnapshot.result || sysMsg.actionVoteSnapshot.error }}
+                        </div>
                       </div>
-                    </div>
-                    <div v-if="message.changeVoteSnapshot.result || message.changeVoteSnapshot.error" class="text-[10px] text-text-secondary rounded px-2 py-1 mt-1" :class="message.changeVoteSnapshot.error ? 'bg-danger/5 text-danger' : 'bg-surface-1'">
-                      {{ message.changeVoteSnapshot.result || message.changeVoteSnapshot.error }}
+                    </details>
+                    <div v-if="sysMsg.tool" class="ml-3 mt-1">
+                      <ToolCallStatus :item="sysMsg.tool" />
                     </div>
                   </div>
-                </details>
-                <div v-if="message.tool" class="mt-2">
-                  <ToolCallStatus :item="message.tool" />
                 </div>
-              </div>
-            </div>
+              </details>
+            </template>
 
-            <!-- User/Agent Message (minimalist Cursor style) -->
+            <!-- User/Agent Message -->
             <div
               v-else
               class="group flex flex-col"
-              :class="index > 0 ? (review.messages.value[index - 1].role === message.role ? 'gap-0.5 mt-0.5' : 'gap-1 mt-4') : 'gap-1'"
+              :class="index > 0 && visibleItems[index - 1].type === 'message' ? (isSameSpeakerAsPrevious(item, index) ? 'gap-0.5 mt-0.5' : 'gap-1 mt-4') : 'gap-1'"
             >
-              <!-- Role Label (only when role changes from previous message) -->
-              <div v-if="index === 0 || review.messages.value[index - 1].role !== message.role" class="flex items-center justify-between select-none">
+              <!-- Role Label -->
+              <div v-if="index === 0 || visibleItems[index - 1].type !== 'message' || !isSameSpeakerAsPrevious(item, index)" class="flex items-center justify-between select-none">
                 <div class="flex items-center gap-2">
-                  <template v-if="message.role === 'user'">
-                    <div class="flex items-center justify-center w-5 h-5 rounded-full bg-surface-3 text-text-primary">
+                  <template v-if="item.message.role === 'user'">
+                    <div class="flex items-center justify-center w-5 h-5 text-text-primary">
                       <User :size="11" />
                     </div>
                     <span class="text-[11px] font-semibold text-text-primary">{{ tr('You') }}</span>
                   </template>
                   <template v-else>
-                    <AgentAvatar :name="messageSpeaker(message)" :size="20" />
-                    <span class="text-[11px] font-semibold text-text-primary">{{ messageSpeaker(message) }}</span>
+                    <AgentAvatar :name="messageSpeaker(item.message)" :size="20" />
+                    <span class="text-[11px] font-semibold text-text-primary">{{ messageSpeaker(item.message) }}</span>
                     <BaseTag variant="default" size="sm" class="!px-1 !py-0 !text-[8px] uppercase tracking-tighter">{{ tr('Public') }}</BaseTag>
                   </template>
                 </div>
                 <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <span class="text-[10px] text-text-muted">{{ new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                  <span class="text-[10px] text-text-muted">{{ new Date(item.message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
                 </div>
               </div>
 
               <!-- Content Body -->
               <div class="pl-7 text-[13px] leading-relaxed text-text-primary whitespace-pre-wrap break-words relative">
-                <p v-if="cleanMessage(message.content)">{{ cleanMessage(message.content) }}</p>
+                <p v-if="item.message._clean">{{ item.message._clean }}</p>
 
-                <div v-if="message.tool" class="mt-2">
-                  <ToolCallStatus :item="message.tool" />
+                <div v-if="item.message.tool" class="mt-2">
+                  <ToolCallStatus :item="item.message.tool" />
                 </div>
 
-                <div v-if="referenceLinks(message.content).length" class="mt-2 flex flex-wrap gap-1.5">
+                <div v-if="item.message._refs.length" class="mt-2 flex flex-wrap gap-1.5">
                   <button
-                    v-for="link in referenceLinks(message.content)"
-                    :key="`${message.id}-${link.element}-${link.label}`"
+                    v-for="link in item.message._refs"
+                    :key="`${item.message.id}-${link.element}-${link.label}`"
                     class="group/link flex items-center gap-1 rounded border border-surface-4 bg-surface-2 px-2 py-0.5 text-[10px] font-medium text-text-secondary transition-all hover:border-accent/40 hover:text-accent"
                     @click="openReference(link.element)"
                   >
@@ -466,11 +556,11 @@ watch(() => review.messages.value.length, async () => {
             @reject="(reason) => review.rejectProposal(reason)"
           />
 
-          <!-- Active Change Vote Card (inline) -->
+          <!-- Active Action Vote Card (inline) -->
           <ProposalCard
-            v-if="review.changeVoteSession.value"
+            v-if="review.actionVoteSession.value"
             variant="change"
-            :change-vote="review.changeVoteSession.value"
+            :change-vote="review.actionVoteSession.value"
             :total-agents="review.agents.value.length"
             :enable-agents="review.agents.value.filter(a => a.enabled).length"
             :class="(review.messages.value.length || review.pendingProposal.value) ? 'mt-4' : ''"
@@ -485,7 +575,7 @@ watch(() => review.messages.value.length, async () => {
             :end-vote="review.endVoteSession.value"
             :total-agents="review.agents.value.length"
             :enable-agents="review.agents.value.filter(a => a.enabled).length"
-            :class="(review.messages.value.length || review.pendingProposal.value || review.changeVoteSession.value) ? 'mt-4' : ''"
+            :class="(review.messages.value.length || review.pendingProposal.value || review.actionVoteSession.value) ? 'mt-4' : ''"
             @approve="review.approveEndVoteSession"
             @reject="(reason) => review.rejectEndVoteSession(reason)"
           />
@@ -604,6 +694,7 @@ watch(() => review.messages.value.length, async () => {
       @open-agent-settings="openAgentSettings"
       @delete-agent="review.deleteAgent"
       @ask-next="agentId => review.userRequestTurn(agentId, review.inputText.value)"
+      @reorder-agents="(fromIndex, toIndex) => review.reorderAgents(fromIndex, toIndex)"
     />
 
     <BaseDialog :model-value="Boolean(editingAgentId)" :title="tr('Agent Settings')" width="720px" @update:model-value="value => { if (!value) editingAgentId = null }" @close="editingAgentId = null">
