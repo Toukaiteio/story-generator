@@ -8,12 +8,14 @@ import type { AgentType } from '@/types/agent'
 
 const props = withDefaults(defineProps<{
   modelValue: string
-  role: AgentType
+  role?: AgentType
   disabled?: boolean
   fallbackLabel?: string
+  variant?: 'sidebar' | 'inline'
 }>(), {
   disabled: false,
   fallbackLabel: 'No available model',
+  variant: 'sidebar',
 })
 
 const emit = defineEmits<{
@@ -29,11 +31,26 @@ const collapsedProviderIds = ref<Set<string>>(new Set())
 
 const selectedModelRef = computed(() => {
   const selected = decodeProviderModelRef(props.modelValue)
-  return providerStore.getAvailableModelRefForRole(props.role, selected)
+  if (props.role) {
+    return providerStore.getAvailableModelRefForRole(props.role, selected)
+  }
+  return providerStore.isActiveChatModelRef(selected) ? selected : null
 })
 
 const selectedModelLabel = computed(() =>
   providerStore.getModelLabel(selectedModelRef.value) || props.fallbackLabel
+)
+
+const rootClass = computed(() =>
+  props.variant === 'sidebar'
+    ? 'relative shrink-0 border-b border-surface-4 px-3 py-2'
+    : 'relative w-full'
+)
+
+const dropdownClass = computed(() =>
+  props.variant === 'sidebar'
+    ? 'absolute left-3 right-3 top-[calc(100%-4px)] z-50 rounded-lg border border-surface-4 bg-surface-1 shadow-xl'
+    : 'absolute left-0 right-0 top-[calc(100%+4px)] z-50 rounded-lg border border-surface-4 bg-surface-1 shadow-xl'
 )
 
 const groupedModels = computed(() => {
@@ -67,7 +84,7 @@ function selectModel(providerId: string, modelId: string) {
 </script>
 
 <template>
-  <div class="relative shrink-0 border-b border-surface-4 px-3 py-2">
+  <div :class="rootClass">
     <button
       class="flex w-full items-center justify-between gap-2 rounded-md border border-surface-4 bg-surface-2 px-2.5 py-2 text-left text-xs text-text-secondary hover:border-surface-5 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
       :disabled="disabled"
@@ -82,7 +99,7 @@ function selectModel(providerId: string, modelId: string) {
 
     <div
       v-if="showModelPicker"
-      class="absolute left-3 right-3 top-[calc(100%-4px)] z-50 rounded-lg border border-surface-4 bg-surface-1 shadow-xl"
+      :class="dropdownClass"
     >
       <div class="border-b border-surface-4 p-2">
         <div class="flex items-center gap-2 rounded-md border border-surface-4 bg-surface-2 px-2 py-1.5">

@@ -241,7 +241,7 @@ Do not omit any fields. Do not add meta commentary or code fences outside the to
   }
 
   protected buildOutlinePrompt(context: Record<string, any>): string {
-    const { theme, genre, targetReader, language, style, chapterCount, constraints, customRequirements, knowledgeContext } = context
+    const { theme, genre, targetReader, language, style, chapterCount, constraints, customRequirements } = context
 
     return `Create a story-planning JSON object with the following specifications:
 
@@ -254,7 +254,6 @@ ${style ? `**Writing Style Guide:**\n${style}` : '**Writing Style:** Infer an ap
 ${constraints?.required?.length ? `**Must Include:** ${constraints.required.join(', ')}` : ''}
 ${constraints?.forbidden?.length ? `**Must Not Include:** ${constraints.forbidden.join(', ')}` : ''}
 ${customRequirements ? `**Additional Requirements:** ${customRequirements}` : ''}
-${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}
 
 Use the create_story_outline tool to create a story outline with:
 1. A compelling story title

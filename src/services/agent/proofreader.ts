@@ -106,7 +106,7 @@ Rules:
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, knowledgeContext, writingFormat, range, auditTarget } = context
+    const { content, chapterTitle, chapterNumber, chapterOutline, characters, previousSummary, language, style, writingFormat, range, auditTarget } = context
 
     const isChunked = !!range
     const rangeInfo = range
@@ -152,7 +152,6 @@ Compact Character Directory:
 ${characters}
 
 ${previousSummary ? `Previous Story Summary:\n${previousSummary}` : ''}
-${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Use get_character_profile for character details only when needed. Use relationship query tools for specific relationship checks, preferably with character IDs from the compact directory.
 

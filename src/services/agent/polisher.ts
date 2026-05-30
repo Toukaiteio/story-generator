@@ -142,7 +142,7 @@ Tools available:
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterNumber, characters, language, style, knowledgeContext, writingFormat, proofreadingIssues, range } = context
+    const { content, chapterTitle, chapterNumber, characters, language, style, writingFormat, proofreadingIssues, range } = context
 
     const isChunked = !!range
     const rangeInfo = range ? `\nProcessing segment: part ${range.index + 1}/${range.total}, estimated tokens ${range.tokenStart}-${range.tokenEnd} of ${range.tokenTotal}.` : ''
@@ -189,8 +189,6 @@ ${characters || 'No characters'}
 
 Content to polish (${countWords(content)} words):
 ${content}
-
-${knowledgeContext ? `Reference Material:\n${knowledgeContext}\n` : ''}
 
 Use get_character_profile for character details only when needed. Use relationship query tools for specific relationship checks, preferably with character IDs from the compact directory.
 

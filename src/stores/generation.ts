@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { StoryPipeline } from '@/services/pipeline'
-import { prepareRuntime, buildKnowledgeContextForProject } from '@/services/pipeline/runtime'
+import { prepareRuntime, getLinkedKnowledgeBases } from '@/services/pipeline/runtime'
 import { buildPreviousSummary, buildCharacterContextForTask } from '@/services/pipeline/context'
 import { useProjectStore } from '@/stores/project'
 import { useProviderStore } from '@/stores/provider'
@@ -138,16 +138,7 @@ export const useGenerationStore = defineStore('generation', () => {
     const { buildProofreadingSegments } = await import('@/services/proofreading/chunking')
     const segments = buildProofreadingSegments(content)
     const allIssues: ChapterAuditIssue[] = []
-    const knowledgeContext = await buildKnowledgeContextForProject(project, {
-      theme: project.theme,
-      genre: project.genre,
-      targetReader: project.targetReader,
-      language: project.language,
-      chapterTitle: chapter.title,
-      chapterOutline: JSON.stringify(chapter.outline),
-      content,
-      previousSummary: buildPreviousSummary(project, chapterIndex),
-    })
+    const knowledgeBases = getLinkedKnowledgeBases(project)
     for (let i = 0; i < segments.length; i++) {
       if (cancelled.value) break
       progressMessage.value = `Auditing chapter ${chapter.index + 1} (Part ${i + 1}/${segments.length})...`
@@ -162,7 +153,7 @@ export const useGenerationStore = defineStore('generation', () => {
         style: project.style,
         project,
         writingFormat: project.writingFormat,
-        knowledgeContext,
+        knowledgeBases,
         range: segments[i],
       }
       const segment = segments[i]

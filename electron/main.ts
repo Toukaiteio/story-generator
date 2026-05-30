@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { URL } from 'url'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs'
@@ -10,6 +11,22 @@ declare const __dirname: string
 let mainWindow: BrowserWindow | null = null
 let hasUnsavedChanges = false
 let forceClosing = false
+let updateCheckTimer: ReturnType<typeof setInterval> | null = null
+
+type UpdaterState = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+
+interface UpdaterStatus {
+  state: UpdaterState
+  message: string
+  version?: string
+  progress?: number
+  checkedAt?: string
+}
+
+let updaterStatus: UpdaterStatus = {
+  state: 'idle',
+  message: 'Update check has not run yet.',
+}
 
 const DATA_DIR = join(app.getPath('userData'), 'story-generator')
 const PROJECTS_DIR = join(DATA_DIR, 'projects')
@@ -27,6 +44,140 @@ function ensureDirs() {
   if (!existsSync(PROJECTS_DIR)) mkdirSync(PROJECTS_DIR, { recursive: true })
   if (!existsSync(STORAGE_DIR)) mkdirSync(STORAGE_DIR, { recursive: true })
   if (!existsSync(VIBE_CHAT_DIR)) mkdirSync(VIBE_CHAT_DIR, { recursive: true })
+}
+
+function publishUpdaterStatus(patch: Partial<UpdaterStatus>) {
+  updaterStatus = {
+    ...updaterStatus,
+    ...patch,
+  }
+  mainWindow?.webContents.send('updater:status', updaterStatus)
+}
+
+function describeUpdaterError(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function promptToInstallUpdate(version?: string) {
+  const options = {
+    type: 'info' as const,
+    buttons: hasUnsavedChanges ? ['Later'] : ['Restart and Install', 'Later'],
+    defaultId: 0,
+    cancelId: hasUnsavedChanges ? 0 : 1,
+    title: 'Update Ready',
+    message: version ? `Story Generator ${version} is ready to install.` : 'A Story Generator update is ready to install.',
+    detail: hasUnsavedChanges
+      ? 'You have unsaved changes. Save your work before restarting, or choose Later and install the update from Settings.'
+      : 'Restart now to install the update, or choose Later to install it on next app quit.',
+  }
+
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options)
+
+  if (result.response === 0 && !hasUnsavedChanges) {
+    forceClosing = true
+    autoUpdater.quitAndInstall(false, true)
+  }
+}
+
+function configureAutoUpdater() {
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  if (!app.isPackaged) {
+    publishUpdaterStatus({
+      state: 'idle',
+      message: 'Auto update checks run only in packaged builds.',
+    })
+    return
+  }
+
+  autoUpdater.on('checking-for-update', () => {
+    publishUpdaterStatus({
+      state: 'checking',
+      message: 'Checking for updates...',
+      checkedAt: new Date().toISOString(),
+    })
+  })
+
+  autoUpdater.on('update-available', info => {
+    publishUpdaterStatus({
+      state: 'available',
+      message: 'Update found. Downloading...',
+      version: info.version,
+      checkedAt: new Date().toISOString(),
+    })
+  })
+
+  autoUpdater.on('update-not-available', info => {
+    publishUpdaterStatus({
+      state: 'not-available',
+      message: 'You are running the latest version.',
+      version: info.version,
+      progress: undefined,
+      checkedAt: new Date().toISOString(),
+    })
+  })
+
+  autoUpdater.on('download-progress', progress => {
+    publishUpdaterStatus({
+      state: 'downloading',
+      message: 'Downloading update...',
+      progress: Math.round(progress.percent),
+    })
+  })
+
+  autoUpdater.on('update-downloaded', info => {
+    publishUpdaterStatus({
+      state: 'downloaded',
+      message: 'Update downloaded and ready to install.',
+      version: info.version,
+      progress: 100,
+      checkedAt: new Date().toISOString(),
+    })
+    void promptToInstallUpdate(info.version)
+  })
+
+  autoUpdater.on('error', error => {
+    publishUpdaterStatus({
+      state: 'error',
+      message: describeUpdaterError(error),
+      progress: undefined,
+      checkedAt: new Date().toISOString(),
+    })
+  })
+}
+
+async function checkForUpdates(manual = false) {
+  if (!app.isPackaged) {
+    publishUpdaterStatus({
+      state: 'idle',
+      message: 'Auto update checks run only in packaged builds.',
+      checkedAt: new Date().toISOString(),
+    })
+    return updaterStatus
+  }
+
+  try {
+    await autoUpdater.checkForUpdates()
+  } catch (error) {
+    publishUpdaterStatus({
+      state: 'error',
+      message: describeUpdaterError(error),
+      progress: undefined,
+      checkedAt: new Date().toISOString(),
+    })
+    if (manual && mainWindow && !mainWindow.isDestroyed()) {
+      await dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Update Check Failed',
+        message: updaterStatus.message,
+      })
+    }
+  }
+
+  return updaterStatus
 }
 
 function sanitizeStorageKey(key: string) {
@@ -78,6 +229,13 @@ function createWindow() {
 app.whenReady().then(() => {
   ensureDirs()
   createWindow()
+  configureAutoUpdater()
+  setTimeout(() => {
+    void checkForUpdates(false)
+  }, 3000)
+  updateCheckTimer = setInterval(() => {
+    void checkForUpdates(false)
+  }, 6 * 60 * 60 * 1000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -88,6 +246,13 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+app.on('before-quit', () => {
+  if (updateCheckTimer) {
+    clearInterval(updateCheckTimer)
+    updateCheckTimer = null
+  }
+})
+
 // Window controls
 ipcMain.handle('app:get-path', (_event, name: any) => {
   try {
@@ -95,6 +260,15 @@ ipcMain.handle('app:get-path', (_event, name: any) => {
   } catch {
     return null
   }
+})
+
+ipcMain.handle('updater:get-status', () => updaterStatus)
+ipcMain.handle('updater:check', () => checkForUpdates(true))
+ipcMain.handle('updater:install', () => {
+  if (updaterStatus.state !== 'downloaded') return false
+  forceClosing = true
+  autoUpdater.quitAndInstall(false, true)
+  return true
 })
 
 ipcMain.on('storage:read-json', (event, key: string) => {

@@ -4,7 +4,7 @@ import type { CharacterRelationshipEvent, ExtractedRelationshipEvent } from '@/t
 import { getAgent } from '@/services/agent'
 import { extractJsonPayload } from '@/services/agent/validation'
 import { buildCharacterContextForTask, buildProjectRelationshipContext } from './context'
-import { buildKnowledgeContextForProject, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
+import { getLinkedKnowledgeBases, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
 import { generateId } from '@/lib/id'
 import type { PlanningDraft } from './types'
@@ -396,15 +396,7 @@ async function runLegacyStoryPlanningWorkflow(
   onProgress?.('Falling back to the combined story planner...')
   emitPlanningToken(onToken, 'Fallback to combined planner')
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   const context: Record<string, any> = {
     theme: project.theme,
@@ -416,7 +408,7 @@ async function runLegacyStoryPlanningWorkflow(
     constraints: project.constraints,
     customRequirements: project.customRequirements,
     preferredCount: getPreferredCharacterCount(project),
-    knowledgeContext,
+    knowledgeBases,
   }
 
   const result = await runtime.storyPlannerAgent.execute(context, onToken)
@@ -458,15 +450,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
   onIntermediateSave?: (updates: Partial<StoryProject>) => void | Promise<void>
 ): Promise<{ outline: string; characters: Character[] }> {
   const { outlineAgent, characterAgent, characterModel } = runtime
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   onProgress?.('Drafting story blueprint...')
   emitPlanningToken(onToken, 'Blueprint draft')
@@ -480,7 +464,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
     chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
-    knowledgeContext,
+    knowledgeBases,
     planningMode: 'draft',
     _onOutlineUpdated: async (outlineData: any) => {
       if (typeof outlineData?.outline === 'string' && outlineData.outline.trim()) {
@@ -518,7 +502,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
       existingCharacters: buildCharacterContextForTask(project.characters, 'planning'),
       characterSignals: draft.characterSignals,
       preferredCount: getPreferredCharacterCount(project),
-      knowledgeContext,
+      knowledgeBases,
       _onCharactersUpdated: async (rawCharacters: any[]) => {
         const partialCharacters = parseCharacterArray(rawCharacters, new Date().toISOString())
         if (partialCharacters.length > 0) {
@@ -549,7 +533,7 @@ async function runOutlineFirstStoryPlanningWorkflow(
     chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
-    knowledgeContext,
+    knowledgeBases,
     planningMode: 'refine',
     title: draft.title,
     synopsis: draft.synopsis,
@@ -610,15 +594,7 @@ export async function runStoryPlanningWorkflow(
 
 export async function generateOutline(project: StoryProject) {
   const { outlineAgent } = preparePlanningRuntime()
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
   const outlineContext: Record<string, any> = {
     theme: project.theme,
     genre: project.genre,
@@ -628,7 +604,7 @@ export async function generateOutline(project: StoryProject) {
     chapterCount: project.chapterCount,
     constraints: project.constraints,
     customRequirements: project.customRequirements,
-    knowledgeContext,
+    knowledgeBases,
   }
   const outlineResult = await outlineAgent.execute(outlineContext)
   const draft = outlineContext._outlineData || parsePlanningDraft(outlineResult.content)
@@ -658,13 +634,7 @@ export async function generateCharacters(
   if (!characterModel) throw new Error('At least one usable model is required for the character agent.')
   characterAgent.setModel(characterModel, 4096, 0.7, getContextTokens(providerStore, characterModel))
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   const charContext: Record<string, any> = {
     theme: project.theme,
@@ -677,7 +647,7 @@ export async function generateCharacters(
       ? Math.max(1, Math.min(24, Math.trunc(Number(options.preferredCount))))
       : getPreferredCharacterCount(project),
     characterRequirements: typeof options.characterRequirements === 'string' ? options.characterRequirements.trim() : '',
-    knowledgeContext,
+    knowledgeBases,
   }
 
   await characterAgent.execute(charContext)

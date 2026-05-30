@@ -3,7 +3,7 @@ import type { Chapter } from '@/types/chapter'
 import { extractJsonPayload } from '@/services/agent/validation'
 import { buildCharacterContextForTask, buildPreviousSummary, buildProjectRelationshipContext } from './context'
 import { appendRelationshipEventsForChapter } from '@/services/relationship'
-import { buildKnowledgeContextForProject, resolveChapterCount, prepareRuntime } from './runtime'
+import { getLinkedKnowledgeBases, resolveChapterCount, prepareRuntime } from './runtime'
 import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './types'
 import { generateId } from '@/lib/id'
 import { extractRelationshipEventsForChapter, runStoryPlanningWorkflow } from './planning'
@@ -181,15 +181,7 @@ export async function runChapterPlanningWorkflow(
   const chapterCount = resolveChapterCount(project.chapterCount)
   const titleBatchSize = 50
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   const titleEntries: ChapterPlanEntry[] = []
   try {
@@ -207,7 +199,7 @@ export async function runChapterPlanningWorkflow(
         startChapterNumber: start,
         endChapterNumber: end,
         storyOutline: project.outline,
-        knowledgeContext,
+        knowledgeBases,
       }
       const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
       const titlesData = titleContext._chapterTitlesData || JSON.parse(extractJsonPayload(titleResult.content))
@@ -259,7 +251,7 @@ export async function runChapterPlanningWorkflow(
       storyOutline: project.outline,
       characters: buildCharacterContextForTask(project.characters, 'outlining'),
       existingChapters: formatChapterPlanEntryContext(plannedEntries),
-      knowledgeContext,
+      knowledgeBases,
       targetChapter: titleEntry,
       chapterCount,
       _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
@@ -312,15 +304,7 @@ export async function generateAdditionalChapterPlan(
   onProgress?.(`Planning title for Chapter ${nextChapterNumber}...`)
   onToken?.(`\n\n[Planning] Chapter ${nextChapterNumber} Title\n`)
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   let titleEntry: ChapterPlanEntry
   try {
@@ -335,7 +319,7 @@ export async function generateAdditionalChapterPlan(
       nextChapterNumber,
       storyOutline: project.outline,
       existingChapters: formatChapterPlanContext(project.chapters),
-      knowledgeContext,
+      knowledgeBases,
     }
     const titleResult = await chapterTitlePlannerAgent.execute(titleContext, onToken)
     titleEntry = titleContext._nextChapterTitleData || JSON.parse(extractJsonPayload(titleResult.content))
@@ -385,7 +369,7 @@ export async function generateAdditionalChapterPlan(
     storyOutline: project.outline,
     characters: buildCharacterContextForTask(project.characters, 'outlining'),
     existingChapters: formatChapterPlanContext(project.chapters),
-    knowledgeContext,
+    knowledgeBases,
     targetChapter: titleEntry,
     chapterCount,
     _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
@@ -467,17 +451,7 @@ export async function completeChapterPlan(
   onProgress?.(`Completing outline for Chapter ${chapter.index + 1}: ${chapter.title}...`)
   onToken?.(`\n\n[Planning] Complete Chapter ${chapter.index + 1} Outline\n`)
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-    chapterTitle: chapter.title,
-    chapterOutline: JSON.stringify(chapter.outline),
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   const currentChapters = [...project.chapters]
   const previousChapters = project.chapters.filter(item => item.index < chapter.index)
@@ -496,7 +470,7 @@ export async function completeChapterPlan(
       nextChapterNumber: chapter.index + 1,
       storyOutline: project.outline,
       existingChapters: formatChapterPlanContext(previousChapters),
-      knowledgeContext,
+      knowledgeBases,
     }
 
     try {
@@ -535,7 +509,7 @@ export async function completeChapterPlan(
     characters: buildCharacterContextForTask(project.characters, 'outlining'),
     existingChapters: formatChapterPlanContext(previousChapters),
     currentChapterPlan: formatCurrentChapterPlanContext(currentChapterForContext),
-    knowledgeContext,
+    knowledgeBases,
     targetChapter,
     chapterCount,
     _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
@@ -570,17 +544,7 @@ export async function reviewAndRewriteChapterPlan(
   if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
 
   const severityThreshold = useProviderStore().toolWorkflowSettings.minIssueSeverity
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    style: project.style,
-    customRequirements: project.customRequirements,
-    outline: project.outline,
-    chapterTitle: chapter.title,
-    chapterOutline: JSON.stringify(chapter.outline),
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   onProgress?.(`Reviewing outline for Chapter ${chapter.index + 1}...`)
   onToken?.(`\n\n[Review] Chapter ${chapter.index + 1} Outline Audit\n`)
@@ -598,7 +562,7 @@ export async function reviewAndRewriteChapterPlan(
     style: project.style,
     project: buildProjectRelationshipContext(project),
     writingFormat: project.writingFormat,
-    knowledgeContext,
+    knowledgeBases,
   }
 
   let qualifyingIssues: any[] = []
@@ -639,7 +603,7 @@ export async function reviewAndRewriteChapterPlan(
       '',
       'Rewrite this chapter outline to preserve the useful intent while fixing every qualifying review issue. Keep the same chapter number, title, and objective unless the issue requires tightening the objective.',
     ].join('\n'),
-    knowledgeContext,
+    knowledgeBases,
     targetChapter,
     chapterCount: Math.max(project.chapterConfig?.maxChapters ?? project.chapterCount ?? project.chapters.length, project.chapters.length),
     _onChapterOutlineUpdated: async (outlineData: ChapterPlanEntry) => {
@@ -672,15 +636,7 @@ export async function generateChapterDraft(
   if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
   const chapterNumber = chapter.index + 1
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    chapterTitle: chapter.title,
-    chapterOutline: JSON.stringify(chapter.outline),
-    previousSummary: buildPreviousSummary(project, chapterIndex),
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
   const relationshipContext = `Relationship query tools are available. Query prior relationship state at chapterIndex ${Math.max(-1, chapter.index - 1)} only for characters whose dynamics matter in this chapter.`
 
   const writerContext: Record<string, any> = {
@@ -695,7 +651,7 @@ export async function generateChapterDraft(
     style: project.style,
     project: buildProjectRelationshipContext(project),
     writingFormat: project.writingFormat,
-    knowledgeContext,
+    knowledgeBases,
   }
 
   let lastSavedContent = ''
@@ -761,16 +717,7 @@ export async function proofreadChapter(
   if (!chapter) throw new Error(`Chapter at position ${chapterIndex + 1} not found`)
   const chapterNumber = chapter.index + 1
 
-  const knowledgeContext = await buildKnowledgeContextForProject(project, {
-    theme: project.theme,
-    genre: project.genre,
-    targetReader: project.targetReader,
-    language: project.language,
-    chapterTitle: chapter.title,
-    chapterOutline: JSON.stringify(chapter.outline),
-    content: chapter.content,
-    previousSummary: buildPreviousSummary(project, chapterIndex),
-  })
+  const knowledgeBases = getLinkedKnowledgeBases(project)
 
   const segments = buildProofreadingSegments(chapter.content)
   for (const segment of segments) {
@@ -785,7 +732,7 @@ export async function proofreadChapter(
       style: project.style,
       project: buildProjectRelationshipContext(project),
       writingFormat: project.writingFormat,
-      knowledgeContext,
+      knowledgeBases,
       range: segment,
     }
     await proofreaderAgent.execute(proofreadContext, onToken)
@@ -1025,15 +972,7 @@ export async function run(
 
       try {
         const charContext = buildCharacterContextForTask(updatedProject.characters, 'writing')
-        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-          theme: updatedProject.theme,
-          genre: updatedProject.genre,
-          targetReader: updatedProject.targetReader,
-          language: updatedProject.language,
-          chapterTitle: chapter.title,
-          chapterOutline: JSON.stringify(chapter.outline),
-          previousSummary: buildPreviousSummary(updatedProject, i),
-        })
+        const knowledgeBases = getLinkedKnowledgeBases(updatedProject)
         const relationshipContext = `Relationship query tools are available. Query prior relationship state at chapterIndex ${Math.max(-1, chapter.index - 1)} only for characters whose dynamics matter in this chapter.`
         const writerContext: Record<string, any> = {
           chapterOutline: chapter.outline,
@@ -1047,7 +986,7 @@ export async function run(
           style: project.style,
           project: buildProjectRelationshipContext(updatedProject),
           writingFormat: project.writingFormat,
-          knowledgeContext,
+          knowledgeBases,
         }
 
         let lastSavedContent = ''
@@ -1146,16 +1085,7 @@ export async function run(
       try {
         const allIssues: any[] = []
         const charContext = buildCharacterContextForTask(updatedProject.characters, 'proofreading')
-        const knowledgeContext = await buildKnowledgeContextForProject(updatedProject, {
-          theme: updatedProject.theme,
-          genre: updatedProject.genre,
-          targetReader: updatedProject.targetReader,
-          language: updatedProject.language,
-          chapterTitle: chapter.title,
-          chapterOutline: JSON.stringify(chapter.outline),
-          content: chapter.content,
-          previousSummary: buildPreviousSummary(updatedProject, i),
-        })
+        const knowledgeBases = getLinkedKnowledgeBases(updatedProject)
         const segments = buildProofreadingSegments(chapter.content)
         for (const segment of segments) {
           if (isCancelled()) break
@@ -1171,7 +1101,7 @@ export async function run(
             style: project.style,
             project: buildProjectRelationshipContext(updatedProject),
             writingFormat: updatedProject.writingFormat,
-            knowledgeContext,
+            knowledgeBases,
             range: segment,
           }, callbacks.onToken)
           if (Array.isArray(result.data?.issues)) {

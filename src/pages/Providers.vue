@@ -11,6 +11,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import VibeModelPicker from '@/components/workspace/VibeModelPicker.vue'
 import {
   Server,
   Plus,
@@ -30,6 +31,7 @@ import {
   Loader,
   Network,
   Wrench,
+  ChevronDown,
 } from 'lucide-vue-next'
 import type { AgentType } from '@/types/agent'
 import type { ModelSource, ModelConfig, ReasoningEffort, ProviderType } from '@/types/provider'
@@ -61,6 +63,8 @@ const showDeleteConfirm = ref(false)
 const showCustomModelDrawer = ref(false)
 const activeProviderTab = ref<'providers' | 'mapping'>('providers')
 const pendingDeleteId = ref<string | null>(null)
+const expandedProviderModelIds = ref<Set<string>>(new Set())
+const bulkAgentModelValue = ref('')
 const testEmbeddingLoading = ref(false)
 const testEmbeddingResult = ref<{ ok: boolean; dimensions?: number; error?: string; modelLabel?: string } | null>(null)
 
@@ -129,7 +133,9 @@ const providerIdCollision = computed(() =>
   !!newProvider.value.name.trim() && previewProviderId.value !== baseProviderId.value
 )
 
-const modelOptions = computed(() => providerStore.modelOptions)
+const chatModelCount = computed(() =>
+  providerStore.modelOptions.filter(option => !option.supportsEmbeddings).length
+)
 const embeddingModelOptions = computed(() =>
   providerStore.getEmbeddingModelOptions().map(option => ({
     label: option.label,
@@ -143,6 +149,7 @@ const roleOptions: Array<{ id: AgentType; label: string; icon: any; description:
   { id: 'character', label: 'Character Agent', icon: Sparkles, description: 'Character design and relationship setup' },
   { id: 'storyPlanner', label: 'Story Planner Agent', icon: Bot, description: 'Combined planning fallback for outline and cast generation' },
   { id: 'chapterPlanner', label: 'Chapter Planner Agent', icon: BookOpen, description: 'Tool-driven chapter-by-chapter planning' },
+  { id: 'chapterTitlePlanner', label: 'Chapter Title Planner Agent', icon: BookOpen, description: 'Generate concise chapter titles from chapter plans' },
   { id: 'writer', label: 'Writer Agent', icon: PenTool, description: 'Chapter drafting and scene writing' },
   { id: 'editingAI', label: 'Editing AI', icon: Pencil, description: 'Chapter audit and issue repair coordination' },
   { id: 'relationshipTracker', label: 'Relationship Tracker', icon: Network, description: 'Extract chapter-by-chapter relationship changes' },
@@ -571,6 +578,19 @@ function updateRoleModel(role: AgentType, value: string) {
   providerStore.setAgentModelBinding(role, value ? decodeProviderModelRef(value) : null)
 }
 
+function applyModelToAllAgents() {
+  const modelRef = decodeProviderModelRef(bulkAgentModelValue.value)
+  if (!modelRef) {
+    toast.warning('Select a model before applying it to all Agents')
+    return
+  }
+
+  for (const role of roleOptions) {
+    providerStore.setAgentModelBinding(role.id, modelRef)
+  }
+  toast.success('All Agent bindings updated')
+}
+
 function selectedEmbeddingValue() {
   const binding = providerStore.getEmbeddingModelBinding()
   return binding ? encodeProviderModelRef(binding) : ''
@@ -668,6 +688,14 @@ function modelTagVariant(source: string) {
   return 'success'
 }
 
+function toggleProviderModels(providerId: string) {
+  if (expandedProviderModelIds.value.has(providerId)) {
+    expandedProviderModelIds.value.delete(providerId)
+  } else {
+    expandedProviderModelIds.value.add(providerId)
+  }
+}
+
 function formatSyncedTime(value?: string | null) {
   if (!value) return 'Never synced'
   return new Date(value).toLocaleString()
@@ -748,7 +776,36 @@ function formatSyncedTime(value?: string | null) {
             <BaseTag variant="accent" size="sm">{{ tr('Role-level configuration') }}</BaseTag>
           </div>
 
-          <div v-if="providerStore.providers.length" class="space-y-3">
+          <div v-if="providerStore.providers.length" class="space-y-4">
+            <div class="rounded-lg border border-surface-4 bg-surface-1 p-4">
+              <div class="flex flex-col gap-3 md:flex-row md:items-end">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-sm font-semibold text-text-primary">{{ tr('Apply One Model to All Agents') }}</h3>
+                  <p class="mt-0.5 text-xs text-text-secondary">
+                    {{ tr('Choose a chat model, then update every Agent binding at once.') }}
+                  </p>
+                  <div class="mt-3">
+                    <VibeModelPicker
+                      v-model="bulkAgentModelValue"
+                      variant="inline"
+                      :fallback-label="chatModelCount ? 'Select model' : 'No models available'"
+                      :disabled="!chatModelCount"
+                    />
+                  </div>
+                </div>
+                <BaseButton
+                  variant="primary"
+                  size="sm"
+                  class="md:mb-0.5"
+                  :disabled="!chatModelCount || !bulkAgentModelValue"
+                  @click="applyModelToAllAgents"
+                >
+                  <Wand2 :size="14" />
+                  <span>{{ tr('Apply to All Agents') }}</span>
+                </BaseButton>
+              </div>
+            </div>
+
             <div
               v-for="role in roleOptions"
               :key="role.id"
@@ -763,11 +820,12 @@ function formatSyncedTime(value?: string | null) {
                   <p class="text-xs text-text-secondary mt-0.5">{{ tr(role.description) }}</p>
                 </div>
               </div>
-              <BaseSelect
+              <VibeModelPicker
                 :model-value="selectedRoleValue(role.id)"
-                :options="modelOptions"
-                :placeholder="modelOptions.length ? 'Select model' : 'No models available'"
-                :disabled="!modelOptions.length"
+                :role="role.id"
+                variant="inline"
+                :fallback-label="chatModelCount ? 'Select model' : 'No models available'"
+                :disabled="!chatModelCount"
                 @update:model-value="value => updateRoleModel(role.id, value)"
               />
             </div>
@@ -926,11 +984,33 @@ function formatSyncedTime(value?: string | null) {
                 </div>
               </div>
 
-              <div v-if="provider.models.length" class="grid gap-2 md:grid-cols-2">
+              <div v-if="provider.models.length" class="rounded-lg border border-surface-4 bg-surface-1">
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-surface-2 transition-colors duration-100"
+                  @click="toggleProviderModels(provider.id)"
+                >
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-text-primary">{{ tr('Models') }}</p>
+                    <p class="text-xs text-text-muted">
+                      {{ provider.models.length }} {{ tr('configured model(s)') }}
+                    </p>
+                  </div>
+                  <ChevronDown
+                    :size="16"
+                    class="shrink-0 text-text-muted transition-transform"
+                    :class="expandedProviderModelIds.has(provider.id) ? 'rotate-180' : ''"
+                  />
+                </button>
+
                 <div
-                  v-for="model in provider.models"
-                  :key="model.id"
-                  class="rounded-lg border border-surface-4 bg-surface-1 px-3 py-2"
+                  v-if="expandedProviderModelIds.has(provider.id)"
+                  class="grid gap-2 border-t border-surface-4 p-3 md:grid-cols-2"
+                >
+                  <div
+                    v-for="model in provider.models"
+                    :key="model.id"
+                    class="rounded-lg border border-surface-4 bg-surface-2 px-3 py-2"
                 >
                   <div class="flex items-center justify-between gap-2">
                     <div class="min-w-0">
@@ -1024,6 +1104,7 @@ function formatSyncedTime(value?: string | null) {
                     <span class="text-2xs font-medium text-text-primary">{{ model.embeddingDimensions }}</span>
                   </div>
                 </div>
+              </div>
               </div>
               </div>
             </BaseCard>

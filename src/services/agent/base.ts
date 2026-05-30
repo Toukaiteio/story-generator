@@ -9,6 +9,8 @@ import { useProviderStore } from '@/stores/provider'
 import type { FunctionCallingResponse } from '@/services/provider/types'
 import { requestToolContinuation } from './toolContinuation'
 import { getTodoListTool, handleTodoListToolCall, isTodoListTool } from './todolist'
+import { KNOWLEDGE_TOOL_NAME, getKnowledgeTool, handleKnowledgeToolCall } from './knowledgeTool'
+import type { KnowledgeBase } from '@/types/knowledge'
 
 export interface AgentResult {
   content: string
@@ -157,9 +159,13 @@ Base tool available to every agent:
 - When a tool is the delivery channel for generated content or structured output, put that content only in the tool arguments. Do not duplicate the same content in assistant text before or after the tool call.`
   }
 
-  private getAvailableTools(tools: ToolDefinition[]) {
+  private getAvailableTools(tools: ToolDefinition[], context: Record<string, any> = {}) {
+    const bases: KnowledgeBase[] = Array.isArray(context.knowledgeBases) && context.knowledgeBases.length > 0
+      ? context.knowledgeBases
+      : []
+    const knowledgeTools = bases.length > 0 ? [getKnowledgeTool(bases)] : []
     const seen = new Set<string>()
-    return [getTodoListTool(), ...tools].filter(tool => {
+    return [getTodoListTool(), ...knowledgeTools, ...tools].filter(tool => {
       if (seen.has(tool.name)) return false
       seen.add(tool.name)
       return true
@@ -203,7 +209,7 @@ Base tool available to every agent:
       throw new Error(`${this.name} has no model assigned`)
     }
 
-    const tools = this.getAvailableTools(this.getTools())
+    const tools = this.getAvailableTools(this.getTools(), context)
     const retryLimit = this.getValidationRetryLimit()
     let previousResponse = ''
     let lastIssues: string[] = []
@@ -305,7 +311,7 @@ Base tool available to every agent:
     const softToolRoundLimit = providerStore.toolWorkflowSettings.maxToolCallRounds
     const hardToolRoundLimit = Math.max(softToolRoundLimit * 4, softToolRoundLimit + 24)
     const maxConsecutiveNoToolRounds = 6
-    const availableTools = this.getAvailableTools(tools)
+    const availableTools = this.getAvailableTools(tools, context)
 
     while (true) {
       const finalToolNames = this.getFinalToolNames(context)
@@ -452,9 +458,12 @@ Base tool available to every agent:
       // Execute each tool call and add results
       for (const toolCall of result.tool_calls) {
         try {
+          const bases: KnowledgeBase[] = Array.isArray(context.knowledgeBases) ? context.knowledgeBases : []
           const toolResult = isTodoListTool(toolCall.name)
             ? await handleTodoListToolCall(toolCall, context, this.name)
-            : await this.handleToolCall(toolCall, context)
+            : toolCall.name === KNOWLEDGE_TOOL_NAME
+              ? await handleKnowledgeToolCall(toolCall, bases)
+              : await this.handleToolCall(toolCall, context)
           currentMessages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -555,7 +564,7 @@ Base tool available to every agent:
       throw new Error(`${this.name} has no model assigned`)
     }
 
-    const tools = this.getAvailableTools(this.getTools())
+    const tools = this.getAvailableTools(this.getTools(), context)
     const messages = this.prepareMessages(context)
     let fullContent = ''
     let toolCalls: ToolCall[] = []

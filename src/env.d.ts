@@ -23,6 +23,12 @@ declare global {
     app: {
       getPath: (name: 'documents' | 'downloads' | 'desktop' | 'userData') => Promise<string | null>
     }
+    updater: {
+      getStatus: () => Promise<UpdaterStatus>
+      check: () => Promise<UpdaterStatus>
+      install: () => Promise<boolean>
+      onStatus: (callback: (status: UpdaterStatus) => void) => () => void
+    }
     storage: {
       readJson: (key: string) => unknown
       writeJson: (key: string, value: unknown) => boolean
@@ -62,6 +68,14 @@ declare global {
   interface UnsavedStatePayload {
     hasUnsavedChanges: boolean
     entries?: UnsavedChapterLocation[]
+  }
+
+  interface UpdaterStatus {
+    state: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+    message: string
+    version?: string
+    progress?: number
+    checkedAt?: string
   }
 
   interface Window {

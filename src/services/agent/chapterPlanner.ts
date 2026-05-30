@@ -111,7 +111,6 @@ Do not output JSON, markdown, prose, placeholder chapter labels, or analysis in 
       targetReader,
       language,
       style,
-      knowledgeContext,
       storyOutline,
       characters,
       existingChapters,
@@ -119,7 +118,7 @@ Do not output JSON, markdown, prose, placeholder chapter labels, or analysis in 
       currentChapterPlan,
       chapterCount,
     } = context
-    const referenceMaterial = knowledgeContext ? `\nReference material:\n${knowledgeContext}\n` : ''
+    const referenceMaterial = ''
 
     return `Create the detailed outline for the exact target chapter below.
 

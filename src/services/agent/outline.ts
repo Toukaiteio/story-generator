@@ -103,7 +103,6 @@ If refining with character information, use the refine_outline tool.`
       length,
       constraints,
       customRequirements,
-      knowledgeContext,
       planningMode,
       characters,
       characterSignals,
@@ -127,8 +126,7 @@ ${style ? `**Writing Style Guide:**\n${style}` : '**Writing Style:** Infer an ap
 **Length:** ${length} (${lengthGuide[length] || length})
 ${constraints?.required?.length ? `**Must Include:** ${constraints.required.join(', ')}` : ''}
 ${constraints?.forbidden?.length ? `**Must Not Include:** ${constraints.forbidden.join(', ')}` : ''}
-${customRequirements ? `**Additional Requirements:** ${customRequirements}` : ''}
-${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}`
+${customRequirements ? `**Additional Requirements:** ${customRequirements}` : ''}`
 
     if (planningMode === 'draft') {
       return `${basePrompt}

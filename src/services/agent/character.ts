@@ -200,7 +200,6 @@ Character requirements:
       targetReader,
       language,
       existingCharacters,
-      knowledgeContext,
       outlineTitle,
       synopsis,
       characterSignals,
@@ -225,7 +224,6 @@ ${outline}
 ${characterSignals ? `\n**Character Signals From the Outline Draft:**\n${characterSignals}` : ''}
 ${characterRequirements ? `\n**User Character Requirements:**\n${characterRequirements}` : ''}
 ${existingCharacters ? `\n**Existing Characters (do not duplicate):**\n${existingCharacters}` : ''}
-${knowledgeContext ? `\n**Reference Material:**\n${knowledgeContext}` : ''}
 
 ${countGuide}
 Use create_character exactly ${targetCount} times, once per character, before calling finalize_characters.

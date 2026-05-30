@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useProviderStore } from '@/stores/provider'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -7,11 +7,35 @@ import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
-import { Monitor, Globe, Info, Database, FolderOpen, Wrench } from 'lucide-vue-next'
+import { APP_VERSION } from '@/constants/version'
+import { Monitor, Globe, Info, Database, FolderOpen, Wrench, Download, RefreshCw } from 'lucide-vue-next'
 
 const ui = useUiStore()
 const providerStore = useProviderStore()
-onMounted(() => ui.navigateTo('settings'))
+const updateStatus = ref<UpdaterStatus>({
+  state: 'idle',
+  message: 'Update status has not been loaded yet.',
+})
+const checkingForUpdates = ref(false)
+const hasUpdaterApi = ref(false)
+let removeUpdaterStatusListener: (() => void) | null = null
+
+onMounted(async () => {
+  ui.navigateTo('settings')
+  hasUpdaterApi.value = Boolean(window.electronAPI?.updater)
+  if (hasUpdaterApi.value && window.electronAPI?.updater) {
+    removeUpdaterStatusListener = window.electronAPI.updater.onStatus(status => {
+      updateStatus.value = status
+      checkingForUpdates.value = status.state === 'checking'
+    })
+    updateStatus.value = await window.electronAPI.updater.getStatus()
+  }
+})
+
+onBeforeUnmount(() => {
+  removeUpdaterStatusListener?.()
+  removeUpdaterStatusListener = null
+})
 
 const issueSeverityOptions = [
   { label: 'Low - process all issues', value: 'low' },
@@ -46,6 +70,25 @@ function handleCustomSystemPromptChange(value: string) {
 
 function handleMeetingProposerPromptChange(value: string) {
   ui.setMeetingProposerPrompt(value)
+}
+
+async function handleCheckForUpdates() {
+  if (!window.electronAPI?.updater) return
+  checkingForUpdates.value = true
+  try {
+    updateStatus.value = await window.electronAPI.updater.check()
+  } finally {
+    checkingForUpdates.value = updateStatus.value.state === 'checking'
+  }
+}
+
+async function handleInstallUpdate() {
+  await window.electronAPI?.updater?.install()
+}
+
+function formatUpdateCheckedAt(value?: string) {
+  if (!value) return ui.text('Never checked')
+  return new Date(value).toLocaleString()
 }
 
 async function handleBrowseStorage() {
@@ -147,6 +190,66 @@ async function handleBrowseStorage() {
 
         <section class="border-t border-surface-4 pt-6">
           <div class="flex items-center gap-2 mb-4">
+            <Download :size="16" class="text-accent" />
+            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Software Updates') }}</h2>
+          </div>
+          <div class="pl-6">
+            <div class="rounded-lg border border-surface-4 bg-surface-2 p-4">
+              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-text-primary">{{ ui.text(updateStatus.message) }}</p>
+                  <p class="mt-1 text-xs text-text-muted">
+                    {{ ui.text('Current version') }}: {{ APP_VERSION }}
+                    <span v-if="updateStatus.version"> · {{ ui.text('Latest') }}: {{ updateStatus.version }}</span>
+                  </p>
+                  <p class="mt-1 text-xs text-text-muted">
+                    {{ ui.text('Last checked') }}: {{ formatUpdateCheckedAt(updateStatus.checkedAt) }}
+                  </p>
+                </div>
+                <div class="flex shrink-0 flex-wrap gap-2">
+                  <BaseButton
+                    variant="secondary"
+                    size="sm"
+                    :loading="checkingForUpdates"
+                    :disabled="checkingForUpdates || !hasUpdaterApi"
+                    @click="handleCheckForUpdates"
+                  >
+                    <template v-if="!checkingForUpdates">
+                      <RefreshCw :size="14" />
+                    </template>
+                    <span>{{ ui.text('Check Now') }}</span>
+                  </BaseButton>
+                  <BaseButton
+                    v-if="updateStatus.state === 'downloaded'"
+                    variant="primary"
+                    size="sm"
+                    @click="handleInstallUpdate"
+                  >
+                    <Download :size="14" />
+                    <span>{{ ui.text('Restart and Install') }}</span>
+                  </BaseButton>
+                </div>
+              </div>
+
+              <div v-if="updateStatus.state === 'downloading'" class="mt-3">
+                <div class="h-2 overflow-hidden rounded-full bg-surface-4">
+                  <div
+                    class="h-full rounded-full bg-accent transition-all duration-150"
+                    :style="{ width: `${updateStatus.progress ?? 0}%` }"
+                  />
+                </div>
+                <p class="mt-1 text-xs text-text-muted">{{ updateStatus.progress ?? 0 }}%</p>
+              </div>
+
+              <p v-if="!hasUpdaterApi" class="mt-3 text-xs leading-relaxed text-text-muted">
+                {{ ui.text('Update checks are available in the packaged Electron app.') }}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="border-t border-surface-4 pt-6">
+          <div class="flex items-center gap-2 mb-4">
             <Wrench :size="16" class="text-accent" />
             <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Prepend to System Prompts') }}</h2>
           </div>
@@ -217,7 +320,7 @@ async function handleBrowseStorage() {
           <div class="pl-6 space-y-2">
             <div class="flex items-center justify-between py-1">
               <span class="text-sm text-text-secondary">{{ ui.t('settings.version') }}</span>
-              <span class="text-sm text-text-primary">0.1.0</span>
+              <span class="text-sm text-text-primary">{{ APP_VERSION }}</span>
             </div>
             <div class="flex items-center justify-between py-1">
               <span class="text-sm text-text-secondary">{{ ui.t('settings.framework') }}</span>

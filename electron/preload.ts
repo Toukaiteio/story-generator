@@ -21,6 +21,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPath: (name: string) => ipcRenderer.invoke('app:get-path', name),
   },
 
+  updater: {
+    getStatus: () => ipcRenderer.invoke('updater:get-status'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    install: () => ipcRenderer.invoke('updater:install'),
+    onStatus: (callback: (status: any) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: any) => callback(status)
+      ipcRenderer.on('updater:status', listener)
+      return () => ipcRenderer.removeListener('updater:status', listener)
+    },
+  },
+
   // Persistent storage in userData
   storage: {
     readJson: (key: string) => ipcRenderer.sendSync('storage:read-json', key),

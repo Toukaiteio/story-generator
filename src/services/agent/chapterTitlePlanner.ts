@@ -210,7 +210,6 @@ The program, not the model, controls the chapter count and chapter numbers.`
         nextChapterNumber,
         storyOutline,
         existingChapters,
-        knowledgeContext,
       } = context
 
       return `Create the title and objective for exactly one next chapter.
@@ -227,7 +226,6 @@ ${storyOutline}
 
 Existing Chapter Plan:
 ${existingChapters || 'No existing chapter plan provided.'}
-${knowledgeContext ? `\nReference material:\n${knowledgeContext}\n` : ''}
 
 Continue the existing plan without rewriting previous chapters. Use create_next_chapter_title to output a concrete title and objective for Chapter ${nextChapterNumber} only.`
     }
