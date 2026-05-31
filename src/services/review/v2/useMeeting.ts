@@ -16,7 +16,7 @@ import { createId } from '@/services/review/definitions'
 import { toStoredMessages, fromStoredMessages } from '@/services/review/storage'
 import { getReviewAgentDefinitions, createAgentState, normalizeAgentState, internalProposerAgentDefinition } from '@/services/review/definitions'
 import type { ReviewAgentState } from '@/services/review/types'
-import { runSubAgentAnalysis, runMasterTurn } from './agentRunner'
+import { runSubAgentAnalysis, runMasterTurn, runVerifierTurn } from './agentRunner'
 import { executeChangeRequest } from './actionExecutor'
 import { createMeetingMachine, isTerminalPhase } from './meetingMachine'
 import type { MachineEvent } from './meetingMachine'
@@ -28,6 +28,7 @@ import type {
   MeetingContext,
   MeetingMessage,
   PhaseState,
+  VerificationSession,
 } from './types'
 
 export function useMeeting(context: () => MeetingContext) {
@@ -48,9 +49,14 @@ export function useMeeting(context: () => MeetingContext) {
   })
   const actionSession = ref<ActionSession | null>(null)
   const clarificationSession = ref<ClarificationSession | null>(null)
+  const verificationSession = ref<VerificationSession | null>(null)
   const selectedContextElements = ref<ContextElement[]>([
-    'story-config', 'master-outline', 'characters', 'knowledge-base', 'chapter-plan',
+    'story-config', 'master-outline', 'characters', 'selected-chapter', 'chapter-plan', 'chapter-draft',
   ])
+  const autoContinue = ref(true)
+  const maxAutoRounds = ref(5)
+  const roundCount = ref(0)
+  const taskGoal = ref('')
   const inputText = ref('')
   const loading = ref(false)
   const loaded = ref(false)
@@ -82,6 +88,26 @@ export function useMeeting(context: () => MeetingContext) {
     messages.value.push({ id: createId('sys'), role: 'system', content, createdAt: new Date().toISOString() })
   }
 
+  function toActionVoteSnapshot(session: ActionSession) {
+    return {
+      id: session.id,
+      requestedByAgentId: session.proposedByAgentId,
+      requestedByAgentName: session.proposedByAgentName,
+      request: session.request,
+      status: session.status === 'running' ? 'applying' as const
+        : session.status === 'applied' ? 'applied' as const
+        : session.status === 'failed' ? 'failed' as const
+        : 'rejected' as const,
+      votes: [],
+      result: session.result,
+      error: session.error,
+      createdAt: session.createdAt,
+      completedAt: session.completedAt,
+      executionTimeline: [],
+      executionLedger: [],
+    }
+  }
+
   function scheduleSave() {
     if (!loaded.value) return
     if (saveTimer) clearTimeout(saveTimer)
@@ -97,6 +123,7 @@ export function useMeeting(context: () => MeetingContext) {
 
   async function runRound(gen: number) {
     if (gen !== generation.value) return
+    roundCount.value += 1
     loading.value = true
 
     // Step 1: Sub-agents analyze in parallel
@@ -293,8 +320,8 @@ export function useMeeting(context: () => MeetingContext) {
         providerStore,
         projectStore,
         onProgress: (msg) => addSystemMessage(msg),
-        onMessage: (content) => {
-          messages.value.push({ id: createId('sys'), role: 'system', content, createdAt: new Date().toISOString() })
+        onMessage: (content, tool) => {
+          messages.value.push({ id: createId('sys'), role: 'system', content, tool, createdAt: new Date().toISOString() } as any)
         },
       })
 
@@ -307,18 +334,12 @@ export function useMeeting(context: () => MeetingContext) {
         role: 'system',
         content: `✓ ${result}`,
         actionSnapshot: { ...session },
+        actionVoteSnapshot: toActionVoteSnapshot(session),
         createdAt: new Date().toISOString(),
-      })
+      } as any)
 
       if (gen !== generation.value) return
-      const master = getMaster()
-      if (!master) { loading.value = false; scheduleSave(); return }
-
-      // Master reviews the result and decides next step
-      const t = machine.transition(phase.value, agents.value, { type: 'ACTION_APPLIED', result })
-      phase.value = t.phaseState
-      if (t.systemMessage) addSystemMessage(t.systemMessage)
-      await runMasterStep(master, [], gen)
+      await runVerificationStep(result, gen)
     } catch (err: any) {
       const error = err?.message || 'Unknown error'
       session.status = 'failed'
@@ -328,13 +349,123 @@ export function useMeeting(context: () => MeetingContext) {
       addSystemMessage(`Action failed: ${error}`)
 
       if (gen !== generation.value) return
-      const master = getMaster()
-      if (!master) { loading.value = false; scheduleSave(); return }
+      phase.value = { ...phase.value, phase: 'idle', synthesisAttempts: 0 }
+      addSystemMessage('Round stopped after the failed tool action. Adjust the focus or message, then start another round.')
+      loading.value = false
+      scheduleSave()
+    }
+  }
 
-      const t = machine.transition(phase.value, agents.value, { type: 'ACTION_FAILED', error })
-      phase.value = t.phaseState
-      if (t.systemMessage) addSystemMessage(t.systemMessage)
-      await runMasterStep(master, [], gen)
+  async function runVerificationStep(latestActionResult: string, gen: number) {
+    if (gen !== generation.value) return
+    const verifier = getMaster()
+    if (!verifier) {
+      phase.value = { ...phase.value, phase: 'idle', synthesisAttempts: 0 }
+      addSystemMessage('Round complete. No verifier agent is available, so automatic continuation stopped.')
+      loading.value = false
+      scheduleSave()
+      return
+    }
+
+    phase.value = { ...phase.value, phase: 'verify', synthesisAttempts: 0 }
+    activeAgentIds.value = [verifier.id]
+    const abort = new AbortController()
+    const verifierId = `${verifier.id}:verifier`
+    abortControllers.set(verifierId, abort)
+
+    try {
+      const result = await runVerifierTurn(
+        verifier,
+        messages.value,
+        context(),
+        taskGoal.value || phase.value.focus,
+        phase.value.focus,
+        latestActionResult,
+        selectedContextElements.value,
+        providerStore,
+        roundCount.value,
+        maxAutoRounds.value,
+        abort.signal,
+      )
+
+      if (gen !== generation.value || abort.signal.aborted) return
+
+      const session: VerificationSession = {
+        id: createId('verify'),
+        ...result,
+        round: roundCount.value,
+        createdAt: new Date().toISOString(),
+      }
+      verificationSession.value = session
+
+      const remaining = session.remainingCriteria.length
+        ? `\nRemaining:\n${session.remainingCriteria.map(item => `- ${item}`).join('\n')}`
+        : ''
+      addSystemMessage(`Verification: ${session.status}. ${session.reason}${remaining}`)
+
+      abortControllers.delete(verifierId)
+      activeAgentIds.value = []
+
+      if (session.status === 'complete') {
+        phase.value = { ...phase.value, phase: 'idle', focus: taskGoal.value || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage('Initial meeting task is complete. Start another round only if you want additional changes.')
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      if (session.status === 'ask_user') {
+        phase.value = { ...phase.value, phase: 'idle', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage('Verifier needs user input before continuing automatically.')
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      if (session.status === 'blocked') {
+        phase.value = { ...phase.value, phase: 'idle', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage('Automatic continuation stopped because the verifier marked the task blocked.')
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      if (!autoContinue.value) {
+        phase.value = { ...phase.value, phase: 'idle', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage('Verifier found remaining work. Auto-continue is off, so the meeting is waiting for the next round.')
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      if (roundCount.value >= maxAutoRounds.value) {
+        phase.value = { ...phase.value, phase: 'idle', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage(`Verifier found remaining work, but the auto-continue limit (${maxAutoRounds.value}) was reached.`)
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      if (session.risk === 'high') {
+        phase.value = { ...phase.value, phase: 'idle', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+        addSystemMessage('Verifier found a high-risk next step. Automatic continuation stopped for user review.')
+        loading.value = false
+        scheduleSave()
+        return
+      }
+
+      phase.value = { ...phase.value, phase: 'analysis', focus: session.nextFocus || phase.value.focus, synthesisAttempts: 0 }
+      addSystemMessage(`Auto-continuing round ${roundCount.value + 1}/${maxAutoRounds.value}: ${phase.value.focus}`)
+      scheduleSave()
+      await runRound(gen)
+    } catch (err: any) {
+      if (abort.signal.aborted || err?.name === 'AbortError') return
+      abortControllers.delete(verifierId)
+      activeAgentIds.value = []
+      phase.value = { ...phase.value, phase: 'idle', synthesisAttempts: 0 }
+      addSystemMessage(`Verification failed: ${err?.message || 'Unknown error'}`)
+      loading.value = false
+      scheduleSave()
     }
   }
 
@@ -343,6 +474,11 @@ export function useMeeting(context: () => MeetingContext) {
   async function startMeeting(focus?: string) {
     if (phase.value.phase !== 'idle') return
     const f = focus?.trim() || phase.value.focus || 'Identify the most important issue or opportunity in the selected context and fix it.'
+    if (!taskGoal.value || verificationSession.value?.status === 'complete' || roundCount.value === 0) {
+      taskGoal.value = f
+      roundCount.value = 0
+      verificationSession.value = null
+    }
     const t = machine.transition(phase.value, agents.value, { type: 'START', focus: f })
     phase.value = t.phaseState
     if (t.systemMessage) addSystemMessage(t.systemMessage)
@@ -355,6 +491,11 @@ export function useMeeting(context: () => MeetingContext) {
 
     if (clarificationSession.value?.status === 'pending') {
       clarificationSession.value = { ...clarificationSession.value, status: 'answered', answer: text }
+    }
+    if (phase.value.phase === 'idle') {
+      taskGoal.value = text
+      roundCount.value = 0
+      verificationSession.value = null
     }
 
     messages.value.push({ id: createId('user'), role: 'user', content: text, createdAt: new Date().toISOString() })
@@ -402,6 +543,9 @@ export function useMeeting(context: () => MeetingContext) {
     messages.value = []
     actionSession.value = null
     clarificationSession.value = null
+    verificationSession.value = null
+    roundCount.value = 0
+    taskGoal.value = ''
     phase.value = { phase: 'idle', discussionTurns: 0, maxDiscussionTurns: 6, synthesisAttempts: 0, focus: '' }
     agents.value = buildAgents()
     addSystemMessage('Meeting reset.')
@@ -439,6 +583,135 @@ export function useMeeting(context: () => MeetingContext) {
     scheduleSave()
   }
 
+  async function updateAgentSettings(agentId: string, settings: Partial<{
+    name: string
+    role: string
+    brief: string
+    defaultModelRole: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
+    modelValue: string
+    systemPrompt: string
+    customSystemPrompt: string
+  }>) {
+    const agent = getAgent(agentId)
+    if (!agent) return
+    const project = context().project
+    const nextSettings = {
+      ...(project?.reviewAgentSettings?.agents?.[agentId] ?? {}),
+      ...settings,
+    }
+    if (typeof settings.customSystemPrompt === 'string') {
+      agent.customSystemPrompt = settings.customSystemPrompt
+    }
+    if (typeof settings.modelValue === 'string') {
+      agent.modelValue = settings.modelValue
+    }
+    if (typeof settings.name === 'string' && settings.name.trim()) agent.name = settings.name.trim()
+    if (typeof settings.role === 'string') agent.brief = settings.role.trim() || agent.brief
+    if (typeof settings.brief === 'string') agent.brief = settings.brief.trim() || agent.brief
+    if (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim()) agent.systemPrompt = settings.systemPrompt.trim()
+
+    if (project) {
+      await projectStore.updateProject(project.id, {
+        reviewAgentSettings: {
+          agents: {
+            ...(project.reviewAgentSettings?.agents ?? {}),
+            [agentId]: nextSettings,
+          },
+        },
+      })
+    }
+    scheduleSave()
+  }
+
+  async function addAgent(data: {
+    name: string
+    role?: string
+    brief?: string
+    systemPrompt?: string
+    defaultModelRole?: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
+  }) {
+    const project = context().project
+    const name = data.name.trim()
+    if (!name) return
+    const id = createId('custom-agent')
+    const setting = {
+      custom: true,
+      name,
+      role: data.role?.trim() || 'Custom meeting role',
+      brief: data.brief?.trim() || 'Custom meeting participant.',
+      defaultModelRole: data.defaultModelRole === 'proposerAgent' || data.defaultModelRole === 'proofreader'
+        ? data.defaultModelRole
+        : 'chapterPlanner' as const,
+      systemPrompt: data.systemPrompt?.trim() || 'You are a custom story meeting agent. Provide concise, useful feedback based on the selected context.',
+      customSystemPrompt: data.systemPrompt?.trim() || '',
+      disabled: false,
+      deleted: false,
+    }
+
+    if (project) {
+      await projectStore.updateProject(project.id, {
+        reviewAgentSettings: {
+          agents: {
+            ...(project.reviewAgentSettings?.agents ?? {}),
+            [id]: setting,
+          },
+        },
+      })
+    }
+    agents.value = buildAgents()
+    scheduleSave()
+  }
+
+  async function deleteAgent(agentId: string) {
+    const project = context().project
+    if (project) {
+      await projectStore.updateProject(project.id, {
+        reviewAgentSettings: {
+          agents: {
+            ...(project.reviewAgentSettings?.agents ?? {}),
+            [agentId]: {
+              ...(project.reviewAgentSettings?.agents?.[agentId] ?? {}),
+              deleted: true,
+              disabled: true,
+            },
+          },
+        },
+      })
+    }
+    agents.value = agents.value.filter(agent => agent.id !== agentId)
+    activeAgentIds.value = activeAgentIds.value.filter(id => id !== agentId)
+    scheduleSave()
+  }
+
+  async function restoreDefaultAgents() {
+    const project = context().project
+    if (project) {
+      await projectStore.updateProject(project.id, { reviewAgentSettings: { agents: {} } })
+    }
+    clearConversation()
+  }
+
+  function reorderAgents(from: number, to: number) {
+    if (from === to || from < 0 || to < 0 || from >= agents.value.length || to >= agents.value.length) return
+    const next = [...agents.value]
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    agents.value = next
+    scheduleSave()
+  }
+
+  function setAutoContinue(value: boolean) {
+    autoContinue.value = value
+    scheduleSave()
+  }
+
+  function setMaxAutoRounds(value: number) {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return
+    maxAutoRounds.value = Math.max(1, Math.min(12, Math.trunc(parsed)))
+    scheduleSave()
+  }
+
   function dismissActionSession() { actionSession.value = null; scheduleSave() }
 
   // ── Persistence ────────────────────────────────────────────────────────────
@@ -451,7 +724,12 @@ export function useMeeting(context: () => MeetingContext) {
         phase: phase.value,
         actionSession: actionSession.value,
         clarificationSession: clarificationSession.value,
+        verificationSession: verificationSession.value,
         selectedContextElements: selectedContextElements.value,
+        autoContinue: autoContinue.value,
+        maxAutoRounds: maxAutoRounds.value,
+        roundCount: roundCount.value,
+        taskGoal: taskGoal.value,
         agents: agents.value.map(a => ({ id: a.id, lastSeenMessageIndex: a.lastSeenMessageIndex, privateMemory: a.privateMemory, modelValue: a.modelValue })),
       }
       await Promise.all([
@@ -482,7 +760,12 @@ export function useMeeting(context: () => MeetingContext) {
           }
           actionSession.value = s.actionSession ?? null
           clarificationSession.value = s.clarificationSession ?? null
+          verificationSession.value = s.verificationSession ?? null
           selectedContextElements.value = Array.isArray(s.selectedContextElements) ? s.selectedContextElements : selectedContextElements.value
+          autoContinue.value = typeof s.autoContinue === 'boolean' ? s.autoContinue : autoContinue.value
+          maxAutoRounds.value = Number.isFinite(Number(s.maxAutoRounds)) ? Math.max(1, Math.min(12, Math.trunc(Number(s.maxAutoRounds)))) : maxAutoRounds.value
+          roundCount.value = Number.isFinite(Number(s.roundCount)) ? Math.max(0, Math.trunc(Number(s.roundCount))) : 0
+          taskGoal.value = typeof s.taskGoal === 'string' ? s.taskGoal : ''
           agents.value = buildAgents(s.agents)
         }
       } catch { agents.value = buildAgents() }
@@ -527,10 +810,13 @@ export function useMeeting(context: () => MeetingContext) {
 
   return {
     agents, messages, phase, currentPhase, meetingEnded, isWaitingForUser,
-    activeAgentIds, actionSession, clarificationSession, selectedContextElements,
+    activeAgentIds, actionSession, clarificationSession, verificationSession, selectedContextElements,
+    autoContinue, maxAutoRounds, roundCount, taskGoal,
     inputText, loading, loaded,
     startMeeting, sendUserMessage, answerClarification,
     stopMeeting, endMeeting, clearConversation,
     setContextElement, setAgentEnabled, dismissActionSession,
+    updateAgentSettings, addAgent, deleteAgent, restoreDefaultAgents, reorderAgents,
+    setAutoContinue, setMaxAutoRounds,
   }
 }

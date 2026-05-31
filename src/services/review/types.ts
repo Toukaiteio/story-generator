@@ -71,7 +71,7 @@ export interface ReviewAskUserSession {
   completedAt?: string
 }
 
-export type ReviewChangeTarget = 'master-outline' | 'chapter-plan' | 'characters' | 'consensus'
+export type ReviewChangeTarget = 'master-outline' | 'chapter-plan' | 'chapter-draft' | 'characters' | 'consensus'
 export type ReviewChangeAction = 'create' | 'read' | 'update' | 'delete'
 
 export interface ReviewChangeRequest {
@@ -174,6 +174,7 @@ export interface ReviewPublicMessage {
   content: string
   tool?: ToolCallStatusItem
   actionVoteSnapshot?: ReviewActionVoteSession
+  actionSnapshot?: unknown
   createdAt: string
 }
 

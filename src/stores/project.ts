@@ -66,7 +66,13 @@ function normalizeReviewAgentSettings(value: any): ProjectReviewAgentSettings | 
           name: typeof settings.name === 'string' ? settings.name : undefined,
           role: typeof settings.role === 'string' ? settings.role : undefined,
           brief: typeof settings.brief === 'string' ? settings.brief : undefined,
-          defaultModelRole: settings.defaultModelRole === 'proofreader' ? 'proofreader' : settings.defaultModelRole === 'chapterPlanner' ? 'chapterPlanner' : undefined,
+          defaultModelRole: settings.defaultModelRole === 'proposerAgent'
+            ? 'proposerAgent'
+            : settings.defaultModelRole === 'proofreader'
+              ? 'proofreader'
+              : settings.defaultModelRole === 'chapterPlanner'
+                ? 'chapterPlanner'
+                : undefined,
           modelValue: typeof settings.modelValue === 'string' ? settings.modelValue : undefined,
           systemPrompt: typeof settings.systemPrompt === 'string' ? settings.systemPrompt : undefined,
           customSystemPrompt: typeof settings.customSystemPrompt === 'string'

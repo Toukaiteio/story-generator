@@ -68,7 +68,7 @@ const agentName = computed(() => {
 
 const actionLabel = computed(() => {
   if (props.variant === 'focus') return tr('proposes focus change')
-  if (props.variant === 'change') return tr('requests project change')
+  if (props.variant === 'change') return tr('runs project tool')
   return tr('requests meeting end')
 })
 
@@ -97,7 +97,7 @@ const statusTag = computed(() => {
     if (s === 'applied') return { variant: 'success' as const, label: tr('Applied') }
     if (s === 'rejected' || s === 'failed') return { variant: 'danger' as const, label: tr(s === 'failed' ? 'Failed' : 'Rejected') }
     if (s === 'applying') return { variant: 'accent' as const, label: tr('Applying') }
-    return { variant: 'accent' as const, label: tr('Voting') }
+    return { variant: 'accent' as const, label: tr('Pending') }
   }
   if (props.variant === 'end' && props.endVote) {
     return props.endVote.status === 'ready'
@@ -143,7 +143,7 @@ function voteIcon(vote: string) {
 
       <div class="flex-1" />
 
-      <span class="text-[9px] text-text-muted tabular-nums">{{ approveCount }}/{{ totalPossible }}</span>
+      <span v-if="votes.length" class="text-[9px] text-text-muted tabular-nums">{{ approveCount }}/{{ totalPossible }}</span>
 
       <button
         class="flex items-center justify-center w-5 h-5 rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors"
@@ -170,7 +170,7 @@ function voteIcon(vote: string) {
       <p v-if="variant === 'focus'" class="text-[11px] text-text-secondary italic leading-relaxed">"{{ content }}"</p>
       <p v-else-if="variant === 'change' && changeVote" class="text-[11px] text-text-secondary leading-relaxed">
         <span class="font-semibold text-text-primary">{{ changeVote.request.scope }}</span>
-        <span v-if="changeVote.request.purpose" class="ml-1">鈥?{{ changeVote.request.purpose }}</span>
+        <span v-if="changeVote.request.purpose" class="ml-1">- {{ changeVote.request.purpose }}</span>
       </p>
       <p v-else-if="variant === 'end' && endVote" class="text-[11px] text-text-secondary italic leading-relaxed">"{{ content }}"</p>
 
@@ -232,8 +232,8 @@ function voteIcon(vote: string) {
           <Brain v-else :size="10" />
           <span>{{ tr('Execution') }}</span>
           <span class="opacity-70">
-            <span v-if="execSteps">路 {{ execSteps }} {{ tr('steps') }}</span>
-            <span v-if="exec.executionState === 'running'">路 {{ tr('running') }}</span>
+            <span v-if="execSteps">{{ execSteps }} {{ tr('steps') }}</span>
+            <span v-if="exec.executionState === 'running'">{{ tr('running') }}</span>
           </span>
           <BaseTag
             v-if="exec.executionState"

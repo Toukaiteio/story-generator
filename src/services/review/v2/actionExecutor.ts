@@ -18,6 +18,7 @@ import {
   normalizeChapterOutlinePatch,
   createToolMessage,
 } from '@/services/review/utils'
+import { createId } from '@/services/review/definitions'
 import type { ChangeRequest, MeetingContext, MeetingMessage } from './types'
 
 // ─── External deps interface ──────────────────────────────────────────────────
@@ -58,6 +59,9 @@ export async function executeChangeRequest(
   }
   if (normalized.target === 'characters') {
     return applyCharacters(normalized, action, project, deps)
+  }
+  if (normalized.target === 'chapter-draft') {
+    return applyChapterDraft(normalized, action, project, deps.context.chapter, deps)
   }
   return applyChapterPlan(normalized, action, project, deps.context.chapter, deps)
 }
@@ -162,6 +166,76 @@ async function applyCharacters(
   deps.onMessage(
     `${result}\nAll agents must treat this applied change as accepted source-of-truth.`,
     createToolMessage(action === 'delete' ? 'delete_characters' : action === 'create' ? 'create_characters' : 'update_characters', 'success', action === 'delete' ? 'Characters removed' : action === 'create' ? 'Characters created' : 'Characters updated', request.scope, request.purpose, before, after),
+  )
+  return result
+}
+
+// ─── Chapter Draft ────────────────────────────────────────────────────────────
+
+async function applyChapterDraft(
+  request: ChangeRequest,
+  action: string,
+  project: StoryProject,
+  chapter: Chapter | null | undefined,
+  deps: ExecutorDeps,
+): Promise<string> {
+  if (!chapter) throw new Error('No chapter is selected for chapter-draft changes.')
+
+  if (action === 'read') {
+    const result = `Returned Chapter ${chapter.index + 1} draft without modifying project files.`
+    deps.onMessage(
+      result,
+      createToolMessage('read_chapter_draft', 'success', 'Chapter draft fetched', request.scope, request.purpose, '', chapter.content || ''),
+    )
+    return result
+  }
+
+  deps.onProgress(`Preparing Chapter ${chapter.index + 1} draft update.`, 'running')
+  const before = chapter.content || ''
+  const nextContent = action === 'delete' ? '' : request.content.trim()
+  if (action !== 'delete' && !nextContent) {
+    throw new Error('Chapter-draft write changes need complete replacement draft content.')
+  }
+
+  const hasIssueSnapshot = Boolean(chapter.proofreadingIssues?.length && before !== nextContent)
+  const updatedChapter: Chapter = {
+    ...chapter,
+    content: nextContent,
+    polishedContent: '',
+    proofreadingIssuesStale: hasIssueSnapshot ? true : chapter.proofreadingIssuesStale,
+    contentVersions: hasIssueSnapshot
+      ? [
+          {
+            id: createId('chapter-version'),
+            label: 'Before meeting draft edit - proofreading issues valid',
+            content: before,
+            proofreadingIssues: chapter.proofreadingIssues.map(issue => ({ ...issue })),
+            createdAt: new Date().toISOString(),
+          },
+          ...(chapter.contentVersions || []),
+        ]
+      : (chapter.contentVersions || []),
+    status: nextContent.trim() ? 'draft' : 'outline',
+    updatedAt: new Date().toISOString(),
+  }
+
+  const chapters = project.chapters.map(c => c.id === chapter.id ? updatedChapter : c)
+  await saveWithRetry(() => deps.projectStore.updateProject(project.id, { chapters }))
+  await verifyPersistence(project.id, deps,
+    r => Array.isArray(r.chapters) && r.chapters.some(c =>
+      (c?.id === chapter.id || c?.index === chapter.index)
+      && String(c?.content || '') === nextContent,
+    ),
+    () => deps.projectStore.updateProject(project.id, { chapters }),
+  )
+
+  deps.onProgress(`Chapter ${chapter.index + 1} draft persistence verified.`, 'success')
+  const result = action === 'delete'
+    ? `Cleared Chapter ${chapter.index + 1} draft.`
+    : `Applied the approved change to Chapter ${chapter.index + 1} draft.`
+  deps.onMessage(
+    `${result}\nAll agents must treat this applied draft as accepted source-of-truth.`,
+    createToolMessage(action === 'delete' ? 'clear_chapter_draft' : 'replace_chapter_draft', 'success', action === 'delete' ? 'Chapter draft cleared' : 'Chapter draft updated', request.scope, request.purpose, before, nextContent),
   )
   return result
 }

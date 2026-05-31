@@ -254,7 +254,7 @@ function extractTaggedBlocks(content: string, tag: string) {
 
 function normalizeJsonStyleChangeRequest(parsed: any): ReviewChangeRequest | null {
 
-  const target: ReviewChangeTarget | null = parsed?.target === 'master-outline' || parsed?.target === 'chapter-plan' || parsed?.target === 'characters' || parsed?.target === 'consensus'
+  const target: ReviewChangeTarget | null = parsed?.target === 'master-outline' || parsed?.target === 'chapter-plan' || parsed?.target === 'chapter-draft' || parsed?.target === 'characters' || parsed?.target === 'consensus'
 
     ? parsed.target
 
@@ -764,7 +764,7 @@ export function extractChangeRequests(content: string): ReviewChangeRequest[] {
 
   const targetRaw = readField('target')
 
-  const target: ReviewChangeTarget | null = targetRaw === 'master-outline' || targetRaw === 'chapter-plan' || targetRaw === 'characters' || targetRaw === 'consensus' ? targetRaw : null
+  const target: ReviewChangeTarget | null = targetRaw === 'master-outline' || targetRaw === 'chapter-plan' || targetRaw === 'chapter-draft' || targetRaw === 'characters' || targetRaw === 'consensus' ? targetRaw : null
 
   const scope = readField('scope')
 
@@ -804,6 +804,8 @@ export function inferImplicitChangeRequest(
 
   const targetHints = {
 
+    chapterDraft: /(chapter[\s-]*(?:draft|content|text|body)|章节(?:正文|内容|草稿)|当前章(?:正文|内容|草稿)|本章(?:正文|内容|草稿))/i,
+
     chapterPlan: /(chapter[\s-]*(?:plan|outline)|章节(?:规划|计划|大纲)|当前章|本章)/i,
 
     characters: /(characters?|角色|人物|成员|cast)/i,
@@ -820,7 +822,11 @@ export function inferImplicitChangeRequest(
 
   let target: ReviewChangeTarget | null = null
 
-  if (targetHints.chapterPlan.test(cleaned) && options.hasChapter) {
+  if (targetHints.chapterDraft.test(cleaned) && options.hasChapter) {
+
+    target = 'chapter-draft'
+
+  } else if (targetHints.chapterPlan.test(cleaned) && options.hasChapter) {
 
     target = 'chapter-plan'
 
@@ -860,7 +866,7 @@ export function inferImplicitChangeRequest(
 
     action: 'update',
 
-    scope: target === 'chapter-plan' ? 'chapter-plan' : target,
+    scope: target === 'chapter-plan' ? 'chapter-plan' : target === 'chapter-draft' ? 'chapter-draft' : target,
 
     purpose: firstSentence.slice(0, 220),
 

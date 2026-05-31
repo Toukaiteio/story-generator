@@ -65,7 +65,13 @@ export function getReviewAgentDefinitions(project: StoryProject | null | undefin
         name: setting?.name?.trim() || definition.name,
         role: setting?.role?.trim() || definition.role,
         brief: setting?.brief?.trim() || definition.brief,
-        defaultModelRole: setting?.defaultModelRole === 'proofreader' ? 'proofreader' as const : definition.defaultModelRole,
+        defaultModelRole: setting?.defaultModelRole === 'proposerAgent'
+          ? 'proposerAgent' as const
+          : setting?.defaultModelRole === 'proofreader'
+            ? 'proofreader' as const
+            : setting?.defaultModelRole === 'chapterPlanner'
+              ? 'chapterPlanner' as const
+              : definition.defaultModelRole,
         systemPrompt: setting?.systemPrompt?.trim() || definition.systemPrompt,
       }
     })
@@ -78,7 +84,11 @@ export function getReviewAgentDefinitions(project: StoryProject | null | undefin
       name: setting.name?.trim() || 'Custom Agent',
       role: setting.role?.trim() || 'Custom role',
       brief: setting.brief?.trim() || 'Custom meeting participant.',
-      defaultModelRole: setting.defaultModelRole === 'proofreader' ? 'proofreader' : 'chapterPlanner',
+      defaultModelRole: setting.defaultModelRole === 'proposerAgent'
+        ? 'proposerAgent'
+        : setting.defaultModelRole === 'proofreader'
+          ? 'proofreader'
+          : 'chapterPlanner',
       systemPrompt: setting.systemPrompt?.trim() || setting.customSystemPrompt?.trim() || 'You are a custom story meeting agent. Provide concise, useful feedback based on the selected context.',
       custom: true,
     })

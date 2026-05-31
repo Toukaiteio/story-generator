@@ -106,9 +106,36 @@ type ProcessedMessage = ReviewPublicMessage & {
   _refs: { element: string; label: string }[]
 }
 
+function normalizeActionSnapshot(msg: any) {
+  if (msg.actionVoteSnapshot) return msg.actionVoteSnapshot
+  const snapshot = msg.actionSnapshot
+  if (!snapshot?.request) return undefined
+  return {
+    id: snapshot.id,
+    requestedByAgentId: snapshot.proposedByAgentId,
+    requestedByAgentName: snapshot.proposedByAgentName,
+    request: snapshot.request,
+    status: snapshot.status === 'running'
+      ? 'applying'
+      : snapshot.status === 'applied'
+        ? 'applied'
+        : snapshot.status === 'failed'
+          ? 'failed'
+          : 'rejected',
+    votes: [],
+    result: snapshot.result,
+    error: snapshot.error,
+    createdAt: snapshot.createdAt,
+    completedAt: snapshot.completedAt,
+    executionTimeline: [],
+    executionLedger: [],
+  }
+}
+
 const processedMessages = computed((): ProcessedMessage[] =>
   review.messages.value.map(msg => ({
     ...msg,
+    actionVoteSnapshot: normalizeActionSnapshot(msg),
     _clean: cleanMessage(msg.content),
     _refs: referenceLinks(msg.content),
   }))
@@ -317,15 +344,22 @@ watch(() => review.messages.value.length, async () => {
 
 <template>
   <div class="relative flex h-full min-h-0 overflow-hidden bg-surface-0">
-    <MeetingSettingsSidebar
+      <MeetingSettingsSidebar
       :show="showLeftSidebar"
       :focus="review.currentFocus.value"
       :context-options="contextOptions"
       :selected-context-elements="review.selectedContextElements.value"
       :queue-items="queueItems"
       :loading="review.loading.value"
+      :auto-continue="review.autoContinue.value"
+      :max-auto-rounds="review.maxAutoRounds.value"
+      :round-count="review.roundCount.value"
+      :verification-status="review.verificationSession.value?.status"
+      :verification-reason="review.verificationSession.value?.reason"
       @update:show="showLeftSidebar = $event"
       @update:focus="review.currentFocus.value = $event"
+      @update:auto-continue="review.setAutoContinue($event)"
+      @update:max-auto-rounds="review.setMaxAutoRounds($event)"
       @toggle-context="toggleContextElement"
       @reset="showResetConfirm = true"
       @start="startMeetingRound"
@@ -419,7 +453,7 @@ watch(() => review.messages.value.length, async () => {
                 variant="change"
                 :change-vote="item.group.lastVoteMessage!.actionVoteSnapshot"
                 :total-agents="review.agents.value.length"
-                :enable-agents="review.agents.value.filter(a => a.enabled).length"
+                :enabled-agents="review.agents.value.filter(a => a.enabled).length"
                 class="mt-4"
                 @approve="review.approveProposal"
                 @reject="(reason) => review.rejectProposal(reason)"
@@ -550,7 +584,7 @@ watch(() => review.messages.value.length, async () => {
             variant="focus"
             :proposal="review.pendingProposal.value"
             :total-agents="review.agents.value.length"
-            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :enabled-agents="review.agents.value.filter(a => a.enabled).length"
             :class="review.messages.value.length ? 'mt-4' : ''"
             @approve="review.approveProposal"
             @reject="(reason) => review.rejectProposal(reason)"
@@ -562,7 +596,7 @@ watch(() => review.messages.value.length, async () => {
             variant="change"
             :change-vote="review.actionVoteSession.value"
             :total-agents="review.agents.value.length"
-            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :enabled-agents="review.agents.value.filter(a => a.enabled).length"
             :class="(review.messages.value.length || review.pendingProposal.value) ? 'mt-4' : ''"
             @approve="review.approveProposal"
             @reject="(reason) => review.rejectProposal(reason)"
@@ -574,7 +608,7 @@ watch(() => review.messages.value.length, async () => {
             variant="end"
             :end-vote="review.endVoteSession.value"
             :total-agents="review.agents.value.length"
-            :enable-agents="review.agents.value.filter(a => a.enabled).length"
+            :enabled-agents="review.agents.value.filter(a => a.enabled).length"
             :class="(review.messages.value.length || review.pendingProposal.value || review.actionVoteSession.value) ? 'mt-4' : ''"
             @approve="review.approveEndVoteSession"
             @reject="(reason) => review.rejectEndVoteSession(reason)"

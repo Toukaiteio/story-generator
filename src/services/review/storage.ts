@@ -14,6 +14,7 @@ export function normalizePublicMessage(raw: any): ReviewPublicMessage | null {
     content,
     tool: raw.tool && typeof raw.tool === 'object' ? raw.tool : undefined,
     actionVoteSnapshot: raw.actionVoteSnapshot && typeof raw.actionVoteSnapshot === 'object' ? raw.actionVoteSnapshot : undefined,
+    actionSnapshot: raw.actionSnapshot && typeof raw.actionSnapshot === 'object' ? raw.actionSnapshot : undefined,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
   }
 }

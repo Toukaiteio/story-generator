@@ -1,6 +1,6 @@
 {
   "name": "story-generator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Multi-agent story creation system",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "electron:dev": "vite",
     "electron:build": "vite build && electron-builder",
+    "release:build": "vite build && electron-builder --publish never",
     "release": "vite build && electron-builder --publish always"
   },
   "build": {

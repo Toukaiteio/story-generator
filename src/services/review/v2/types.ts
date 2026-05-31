@@ -18,6 +18,7 @@ import type { StoryProject } from '@/types/project'
  * analysis — sub-agents analyzing in parallel
  * synthesis — master deciding and acting
  * action   — executing a change
+ * verify   — checking whether the original task is complete
  * ended    — terminal
  */
 export type MeetingPhase =
@@ -25,6 +26,7 @@ export type MeetingPhase =
   | 'analysis'
   | 'synthesis'
   | 'action'
+  | 'verify'
   | 'ended'
 
 // ─── Agent Role ──────────────────────────────────────────────────────────────
@@ -60,7 +62,7 @@ export type AgentIntent =
 
 // ─── Change Request ───────────────────────────────────────────────────────────
 
-export type ChangeTarget = 'master-outline' | 'chapter-plan' | 'characters' | 'consensus'
+export type ChangeTarget = 'master-outline' | 'chapter-plan' | 'chapter-draft' | 'characters' | 'consensus'
 export type ChangeAction = 'create' | 'read' | 'update' | 'delete'
 
 export interface ChangeRequest {
@@ -85,6 +87,22 @@ export interface ActionSession {
   error?: string
   createdAt: string
   completedAt?: string
+}
+
+// ─── Verification ────────────────────────────────────────────────────────────
+
+export type VerificationStatus = 'complete' | 'continue' | 'ask_user' | 'blocked'
+export type VerificationRisk = 'low' | 'medium' | 'high'
+
+export interface VerificationSession {
+  id: string
+  status: VerificationStatus
+  reason: string
+  remainingCriteria: string[]
+  nextFocus: string
+  risk: VerificationRisk
+  round: number
+  createdAt: string
 }
 
 // ─── User Clarification ───────────────────────────────────────────────────────
@@ -184,6 +202,10 @@ export interface MeetingState {
   messages: MeetingMessage[]
   actionSession: ActionSession | null
   clarificationSession: ClarificationSession | null
+  verificationSession: VerificationSession | null
   selectedContextElements: ContextElement[]
+  autoContinue: boolean
+  maxAutoRounds: number
+  roundCount: number
   meetingEnded: boolean
 }

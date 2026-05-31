@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and publish, e.g. v0.1.1'
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -15,12 +21,25 @@ jobs:
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
+
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $expectedTag = "v$packageVersion"
+
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+            Write-Error "Release tag '$env:RELEASE_TAG' does not match package.json version '$packageVersion'. Expected '$expectedTag'."
+            exit 1
+          }
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -34,8 +53,21 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build and publish
-        run: npm run release
+      - name: Build Windows package
+        run: npm run release:build
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Story Generator ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+          files: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          fail_on_unmatched_files: true
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
@@ -47,4 +79,3 @@ jobs:
             release/*.blockmap
             release/latest.yml
           if-no-files-found: warn
-

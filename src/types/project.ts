@@ -35,7 +35,7 @@ export interface ProjectReviewAgentSettings {
     name?: string
     role?: string
     brief?: string
-    defaultModelRole?: 'chapterPlanner' | 'proofreader'
+    defaultModelRole?: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
     modelValue?: string
     systemPrompt?: string
     customSystemPrompt?: string

@@ -28,6 +28,7 @@ export type MachineEvent =
   | { type: 'ANALYSIS_DONE' }
   | { type: 'MASTER_TURN_DONE'; result: AgentTurnResult }
   | { type: 'ACTION_APPLIED'; result: string }
+  | { type: 'VERIFY_DONE'; status: 'complete' | 'continue' | 'ask_user' | 'blocked'; reason: string }
   | { type: 'ACTION_FAILED'; error: string }
   | { type: 'USER_MESSAGE'; content: string }
   | { type: 'USER_END' }
@@ -127,10 +128,23 @@ export function createMeetingMachine() {
 
       case 'ACTION_APPLIED':
         return {
-          nextPhase: 'synthesis',
-          phaseState: { ...current, phase: 'synthesis', synthesisAttempts: 0 },
-          nextAgents: master ? [master.id] : [],
+          nextPhase: 'verify',
+          phaseState: { ...current, phase: 'verify', synthesisAttempts: 0 },
+          nextAgents: [],
           systemMessage: `Action applied. ${event.result}`,
+        }
+
+      case 'VERIFY_DONE':
+        return {
+          nextPhase: event.status === 'complete' ? 'idle' : event.status === 'continue' ? 'analysis' : 'idle',
+          phaseState: {
+            ...current,
+            phase: event.status === 'continue' ? 'analysis' : 'idle',
+            focus: event.status === 'continue' ? current.focus : current.focus,
+            synthesisAttempts: 0,
+          },
+          nextAgents: event.status === 'continue' ? subAgents.map(a => a.id) : [],
+          systemMessage: event.reason,
         }
 
       case 'ACTION_FAILED':
