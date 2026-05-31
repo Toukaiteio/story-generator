@@ -45,16 +45,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.14.0 --activate
+          pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Build Windows package
-        run: npm run release:build
+        run: pnpm run release:build
 
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
