@@ -5,16 +5,19 @@ import { StoryPlannerExpert } from './storyPlanner'
 import { ChapterTitlePlannerExpert } from './chapterTitlePlanner'
 import { ChapterPlannerExpert } from './chapterPlanner'
 import { WriterExpert } from './writer'
-import { EditingAIExpert } from './editingAI'
 import { ProofreaderExpert } from './proofreader'
 import { PolisherExpert } from './polisher'
 import { RelationshipTrackerExpert } from './relationshipTracker'
 import type { AgentType } from '@/types/agent'
 
-type RuntimeAgentType = Exclude<AgentType, 'skillAgent' | 'proposerAgent'>
+type RuntimeAgentType = Exclude<AgentType, 'skillAgent'>
 
 export { BaseAgent } from './base'
 export type { AgentResult } from './base'
+export { runPiAgent } from './piRuntime'
+export type { PiAgentRunOptions, PiAgentRunResult, PiToolStatus } from './piRuntime'
+export { createPiContextTransformer } from './piContext'
+export type { PiContextTransformOptions, PiContextTransformReport } from './piContext'
 
 export const agents = {
   outline: new OutlineExpert(),
@@ -24,7 +27,7 @@ export const agents = {
   chapterTitlePlanner: new ChapterTitlePlannerExpert(),
   chapterPlanner: new ChapterPlannerExpert(),
   writer: new WriterExpert(),
-  editingAI: new EditingAIExpert(),
+  editingAI: new DetailerExpert('editingAI', 'Editing AI'),
   proofreader: new ProofreaderExpert(),
   polisher: new PolisherExpert(),
   relationshipTracker: new RelationshipTrackerExpert(),

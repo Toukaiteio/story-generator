@@ -2,7 +2,7 @@ import type { StoryProject } from '@/types/project'
 import type { Character } from '@/types/character'
 import type { CharacterRelationshipEvent, ExtractedRelationshipEvent } from '@/types/relationship'
 import { getAgent } from '@/services/agent'
-import { extractJsonPayload } from '@/services/agent/validation'
+import { extractJsonPayload, validateCharacterRoleComposition } from '@/services/agent/validation'
 import { buildCharacterContextForTask, buildProjectRelationshipContext } from './context'
 import { getLinkedKnowledgeBases, preparePlanningRuntime, prepareProviderRuntime, getContextTokens } from './runtime'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
@@ -267,28 +267,6 @@ export function parseCharacterArray(items: any[], now: string): Character[] {
   })
 
   return characters
-}
-
-function validateCharacterRoleComposition(items: any[]): string[] {
-  const issues: string[] = []
-  let protagonistCount = 0
-  let antagonistCount = 0
-
-  for (const item of items) {
-    const role = typeof item?.role === 'string' ? item.role.trim().toLowerCase() : ''
-    if (role === 'protagonist') protagonistCount += 1
-    if (role === 'antagonist') antagonistCount += 1
-  }
-
-  if (protagonistCount !== 1) {
-    issues.push(`Character set must contain exactly one protagonist; found ${protagonistCount}.`)
-  }
-
-  if (antagonistCount < 1) {
-    issues.push('Character set must contain at least one antagonist or opposing force.')
-  }
-
-  return issues
 }
 
 export function resolveCharacterIdByName(characters: Character[], name: string): string | null {

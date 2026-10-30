@@ -1,13 +1,44 @@
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
+import { providerFetch } from './transport'
+import {
+  appendToolArgumentFragment,
+  createToolArgumentsBuffer,
+  finalizeToolArguments,
+  type ToolArgumentsBuffer,
+} from './toolArgs'
 
 type ResponsesInputItem = Record<string, unknown>
 type PendingFunctionCall = {
   itemId: string
   callId: string
   name: string
-  arguments: string
+  buffer: ToolArgumentsBuffer
+}
+
+function readResponseArguments(source: any): unknown {
+  const candidates = [source?.arguments, source?.parameters, source?.input]
+  let fallback: unknown
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue
+    if (fallback === undefined) fallback = candidate
+    if (typeof candidate === 'string') {
+      if (candidate.trim()) return candidate
+      continue
+    }
+    return candidate
+  }
+  return fallback
+}
+
+function appendResponseArguments(target: PendingFunctionCall, fragment: unknown) {
+  appendToolArgumentFragment(target.buffer, fragment)
+}
+
+function finalizePendingArguments(target: PendingFunctionCall): string {
+  return finalizeToolArguments(target.buffer)
+    ?? (target.buffer.argumentsText + target.buffer.stringTail)
 }
 
 export class OpenAIResponsesAdapter implements ProviderAdapter {
@@ -110,11 +141,18 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
       }
 
       if (item?.type === 'function_call') {
-        let args: any = {}
+        const argumentValue = readResponseArguments(item)
+        const rawArguments = typeof argumentValue === 'string' ? argumentValue.trim() : ''
+        let args: Record<string, any>
         try {
-          args = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments ?? {}
+          const parsed = rawArguments ? JSON.parse(rawArguments) : argumentValue ?? {}
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Tool arguments must be a JSON object')
+          }
+          args = parsed as Record<string, any>
         } catch (error) {
-          console.error('Failed to parse Responses tool call arguments:', error)
+          const reason = error instanceof Error ? error.message : String(error)
+          throw new Error(`Failed to parse arguments for tool ${String(item.name || 'unknown')}: ${reason}`)
         }
 
         const id = String(item.call_id || item.id || `call_${toolCalls.length + 1}`)
@@ -172,7 +210,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
   ): Promise<FunctionCallingResponse> {
     const url = `${this.buildBaseUrl(options)}/responses`
 
-    const response = await fetch(url, {
+    const response = await providerFetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
       signal: options.signal,
@@ -187,15 +225,20 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     return this.parseResponse(await response.json())
   }
 
-  private parseFunctionCall(item: any, argumentOverride?: string): ToolCall | null {
+  private parseFunctionCall(item: any, argumentOverride?: unknown): ToolCall | null {
     if (!item || item.type !== 'function_call') return null
 
-    let args: any = {}
+    let args: Record<string, any>
     try {
-      const rawArguments = argumentOverride ?? item.arguments ?? '{}'
-      args = typeof rawArguments === 'string' ? JSON.parse(rawArguments || '{}') : rawArguments ?? {}
+      const rawArguments = argumentOverride ?? readResponseArguments(item) ?? '{}'
+      const parsed = typeof rawArguments === 'string' ? JSON.parse(rawArguments || '{}') : rawArguments ?? {}
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Tool arguments must be a JSON object')
+      }
+      args = parsed as Record<string, any>
     } catch (error) {
-      console.error('Failed to parse Responses streamed tool call arguments:', error)
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`Failed to parse streamed arguments for tool ${String(item.name || 'unknown')}: ${reason}`)
     }
 
     const id = String(item.call_id || item.id || '')
@@ -217,7 +260,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     toolOptions?: ToolCallOptions
   ): Promise<void> {
     const url = `${this.buildBaseUrl(options)}/responses`
-    const response = await fetch(url, {
+    const response = await providerFetch(url, {
       method: 'POST',
       headers: this.buildHeaders(options),
       signal: options.signal,
@@ -246,6 +289,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
     let fullText = ''
     const completed = { response: null as FunctionCallingResponse | null }
     let finishReason: FunctionCallingResponse['finish_reason'] = 'stop'
+    let outputLimitReached = false
     let buffer = ''
 
     const handleEvent = (event: any) => {
@@ -269,21 +313,24 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
       if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
         const item = event.item
         const itemId = String(item.id || event.item_id || event.output_index || pendingCalls.size)
-        pendingCalls.set(itemId, {
+        const pending: PendingFunctionCall = {
           itemId,
           callId: String(item.call_id || item.id || itemId),
           name: String(item.name || ''),
-          arguments: typeof item.arguments === 'string' ? item.arguments : '',
-        })
+          buffer: createToolArgumentsBuffer(),
+        }
+        const initialArguments = readResponseArguments(item)
+        if (initialArguments !== undefined && initialArguments !== null) {
+          appendResponseArguments(pending, initialArguments)
+        }
+        pendingCalls.set(itemId, pending)
         return
       }
 
       if (type === 'response.function_call_arguments.delta') {
         const itemId = String(event.item_id || '')
         const current = pendingCalls.get(itemId)
-        if (current && typeof event.delta === 'string') {
-          current.arguments += event.delta
-        }
+        if (current) appendResponseArguments(current, event.delta ?? event.arguments ?? event.parameters)
         return
       }
 
@@ -293,10 +340,20 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
           itemId,
           callId: String(event.call_id || itemId),
           name: String(event.name || ''),
-          arguments: '',
+          buffer: createToolArgumentsBuffer(),
         }
-        if (typeof event.arguments === 'string') {
-          current.arguments = event.arguments
+        if (event.arguments !== undefined || event.parameters !== undefined) {
+          const argumentValue = event.arguments ?? event.parameters
+          if (typeof argumentValue === 'string') {
+            // The done event carries the authoritative complete arguments.
+            if (argumentValue.trim() || !current.buffer.argumentsText.trim()) {
+              current.buffer = createToolArgumentsBuffer()
+              appendResponseArguments(current, argumentValue)
+            }
+          } else if (argumentValue && typeof argumentValue === 'object') {
+            current.buffer = createToolArgumentsBuffer()
+            appendResponseArguments(current, argumentValue)
+          }
         }
         if (typeof event.name === 'string') {
           current.name = event.name
@@ -306,11 +363,10 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
           id: current.itemId,
           call_id: current.callId,
           name: current.name,
-          arguments: current.arguments,
+          arguments: finalizePendingArguments(current),
         })
         if (toolCall) {
           toolCalls.push(toolCall)
-          callbacks.onToolCall(toolCall)
         }
         pendingCalls.delete(itemId)
         return
@@ -320,7 +376,6 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
         const toolCall = this.parseFunctionCall(event.item)
         if (toolCall && !toolCalls.some(existing => existing.id === toolCall.id)) {
           toolCalls.push(toolCall)
-          callbacks.onToolCall(toolCall)
         }
         return
       }
@@ -332,6 +387,7 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
 
       if (type === 'response.incomplete') {
         finishReason = 'length'
+        outputLimitReached = true
         return
       }
 
@@ -359,6 +415,17 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
         }
       }
 
+      // Flush a final SSE frame even when the upstream response does not end
+      // with a newline.
+      buffer += decoder.decode()
+      for (const line of buffer.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data: ')) continue
+        const raw = trimmed.slice(6)
+        if (raw === '[DONE]') continue
+        handleEvent(JSON.parse(raw))
+      }
+
       const completedResponse = completed.response
       const finalToolCalls = toolCalls.length ? toolCalls : completedResponse?.tool_calls ?? []
       callbacks.onComplete({
@@ -368,7 +435,11 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
         finish_reason: finalToolCalls.length ? 'tool_calls' : completedResponse?.finish_reason ?? finishReason,
       })
     } catch (error: any) {
-      callbacks.onError(error instanceof Error ? error : new Error(String(error)))
+      const reason = error instanceof Error ? error.message : String(error)
+      const lengthHint = outputLimitReached
+        ? ' The provider stopped at the output token limit, so the tool arguments may be incomplete. Use a section edit or a model with a larger output limit.'
+        : ''
+      callbacks.onError(new Error(`${reason}${lengthHint}`))
     }
   }
 

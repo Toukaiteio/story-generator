@@ -3,13 +3,14 @@ import type { Content, Part, FunctionDeclaration, Tool, GenerateContentConfig } 
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
+import { withProviderFetch } from './transport'
 
 export class GoogleAdapter implements ProviderAdapter {
   private getClient(options: ChatOptions): GoogleGenAI {
-    return new GoogleGenAI({
-      apiKey: options.apiKey,
-      httpOptions: options.baseUrl ? { baseUrl: options.baseUrl } : undefined,
-    })
+    return withProviderFetch(() => new GoogleGenAI({
+        apiKey: options.apiKey,
+        httpOptions: options.baseUrl ? { baseUrl: options.baseUrl } : undefined,
+      }))
   }
 
   private buildSystem(messages: ChatMessage[]): string | undefined {
@@ -17,20 +18,36 @@ export class GoogleAdapter implements ProviderAdapter {
     return systemMsg?.content ?? undefined
   }
 
+  private parseFunctionResponse(content: string | null | undefined): Record<string, unknown> {
+    const raw = content ?? ''
+    if (!raw.trim()) return { result: '' }
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Use text wrapper below.
+    }
+    return { result: raw }
+  }
+
   private buildContents(messages: ChatMessage[]): Content[] {
     const contents: Content[] = []
+    const toolNamesById = new Map<string, string>()
 
     for (const m of messages) {
       if (m.role === 'system') continue
 
       if (m.role === 'tool') {
+        const toolCallId = m.tool_call_id ?? ''
         contents.push({
           role: 'user',
           parts: [{
             functionResponse: {
-              id: m.tool_call_id ?? '',
-              name: '',
-              response: { result: m.content ?? '' },
+              id: toolCallId,
+              name: toolNamesById.get(toolCallId) ?? '',
+              response: this.parseFunctionResponse(m.content),
             },
           }],
         })
@@ -43,6 +60,7 @@ export class GoogleAdapter implements ProviderAdapter {
           parts.push({ text: m.content })
         }
         for (const tc of m.tool_calls) {
+          toolNamesById.set(tc.id, tc.function.name)
           parts.push({
             functionCall: {
               id: tc.id,
@@ -193,16 +211,20 @@ export class GoogleAdapter implements ProviderAdapter {
 
         if (chunk.functionCalls) {
           for (const fc of chunk.functionCalls) {
-            const id = fc.id ?? `${fc.name}-${Date.now()}`
-            if (!seenToolCalls.has(id)) {
-              const toolCall: ToolCall = {
-                id,
-                name: fc.name ?? '',
-                arguments: (fc.args ?? {}) as Record<string, any>,
+            const id = fc.id ?? `google-tool-${String(fc.name || 'function')}`
+            const existing = seenToolCalls.get(id)
+            if (existing) {
+              if (fc.name) existing.name = fc.name
+              if (fc.args && typeof fc.args === 'object' && !Array.isArray(fc.args)) {
+                existing.arguments = { ...existing.arguments, ...(fc.args as Record<string, any>) }
               }
-              seenToolCalls.set(id, toolCall)
-              callbacks.onToolCall(toolCall)
+              continue
             }
+            seenToolCalls.set(id, {
+              id,
+              name: fc.name ?? '',
+              arguments: (fc.args ?? {}) as Record<string, any>,
+            })
           }
         }
       }

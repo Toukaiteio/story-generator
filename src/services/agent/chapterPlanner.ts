@@ -1,8 +1,6 @@
-import { BaseAgent, type AgentResult } from './base'
+import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
-import { injectCustomSystemPrompt } from '@/services/systemPrompt'
-import { containsMetaCommentary } from './validation'
 
 export class ChapterPlannerExpert extends BaseAgent {
   type: AgentType = 'chapterPlanner'
@@ -172,46 +170,6 @@ Call create_chapter_outline now to complete or refine the conflict, keyEvents, c
 
   protected getFinalToolNames(_context: Record<string, any>): string[] {
     return ['create_chapter_outline']
-  }
-
-  async execute(context: Record<string, any>, onToken?: (token: string) => void): Promise<AgentResult> {
-    if (!this.model) throw new Error(`${this.name} has no model assigned`)
-
-    const retryLimit = this.getValidationRetryLimit()
-    let previousResponse = ''
-    let lastIssues: string[] = []
-
-    for (let attempt = 0; attempt <= retryLimit; attempt++) {
-      const userPrompt = attempt === 0
-        ? this.buildPrompt(context)
-        : `The previous response was invalid. Issues:\n${lastIssues.join('\n')}\nPlease try again using the tool.`
-
-      const messages = [
-        { role: 'system' as const, content: injectCustomSystemPrompt(this.getSystemPrompt()) },
-        { role: 'user' as const, content: userPrompt },
-      ]
-
-      const result = await this.executeWithTools(
-        messages,
-        this.getTools(),
-        context,
-        onToken,
-        this.temperature
-      )
-
-      if (context._chapterOutlineData) {
-        return {
-          content: JSON.stringify(context._chapterOutlineData),
-          tokenUsage: { prompt: 0, completion: 0 },
-          ...this.getCompressionReport(),
-        }
-      }
-
-      previousResponse = result.content
-      lastIssues = this.validateOutput(result.content, null, context)
-    }
-
-    throw new Error(`Failed to generate chapter outline for chapter ${context.targetChapter.chapterNumber}: ${lastIssues.join('; ')}`)
   }
 
   parseResponse(response: string): any {

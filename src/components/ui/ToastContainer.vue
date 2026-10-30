@@ -27,7 +27,7 @@ const colors: Record<string, string> = {
         <div
           v-for="toast in ui.toasts"
           :key="toast.id"
-          class="flex items-start gap-3 px-4 py-3 rounded-lg border border-surface-4 bg-surface-1 shadow-xl pointer-events-auto min-w-0 max-w-full"
+          class="pointer-events-auto flex max-w-full min-w-0 items-start gap-3 rounded-md border border-surface-4 bg-surface-2 px-4 py-3"
         >
           <component :is="icons[toast.type]" :size="18" :class="`${colors[toast.type]} mt-0.5 shrink-0`" />
           <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-text-primary">{{ toast.message }}</span>

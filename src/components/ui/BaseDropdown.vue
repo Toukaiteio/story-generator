@@ -58,11 +58,11 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
       <Transition name="fade">
         <div
           v-if="open"
-          class="fixed z-[200] min-w-[160px] py-1 rounded-lg border border-surface-4 bg-surface-2 shadow-xl"
+          class="fixed z-[200] min-w-[170px] overflow-hidden rounded-md border border-surface-4 bg-surface-2 py-1"
           :style="{ top: position.top + 'px', left: position.left + 'px' }"
         >
           <template v-for="(item, i) in items" :key="i">
-            <div v-if="item.divider" class="h-px bg-surface-4 my-1" />
+            <div v-if="item.divider" class="my-1 h-px bg-white/[0.07]" />
             <button
               v-else
               type="button"
@@ -71,7 +71,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
                 item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
                 item.danger
                   ? 'text-danger hover:bg-danger-subtle'
-                  : 'text-text-primary hover:bg-surface-3',
+                  : 'text-text-primary hover:bg-white/[0.06]',
               ]"
               :disabled="item.disabled"
               @click="handleItemClick(item)"

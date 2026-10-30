@@ -2,13 +2,18 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { BookOpen, FileDown, FileText, MoreVertical, Plus, RefreshCw, Search, Save, Trash2, Upload } from 'lucide-vue-next'
 import { useUiStore } from '@/stores/ui'
-import { useKnowledgeStore } from '@/stores/knowledge'
-import { useProviderStore } from '@/stores/provider'
-import { providerManager } from '@/services/provider'
 import { useToast } from '@/composables/useToast'
-import { buildKnowledgeBaseFileName, parseKnowledgeBaseFile, serializeKnowledgeBaseFile } from '@/services/knowledge/file'
-import { convertKnowledgeDocumentToMarkdown } from '@/services/knowledge/convert'
-import { decodeProviderModelRef, encodeProviderModelRef } from '@/services/provider/catalog'
+import {
+  useKnowledgeLibrary,
+  useModelCatalog,
+  useProviderRuntime,
+  buildKnowledgeBaseFileName,
+  parseKnowledgeBaseFile,
+  serializeKnowledgeBaseFile,
+  convertKnowledgeDocumentToMarkdown,
+  decodeProviderModelRef,
+  encodeProviderModelRef,
+} from '@/app'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
@@ -23,8 +28,9 @@ type DeleteTarget =
   | { type: 'document'; id: string }
 
 const ui = useUiStore()
-const knowledgeStore = useKnowledgeStore()
-const providerStore = useProviderStore()
+const knowledgeStore = useKnowledgeLibrary()
+const providerStore = useModelCatalog()
+const providerManager = useProviderRuntime()
 const toast = useToast()
 
 const searchQuery = ref('')
@@ -537,11 +543,11 @@ watch(
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
+  <div class="app-page flex flex-col">
+    <div class="app-toolbar">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Knowledge Base') }}</h1>
-        <p class="text-xs text-text-secondary mt-0.5">{{ ui.text('Manage reference material, import documents, and reuse it in generation.') }}</p>
+        <h1 class="app-toolbar-title">{{ ui.text('Knowledge Base') }}</h1>
+        <p class="app-toolbar-meta">{{ knowledgeStore.sortedKnowledgeBases.length }} {{ ui.text('total') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <BaseButton variant="secondary" size="sm" @click="openImportBaseDialog">
@@ -559,12 +565,12 @@ watch(
       </div>
     </div>
 
-    <div class="flex-1 min-h-0 grid grid-cols-[280px_minmax(0,1fr)] gap-4 p-6">
-      <aside class="min-h-0 rounded-lg border border-surface-4 bg-surface-2 flex flex-col overflow-hidden">
-        <div class="px-4 py-3 border-b border-surface-4 flex items-center justify-between gap-3">
+    <div class="app-content grid grid-cols-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <aside class="app-panel flex min-h-0 flex-col overflow-hidden">
+        <div class="app-panel-header flex items-center justify-between gap-3">
           <div>
-            <p class="text-sm font-semibold text-text-primary">{{ ui.text('Knowledge Bases') }}</p>
-            <p class="text-xs text-text-secondary">{{ knowledgeStore.sortedKnowledgeBases.length }} {{ ui.text('total') }}</p>
+            <p class="app-section-title">{{ ui.text('Knowledge Bases') }}</p>
+            <p class="mt-1 text-xs app-muted">{{ knowledgeStore.sortedKnowledgeBases.length }} {{ ui.text('total') }}</p>
           </div>
           <BaseButton variant="ghost" size="sm" @click="openCreateBaseDrawer">
             <Plus :size="14" />
@@ -576,8 +582,8 @@ watch(
           <button
             v-for="base in knowledgeStore.sortedKnowledgeBases"
             :key="base.id"
-            class="w-full rounded-lg border p-3 text-left transition-colors duration-100"
-            :class="activeBase?.id === base.id ? 'border-accent bg-accent-subtle' : 'border-surface-4 bg-surface-1 hover:border-surface-5'"
+            class="app-list-item p-3"
+            :class="activeBase?.id === base.id ? 'app-list-item--active' : ''"
             @click="handleBaseSelect(base.id)"
           >
             <div class="flex items-start justify-between gap-2">
@@ -618,7 +624,7 @@ watch(
       </aside>
 
       <main class="min-h-0 flex flex-col gap-4">
-        <section v-if="activeBase" class="rounded-lg border border-surface-4 bg-surface-2 p-4">
+        <section v-if="activeBase" class="app-panel p-4">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
@@ -690,9 +696,9 @@ watch(
           </div>
         </section>
 
-        <section v-if="activeBase" class="flex-1 min-h-0 grid grid-cols-[320px_minmax(0,1fr)] gap-4">
-          <div class="min-h-0 rounded-lg border border-surface-4 bg-surface-2 flex flex-col overflow-hidden">
-            <div class="px-4 py-3 border-b border-surface-4">
+        <section v-if="activeBase" class="grid min-h-0 flex-1 grid-cols-1 gap-4 2xl:grid-cols-[320px_minmax(0,1fr)]">
+          <div class="app-panel flex min-h-0 flex-col overflow-hidden">
+            <div class="app-panel-header">
               <BaseInput v-model="searchQuery" placeholder="Search documents..." :icon="Search" />
             </div>
 
@@ -700,8 +706,8 @@ watch(
               <button
                 v-for="doc in filteredDocuments"
                 :key="doc.id"
-                class="w-full rounded-lg border p-3 text-left transition-colors duration-100"
-                :class="selectedDocumentId === doc.id ? 'border-accent bg-accent-subtle' : 'border-surface-4 bg-surface-1 hover:border-surface-5'"
+                class="app-list-item p-3"
+                :class="selectedDocumentId === doc.id ? 'app-list-item--active' : ''"
                 @click="selectDocument(doc.id)"
               >
                 <div class="flex items-start justify-between gap-2">
@@ -736,7 +742,7 @@ watch(
                 <div
                   v-for="result in searchMatches.slice(0, 5)"
                   :key="result.chunk.id"
-                  class="rounded-md border border-surface-4 bg-surface-1 p-2"
+                  class="app-subpanel p-2"
                 >
                   <div class="text-2xs font-medium text-text-secondary mb-1">{{ ui.text('Score') }} {{ result.score }}</div>
                   <div class="text-xs text-text-primary line-clamp-4 whitespace-pre-wrap">{{ result.highlight }}</div>
@@ -745,7 +751,7 @@ watch(
             </div>
           </div>
 
-          <div class="min-h-0 rounded-lg border border-surface-4 bg-surface-2 p-4 overflow-y-auto">
+          <div class="app-panel min-h-0 overflow-y-auto p-4">
             <template v-if="selectedDocument">
               <div class="flex items-start justify-between gap-4 mb-4">
                 <div class="min-w-0">
@@ -770,7 +776,7 @@ watch(
 
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <BaseInput v-model="documentForm.name" label="Document Name" />
-                <div class="rounded-md border border-surface-4 bg-surface-1 px-3 py-2">
+                <div class="app-subpanel px-3 py-2">
                   <p class="text-xs font-medium text-text-secondary">{{ ui.text('Content Format') }}</p>
                   <p class="text-sm text-text-primary mt-1">{{ ui.text('Stored as markdown text inside the knowledge base') }}</p>
                 </div>
@@ -812,18 +818,18 @@ watch(
         <Transition name="slide-right" appear>
           <div
             v-if="showBaseDrawer"
-            class="absolute right-0 top-0 h-full w-[420px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(460px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">{{ baseDialogTitle }}</h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="showBaseDrawer = false"
               >
                 <FileText :size="16" />
               </button>
             </div>
-            <div class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex flex-1 flex-col gap-4 overflow-y-auto">
               <BaseInput v-model="baseForm.name" label="Base Name" placeholder="e.g., Worldbuilding Notes" />
               <BaseTextarea
                 v-model="baseForm.description"
@@ -833,7 +839,7 @@ watch(
                 :auto-resize="true"
               />
             </div>
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="showBaseDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton variant="primary" size="sm" @click="saveBase">
                 {{ baseDialogConfirm }}
@@ -853,18 +859,18 @@ watch(
         <Transition name="slide-right" appear>
           <div
             v-if="showTextDrawer"
-            class="absolute right-0 top-0 h-full w-[420px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(460px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">{{ ui.text('Add Text Entry') }}</h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="showTextDrawer = false"
               >
                 <FileText :size="16" />
               </button>
             </div>
-            <div class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex flex-1 flex-col gap-4 overflow-y-auto">
               <BaseInput v-model="textForm.name" label="Entry Name" placeholder="e.g., World History" />
               <BaseTextarea
                 v-model="textForm.content"
@@ -874,7 +880,7 @@ watch(
                 :auto-resize="true"
               />
             </div>
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="showTextDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton variant="primary" size="sm" :disabled="!textForm.name.trim() || !textForm.content.trim()" @click="saveTextDocument">
                 {{ ui.text('Save') }}

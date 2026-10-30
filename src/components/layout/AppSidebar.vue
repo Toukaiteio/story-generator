@@ -45,10 +45,10 @@ function isActive(item: NavItem): boolean {
 </script>
 
 <template>
-  <aside class="flex flex-col w-12 h-full bg-surface-1 border-r border-surface-4 shrink-0">
+  <aside class="relative z-10 flex h-full w-12 shrink-0 flex-col border-r border-surface-3 bg-surface-1">
     <div class="flex flex-col items-center flex-1 py-2 gap-1">
-      <div class="w-8 h-8 flex items-center justify-center mb-2">
-        <PenTool :size="20" class="text-accent" />
+      <div class="mb-2 flex h-8 w-8 items-center justify-center rounded-lg border border-accent/20 bg-accent/10 text-accent">
+        <PenTool :size="18" />
       </div>
 
       <BaseTooltip
@@ -61,8 +61,8 @@ function isActive(item: NavItem): boolean {
           :class="[
             'w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-100',
             isActive(item)
-              ? 'bg-surface-3 text-text-primary'
-              : 'text-text-muted hover:text-text-secondary hover:bg-surface-3/50',
+              ? 'bg-accent-subtle text-accent'
+              : 'text-text-muted hover:text-text-secondary hover:bg-surface-3',
           ]"
           @click="navigate(item)"
         >

@@ -426,12 +426,6 @@ export class ProviderManager {
       signal,
     }
 
-    const streamedToolCallKeys = new Set<string>()
-    const toolCallKey = (toolCall: { id?: string | null; name?: string | null }) =>
-      toolCall.id?.trim()
-        ? `id:${toolCall.id.trim()}`
-        : `name:${String(toolCall.name || '').trim()}`
-
     let lastError: Error | null = null
     const toolChoiceCompat = this.buildToolChoiceCompatState(toolOptions)
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
@@ -456,13 +450,9 @@ export class ProviderManager {
             streamError = null
             await match.adapter.streamWithTools(requestMessages, options, tools, {
               ...callbacks,
-              onToolCall: toolCall => {
-                const key = toolCallKey(toolCall)
-                if (key !== 'name:') {
-                  streamedToolCallKeys.add(key)
-                }
-                callbacks.onToolCall(toolCall)
-              },
+              // Adapter streams may expose a tool name before its JSON arguments
+              // are complete. Only the final response is safe to execute.
+              onToolCall: () => {},
               onToken: token => {
                 paragraphGuard.push(token)
               },
@@ -527,15 +517,14 @@ export class ProviderManager {
         }
 
         const finalResponse = applyDsmlCompatToFunctionResponse(await runStreamWithTools(messages, 0))
+        const emittedToolCallKeys = new Set<string>()
         for (const toolCall of finalResponse.tool_calls) {
-          const key = toolCallKey(toolCall)
-          if (key !== 'name:' && streamedToolCallKeys.has(key)) {
-            continue
-          }
+          const key = toolCall.id?.trim()
+            ? `id:${toolCall.id.trim()}`
+            : `name:${String(toolCall.name || '').trim()}:${JSON.stringify(toolCall.arguments ?? {})}`
+          if (emittedToolCallKeys.has(key)) continue
+          emittedToolCallKeys.add(key)
           callbacks.onToolCall(toolCall)
-          if (key !== 'name:') {
-            streamedToolCallKeys.add(key)
-          }
         }
         callbacks.onComplete(finalResponse)
         return

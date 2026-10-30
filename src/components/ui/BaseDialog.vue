@@ -53,23 +53,23 @@ onBeforeUnmount(() => {
     <Transition name="backdrop">
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4"
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/72 p-4"
         @mousedown.self="handleBackdropClick"
       >
         <Transition name="dialog" appear>
           <div
             v-if="modelValue"
-            class="bg-surface-1 rounded-xl border border-surface-4 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            class="flex max-h-[85vh] flex-col overflow-hidden rounded-md border border-surface-4 bg-surface-1"
             :style="{ width, maxWidth: '100%' }"
             role="dialog"
             aria-modal="true"
           >
-            <div v-if="title || closable" class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div v-if="title || closable" class="flex shrink-0 items-center justify-between border-b border-surface-4 bg-surface-0 px-5 py-4">
               <h2 v-if="title" class="text-base font-semibold text-text-primary">{{ translatedTitle }}</h2>
               <div v-else />
               <button
                 v-if="closable"
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors duration-150 hover:bg-white/[0.05] hover:text-text-primary"
                 @click="close"
               >
                 <X :size="16" />
@@ -78,7 +78,7 @@ onBeforeUnmount(() => {
             <div class="flex-1 overflow-y-auto px-5 py-4">
               <slot />
             </div>
-            <div v-if="$slots.footer" class="px-5 py-3 border-t border-surface-4 shrink-0">
+            <div v-if="$slots.footer" class="shrink-0 border-t border-surface-4 bg-surface-0 px-5 py-3">
               <slot name="footer" />
             </div>
           </div>

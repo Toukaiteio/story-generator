@@ -11,8 +11,8 @@ withDefaults(defineProps<{
 <template>
   <div
     :class="[
-      'rounded-lg border border-surface-4 bg-surface-2 transition-all duration-100',
-      hoverable ? 'cursor-pointer hover:border-surface-5 hover:bg-surface-3 active:scale-[0.99]' : '',
+      'overflow-hidden rounded-md border border-surface-4 bg-surface-1 transition-colors duration-150',
+      hoverable ? 'cursor-pointer hover:border-surface-5 hover:bg-surface-2' : '',
       {
         'p-0': padding === 'none',
         'p-3': padding === 'sm',

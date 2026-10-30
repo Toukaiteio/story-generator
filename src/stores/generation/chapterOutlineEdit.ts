@@ -1,14 +1,66 @@
-import { providerManager } from '@/services/provider'
 import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { handleTodoListToolCall, isTodoListTool, getTodoListTool, type AgentTodoListState } from '@/services/agent/todolist'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import { useProjectStore } from '@/stores/project'
 import type { ToolDefinition } from '@/services/provider'
-import type { FunctionCallingResponse, ToolCallOptions } from '@/services/provider/types'
+import type { ToolCall, ToolResult } from '@/services/provider/tools'
 import type { ChapterOutline } from '@/types/chapter'
 import type { ProviderModelRef, ChatMessage } from '@/types/provider'
 import type { ToolStatusUpdate } from './types'
-import { fitToolMessagesForModel, getUsableAgentModelRef } from './helpers'
+import { getUsableAgentModelRef } from './helpers'
+import { runPiAgent } from '@/services/agent/piRuntime'
+
+function readTextArgument(args: Record<string, any> | undefined, names: string[]): { value: string; key: string | null } {
+  if (!args || typeof args !== 'object') return { value: '', key: null }
+  for (const name of names) {
+    if (typeof args[name] !== 'string') continue
+    const value = args[name].trim()
+    if (value) return { value, key: name }
+  }
+  return { value: '', key: null }
+}
+
+function readListArgument(args: Record<string, any> | undefined, names: string[], fallback: string[] = []): { value: string[]; key: string | null } {
+  if (!args || typeof args !== 'object') return { value: fallback, key: null }
+  for (const name of names) {
+    if (!Object.prototype.hasOwnProperty.call(args, name)) continue
+    const normalized = normalizeOutlineList(args[name], [])
+    if (normalized.length) return { value: normalized, key: name }
+  }
+  return { value: fallback, key: null }
+}
+
+function normalizeOutlineList(value: unknown, fallback: string[] = []) {
+  if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean)
+  if (typeof value === 'string') {
+    return value.split(/\r?\n|[,，;；]/).map(item => item.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean)
+  }
+  return fallback
+}
+
+function normalizeOutlineField(value: unknown): string {
+  const raw = String(value || '').trim()
+  const normalized = raw.toLowerCase().replace(/[\s_-]+/g, '')
+  const aliases: Record<string, string> = {
+    chaptertitle: 'title',
+    goal: 'objective',
+    chapterobjective: 'objective',
+    centralconflict: 'conflict',
+    plotbeats: 'keyEvents',
+    beats: 'keyEvents',
+    events: 'keyEvents',
+    keyevents: 'keyEvents',
+    actions: 'characterActions',
+    characteractions: 'characterActions',
+    reveals: 'infoReveals',
+    informationreveals: 'infoReveals',
+    inforeveals: 'infoReveals',
+    hook: 'endingHook',
+    ending: 'endingHook',
+    endinghook: 'endingHook',
+  }
+  return aliases[normalized] ?? raw
+}
 
 export async function editChapterOutlineWithTool(
   prompt: string,
@@ -37,7 +89,6 @@ export async function editChapterOutlineWithTool(
       endingHook: options.currentOutline?.endingHook || '',
     },
   }
-
   const outlineToText = (state = currentState) => [
     `Title: ${state.title}`,
     `Objective: ${state.outline.objective}`,
@@ -47,63 +98,36 @@ export async function editChapterOutlineWithTool(
     `Info Reveals:\n${state.outline.infoReveals.map(item => `- ${item}`).join('\n')}`,
     `Ending Hook: ${state.outline.endingHook}`,
   ].join('\n')
-
   const cloneResult = (summary: string, toolName: string) => ({
     title: currentState.title,
     outline: JSON.parse(JSON.stringify(currentState.outline)) as ChapterOutline,
     summary,
     toolName,
   })
-
-  const normalizeList = (value: unknown, fallback: string[] = []) => {
-    if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean)
-    if (typeof value === 'string') {
-      return value
-        .split(/\r?\n|,/)
-        .map(item => item.replace(/^\s*[-*]\s+/, '').trim())
-        .filter(Boolean)
-    }
-    return fallback
-  }
-
   const buildTitleFromContext = () => {
-    const candidates = [
-      currentState.title,
-      options.currentTitle,
-      currentState.outline.objective,
-      currentState.outline.conflict,
-    ]
-    for (const raw of candidates) {
-      const text = String(raw || '').trim()
-      if (!text) continue
-      const firstLine = text.split(/\r?\n/)[0]?.trim() || ''
-      if (!firstLine) continue
+    for (const raw of [currentState.title, options.currentTitle, currentState.outline.objective, currentState.outline.conflict]) {
+      const firstLine = String(raw || '').split(/\r?\n/)[0]?.trim() || ''
       const cleaned = firstLine.replace(/^title\s*[:：]\s*/i, '').trim()
       if (cleaned) return cleaned.slice(0, 80)
     }
     return 'Untitled Chapter'
   }
-
   const ensureNonEmptyTitle = () => {
-    const current = String(currentState.title || '').trim()
-    if (current) return current
-    const fallback = buildTitleFromContext()
-    currentState.title = fallback
-    return fallback
+    if (String(currentState.title || '').trim()) return currentState.title
+    currentState.title = buildTitleFromContext()
+    return currentState.title
   }
-
   const getMissingOutlineFields = () => {
     const missing: string[] = []
     if (!String(currentState.title || '').trim()) missing.push('title')
     if (!String(currentState.outline.objective || '').trim()) missing.push('objective')
     if (!String(currentState.outline.conflict || '').trim()) missing.push('conflict')
-    if (!Array.isArray(currentState.outline.keyEvents) || !currentState.outline.keyEvents.some(item => String(item).trim())) missing.push('keyEvents')
-    if (!Array.isArray(currentState.outline.characterActions) || !currentState.outline.characterActions.some(item => String(item).trim())) missing.push('characterActions')
-    if (!Array.isArray(currentState.outline.infoReveals) || !currentState.outline.infoReveals.some(item => String(item).trim())) missing.push('infoReveals')
+    if (!currentState.outline.keyEvents.some(item => String(item).trim())) missing.push('keyEvents')
+    if (!currentState.outline.characterActions.some(item => String(item).trim())) missing.push('characterActions')
+    if (!currentState.outline.infoReveals.some(item => String(item).trim())) missing.push('infoReveals')
     if (!String(currentState.outline.endingHook || '').trim()) missing.push('endingHook')
     return missing
   }
-
   const tools: ToolDefinition[] = [
     getTodoListTool(),
     ...getRelationshipQueryTools(),
@@ -113,11 +137,7 @@ export async function editChapterOutlineWithTool(
       parameters: {
         type: 'object',
         properties: {
-          field: {
-            type: 'string',
-            enum: ['all', 'title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'],
-            description: 'The outline field to read. Defaults to all.',
-          },
+          field: { type: 'string', enum: ['all', 'title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'], description: 'The outline field to read. Defaults to all.' },
         },
         required: [],
       },
@@ -128,19 +148,9 @@ export async function editChapterOutlineWithTool(
       parameters: {
         type: 'object',
         properties: {
-          field: {
-            type: 'string',
-            enum: ['title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'],
-          },
-          value: {
-            type: 'string',
-            description: 'Replacement text for scalar fields, or newline-separated list items for list fields.',
-          },
-          items: {
-            type: 'array',
-            description: 'Replacement list items for keyEvents, characterActions, or infoReveals.',
-            items: { type: 'string' },
-          },
+          field: { type: 'string', enum: ['title', 'objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook'] },
+          value: { type: 'string', description: 'Replacement text for scalar fields, or newline-separated list items for list fields.' },
+          items: { type: 'array', description: 'Replacement list items for list fields.', items: { type: 'string' } },
           summary: { type: 'string' },
         },
         required: ['field'],
@@ -165,7 +175,6 @@ export async function editChapterOutlineWithTool(
       },
     },
   ]
-
   const messages: ChatMessage[] = [
     {
       role: 'system',
@@ -175,69 +184,31 @@ export async function editChapterOutlineWithTool(
         'Prefer Function Calling for every tool-eligible step; do not solve outline edits in plain assistant text.',
         'A complete chapter plan must always include: title, objective, conflict, keyEvents, characterActions, infoReveals, and endingHook.',
         'Use get_chapter_outline before editing if the exact field content matters.',
-        'Prefer replace_chapter_outline_field when the user asks to adjust one field or one list.',
-        'Use rewrite_chapter_outline when multiple fields need coordinated changes.',
-        'Never edit chapter prose. These tools only modify title and outline fields.',
-        'Do not reply with the revised outline in plain text. Complete the edit by calling an outline replacement tool.',
+        'Prefer replace_chapter_outline_field for localized edits and rewrite_chapter_outline for coordinated changes.',
+        'Never edit chapter prose. Do not reply with the revised outline in plain text.',
       ].join('\n')),
     },
     { role: 'user', content: prompt },
   ]
 
   try {
-    const currentMessages = [...messages]
-    const toolContext: Record<string, any> = {
-      _onTodoListUpdated: options.onTodoList,
-    }
+    const toolContext: Record<string, any> = { _onTodoListUpdated: options.onTodoList }
     const activeProject = useProjectStore().activeProject
-    const getOpenTodos = () => {
-      const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-      return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
-    }
-    const getDoneTodos = () => {
-      const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-      return items.filter((item: any) => item?.status === 'done')
-    }
-    const looksLikeEndedResponse = (text: string) => {
-      const normalized = (text || '').toLowerCase()
-      return /(\bdone\b|\bcompleted\b|\bfinished\b|\bfinal\b|已完成|完成|结束|总结)/i.test(normalized)
+    const getOpenTodos = () => (Array.isArray(toolContext._todoList) ? toolContext._todoList : [])
+      .filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
+    const getDoneTodos = () => (Array.isArray(toolContext._todoList) ? toolContext._todoList : [])
+      .filter((item: any) => item?.status === 'done')
+    const publishTodoList = async () => {
+      await options.onTodoList?.({ agent: 'Vibe AI', updatedAt: new Date().toISOString(), items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [] })
     }
     const buildTodoResumePrompt = (reason: string) => {
-      const doneItems = getDoneTodos()
-      const openItems = getOpenTodos()
-      const nextItem = openItems.find((item: any) => item?.status === 'in_progress') || openItems[0]
-      const doneText = doneItems.length
-        ? doneItems.map((item: any) => `- [done] ${item.id}: ${item.title}`).join('\n')
-        : '- (none)'
-      const openText = openItems.length
-        ? openItems.map((item: any) => `- [${item.status || 'todo'}] ${item.id}: ${item.title}`).join('\n')
-        : '- (none)'
-      const nextText = nextItem ? `${nextItem.id}: ${nextItem.title}` : '(no pending item)'
-      return [
-        reason,
-        'Continue execution now. Do not stop yet.',
-        'Call update_todolist to sync progress, then continue outline tool calls until all required fields are complete.',
-        '',
-        'Completed todo items:',
-        doneText,
-        '',
-        'Open todo items:',
-        openText,
-        '',
-        `Current next item: ${nextText}`,
-      ].join('\n')
-    }
-    const publishTodoList = async () => {
-      if (typeof options.onTodoList !== 'function') return
-      await options.onTodoList({
-        agent: 'Vibe AI',
-        updatedAt: new Date().toISOString(),
-        items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
-      })
+      const done = getDoneTodos().map((item: any) => `- [done] ${item.id}: ${item.title}`).join('\n') || '- (none)'
+      const open = getOpenTodos().map((item: any) => `- [${item.status || 'todo'}] ${item.id}: ${item.title}`).join('\n') || '- (none)'
+      const next = getOpenTodos()[0]
+      return [reason, 'Continue execution now. Do not stop yet.', 'Call update_todolist to sync progress, then continue outline tool calls until all required fields are complete.', '', 'Completed todo items:', done, '', 'Open todo items:', open, '', `Current next item: ${next ? `${next.id}: ${next.title}` : '(no pending item)'}`].join('\n')
     }
     const autoCloseRemainingTodos = async () => {
       const items = Array.isArray(toolContext._todoList) ? [...toolContext._todoList] : []
-      if (!items.length) return false
       let changed = false
       for (const item of items) {
         if (item?.status === 'done' || item?.status === 'blocked') continue
@@ -245,292 +216,179 @@ export async function editChapterOutlineWithTool(
         item.notes = 'Auto-closed after successful outline edit tool execution.'
         changed = true
       }
-      if (!changed) return false
+      if (!changed) return
       toolContext._todoList = items
       await publishTodoList()
-      options.onToolStatus?.({
-        name: 'update_todolist',
-        status: 'warning',
-        detail: 'Todo list was auto-closed after successful outline edit to avoid retry deadlock.',
-      })
-      return true
+      options.onToolStatus?.({ name: 'update_todolist', status: 'warning', detail: 'Todo list was auto-closed after successful outline edit.' })
     }
-    const forceToolChoice = (name: string): ToolCallOptions => ({
-      toolChoice: { type: 'function', function: { name } },
-    })
-    let hasOutlineChange = false
-    const outlineToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
-      if (round === 0) return forceToolChoice('update_todolist')
-      if (pendingFinalResult && getOpenTodos().length) return forceToolChoice('update_todolist')
-      if (!hasOutlineChange && round >= 2) return forceToolChoice('rewrite_chapter_outline')
-      return undefined
-    }
-
     let pendingFinalResult: { title: string; outline: ChapterOutline; summary: string; toolName: string } | null = null
-    for (let round = 0; round < 6; round++) {
-      if (pendingFinalResult) {
-        ensureNonEmptyTitle()
-        const missingFields = getMissingOutlineFields()
-        if (!missingFields.length) {
-          const openTodos = getOpenTodos()
-          if (!openTodos.length) {
-            return pendingFinalResult
-          }
-          currentMessages.push({
-            role: 'user',
-            content: buildTodoResumePrompt(
-              `Outline fields are complete but todo remains open (${openTodos.length}).`
-            ),
-          })
-          continue
-        }
-        options.onToolStatus?.({
-          name: pendingFinalResult.toolName,
-          status: 'warning',
-          detail: `Outline is still incomplete: ${missingFields.join(', ')}. Requesting auto-repair.`,
-        })
-        currentMessages.push({
-          role: 'user',
-          content: `The outline is still incomplete. Missing required fields: ${missingFields.join(', ')}. Call outline tools again now to fill every missing field. Do not finish until all required fields are non-empty.`,
-        })
-        pendingFinalResult = null
-        continue
+    let hasOutlineChange = false
+    let round = 0
+
+    const executeTool = async (toolCall: ToolCall): Promise<ToolResult> => {
+      if (isTodoListTool(toolCall.name)) {
+        const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+        await publishTodoList()
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
+        return result
+      }
+      const relationshipResult = activeProject ? await handleRelationshipQueryTool(toolCall, activeProject) : null
+      if (relationshipResult) {
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+        return { tool_call_id: toolCall.id, content: relationshipResult.content }
       }
 
-      let streamedContent = ''
-      const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 4096)
-      const toolOptions = outlineToolChoiceForRound(round)
-      const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
-        providerManager.streamWithTools(
-          outboundMessages,
-          modelRef,
-          tools,
-          {
-            onToken: token => {
-              streamedContent += token
-              options.onToken?.(token)
-            },
-            onReasoningToken: token => options.onReasoningToken?.(token),
-            onToolCall: toolCall => options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Preparing tool call.' }),
-            onToolResult: () => {},
-            onComplete: resolve,
-            onError: reject,
-          },
-          4096,
-          0.35,
-          toolOptions,
-          options.signal
-        ).catch(reject)
-      })
-
-      if (streamedContent && response.content == null) response.content = streamedContent
-
-      if (!response.tool_calls.length) {
-        const assistantText = response.content || ''
-        currentMessages.push({ role: 'assistant', content: assistantText || null, reasoning_content: response.reasoning_content ?? null })
-        if (pendingFinalResult && getOpenTodos().length && looksLikeEndedResponse(assistantText)) {
-          currentMessages.push({
-            role: 'user',
-            content: buildTodoResumePrompt(
-              'You appear to have ended early while pending work still exists in todolist.'
-            ),
-          })
-          continue
-        }
-        currentMessages.push({
-          role: 'user',
-          content: round >= 3
-            ? 'Call rewrite_chapter_outline now with all required fields (title, objective, conflict, keyEvents, characterActions, infoReveals, endingHook). Do not return plain text.'
-            : 'Use an outline tool to complete the request. Do not return outline text directly.',
-        })
-        continue
-      }
-
-      currentMessages.push({
-        role: 'assistant',
-        content: response.content || null,
-        reasoning_content: response.reasoning_content ?? null,
-        tool_calls: response.tool_calls.map(toolCall => ({
-          id: toolCall.id,
-          type: 'function',
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
-      })
-
-      for (const toolCall of response.tool_calls) {
-        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Running tool.' })
-
-        if (isTodoListTool(toolCall.name)) {
-          const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
-          await publishTodoList()
-          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail: 'Todo list updated.' })
-          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: result.content })
-          continue
-        }
-
-        const relationshipResult = activeProject
-          ? await handleRelationshipQueryTool(toolCall, activeProject)
-          : null
-        if (relationshipResult) {
-          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
-          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: relationshipResult.content })
-          continue
-        }
-
-        if (toolCall.name === 'get_chapter_outline') {
-          const field = String(toolCall.arguments?.field || 'all')
-          const value = field === 'all'
-            ? outlineToText()
-            : field === 'title'
-              ? currentState.title
-              : listFields.has(field)
-                ? (currentState.outline as any)[field].join('\n')
-                : scalarFields.has(field)
-                  ? (currentState.outline as any)[field]
-                  : ''
-          const result = value || field === 'all'
-            ? { ok: true, field, content: value }
-            : { ok: false, error: `Unknown outline field: ${field}` }
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: result.ok ? 'success' : 'error',
-            detail: result.ok ? `Read ${field}.` : result.error,
-          })
-          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-          continue
-        }
-
-        if (toolCall.name === 'replace_chapter_outline_field') {
-          const field = String(toolCall.arguments?.field || '')
-          if (!scalarFields.has(field) && !listFields.has(field)) {
-            const result = { ok: false, error: `Unknown outline field: ${field}` }
-            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
-            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-            continue
-          }
-
-          const before = field === 'title'
+      if (toolCall.name === 'get_chapter_outline') {
+        const field = String(toolCall.arguments?.field || 'all')
+        const value = field === 'all'
+          ? outlineToText()
+          : field === 'title'
             ? currentState.title
             : listFields.has(field)
               ? (currentState.outline as any)[field].join('\n')
-              : (currentState.outline as any)[field]
-
-          if (field === 'title') {
-            currentState.title = String(toolCall.arguments?.value ?? '').trim() || currentState.title
-          } else if (listFields.has(field)) {
-            ;(currentState.outline as any)[field] = normalizeList(toolCall.arguments?.items ?? toolCall.arguments?.value, (currentState.outline as any)[field])
-          } else {
-            ;(currentState.outline as any)[field] = String(toolCall.arguments?.value ?? '').trim()
-          }
-          ensureNonEmptyTitle()
-
-          const after = field === 'title'
-            ? currentState.title
-            : listFields.has(field)
-              ? (currentState.outline as any)[field].join('\n')
-              : (currentState.outline as any)[field]
-          const result = { ok: true, field, title: currentState.title, outline: currentState.outline }
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: 'success',
-            detail: `Updated ${field}.`,
-            before,
-            after,
-          })
-          pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : `Updated ${field}.`, toolCall.name)
-          hasOutlineChange = true
-          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-          ensureNonEmptyTitle()
-          continue
-        }
-
-        if (toolCall.name === 'rewrite_chapter_outline') {
-          const requiredArgs: Array<keyof ChapterOutline> = ['objective', 'conflict', 'keyEvents', 'characterActions', 'infoReveals', 'endingHook']
-          const missingArgs = requiredArgs.filter((key) => {
-            const value = (toolCall.arguments as any)?.[key]
-            if (key === 'keyEvents' || key === 'characterActions' || key === 'infoReveals') {
-              return !normalizeList(value).length
-            }
-            return !String(value ?? '').trim()
-          })
-          if (missingArgs.length) {
-            const result = { ok: false, error: `Missing required arguments for rewrite_chapter_outline: ${missingArgs.join(', ')}` }
-            options.onToolStatus?.({
-              callId: toolCall.id,
-              name: toolCall.name,
-              status: 'error',
-              detail: result.error,
-            })
-            currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-            currentMessages.push({
-              role: 'user',
-              content: `rewrite_chapter_outline failed because required arguments were missing: ${missingArgs.join(', ')}. Retry rewrite_chapter_outline with all required fields filled.`,
-            })
-            continue
-          }
-
-          const before = outlineToText()
-          currentState.title = String(toolCall.arguments?.title ?? currentState.title).trim() || currentState.title
-          currentState.outline = {
-            objective: String(toolCall.arguments?.objective ?? '').trim(),
-            conflict: String(toolCall.arguments?.conflict ?? '').trim(),
-            keyEvents: normalizeList(toolCall.arguments?.keyEvents),
-            characterActions: normalizeList(toolCall.arguments?.characterActions),
-            infoReveals: normalizeList(toolCall.arguments?.infoReveals),
-            endingHook: String(toolCall.arguments?.endingHook ?? '').trim(),
-          }
-          ensureNonEmptyTitle()
-          const after = outlineToText()
-          const result = { ok: true, title: currentState.title, outline: currentState.outline }
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: 'success',
-            detail: 'Prepared complete outline revision.',
-            before,
-            after,
-          })
-          pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : 'Rewrote chapter outline.', toolCall.name)
-          hasOutlineChange = true
-          currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify(result) })
-          ensureNonEmptyTitle()
-          continue
-        }
-
-        currentMessages.push({ role: 'tool', tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: `Unsupported tool: ${toolCall.name}` }) })
+              : scalarFields.has(field)
+                ? (currentState.outline as any)[field]
+                : ''
+        const result = value || field === 'all' ? { ok: true, field, content: value } : { ok: false, error: `Unknown outline field: ${field}` }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.ok ? 'success' : 'error', detail: result.ok ? `Read ${field}.` : result.error })
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
       }
 
-      if (pendingFinalResult) {
+      if (toolCall.name === 'replace_chapter_outline_field') {
+        const field = normalizeOutlineField(toolCall.arguments?.field)
+        if (!scalarFields.has(field) && !listFields.has(field)) {
+          const result = { ok: false, error: `Unknown outline field: ${field}` }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const before = field === 'title' ? currentState.title : listFields.has(field) ? (currentState.outline as any)[field].join('\n') : (currentState.outline as any)[field]
+        if (field === 'title') {
+          const value = readTextArgument(toolCall.arguments, ['value', 'title', 'chapterTitle']).value
+          if (!value) return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: 'value is required when replacing the title field.' }) }
+          currentState.title = value
+        } else if (listFields.has(field)) {
+          const aliases: Record<string, string[]> = {
+            keyEvents: ['items', 'value', 'keyEvents', 'plotBeats', 'beats', 'events'],
+            characterActions: ['items', 'value', 'characterActions', 'actions'],
+            infoReveals: ['items', 'value', 'infoReveals', 'reveals', 'informationReveals'],
+          }
+          const value = readListArgument(toolCall.arguments, aliases[field] ?? ['items', 'value']).value
+          if (!value.length) return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: `items or value is required when replacing ${field}.` }) }
+          ;(currentState.outline as any)[field] = value
+        } else {
+          const aliases: Record<string, string[]> = {
+            objective: ['value', 'objective', 'goal', 'chapterObjective'],
+            conflict: ['value', 'conflict', 'centralConflict'],
+            endingHook: ['value', 'endingHook', 'hook', 'ending'],
+          }
+          const value = readTextArgument(toolCall.arguments, aliases[field] ?? ['value']).value
+          if (!value) return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: false, error: `value is required when replacing ${field}.` }) }
+          ;(currentState.outline as any)[field] = value
+        }
         ensureNonEmptyTitle()
-        const missingFields = getMissingOutlineFields()
-        if (!missingFields.length) {
-          if (getOpenTodos().length) {
-            await autoCloseRemainingTodos()
-          }
-          if (!getOpenTodos().length) {
-            return pendingFinalResult
-          }
-        }
+        const after = field === 'title' ? currentState.title : listFields.has(field) ? (currentState.outline as any)[field].join('\n') : (currentState.outline as any)[field]
+        const result = { ok: true, field, title: currentState.title, outline: currentState.outline }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `Updated ${field}.`, before, after })
+        pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : `Updated ${field}.`, toolCall.name)
+        hasOutlineChange = true
+        if (!getMissingOutlineFields().length) await autoCloseRemainingTodos()
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
       }
+
+      if (toolCall.name === 'rewrite_chapter_outline') {
+        const objective = readTextArgument(toolCall.arguments, ['objective', 'goal', 'chapterObjective']).value
+        const conflict = readTextArgument(toolCall.arguments, ['conflict', 'centralConflict']).value
+        const keyEvents = readListArgument(toolCall.arguments, ['keyEvents', 'plotBeats', 'beats', 'events']).value
+        const characterActions = readListArgument(toolCall.arguments, ['characterActions', 'actions']).value
+        const infoReveals = readListArgument(toolCall.arguments, ['infoReveals', 'reveals', 'informationReveals']).value
+        const endingHook = readTextArgument(toolCall.arguments, ['endingHook', 'hook', 'ending']).value
+        const missing = [objective ? '' : 'objective', conflict ? '' : 'conflict', keyEvents.length ? '' : 'keyEvents', characterActions.length ? '' : 'characterActions', infoReveals.length ? '' : 'infoReveals', endingHook ? '' : 'endingHook'].filter(Boolean)
+        if (missing.length) {
+          const result = { ok: false, error: `Missing required arguments for rewrite_chapter_outline: ${missing.join(', ')}` }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const before = outlineToText()
+        currentState.title = readTextArgument(toolCall.arguments, ['title', 'chapterTitle']).value || currentState.title
+        currentState.outline = { objective, conflict, keyEvents, characterActions, infoReveals, endingHook }
+        ensureNonEmptyTitle()
+        const result = { ok: true, title: currentState.title, outline: currentState.outline }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Prepared complete outline revision.', before, after: outlineToText() })
+        pendingFinalResult = cloneResult(typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : 'Rewrote chapter outline.', toolCall.name)
+        hasOutlineChange = true
+        await autoCloseRemainingTodos()
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+      }
+
+      const result = { ok: false, error: `Unsupported tool: ${toolCall.name}` }
+      options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+      return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
     }
 
-    if (pendingFinalResult) {
-      ensureNonEmptyTitle()
-      const missingFields = getMissingOutlineFields()
-      if (!missingFields.length) {
-        if (getOpenTodos().length) {
-          await autoCloseRemainingTodos()
+    await runPiAgent({
+      modelRef,
+      messages,
+      tools,
+      maxTokens: 4096,
+      temperature: 0.35,
+      contextTokens: undefined,
+      signal: options.signal,
+      executeTool,
+      onToken: token => options.onToken?.(token),
+      onReasoningToken: token => options.onReasoningToken?.(token),
+      onToolStatus: status => {
+        if (status.status === 'running') {
+          options.onToolStatus?.({ callId: status.callId, name: status.name, status: 'running', detail: 'Preparing tool call.' })
+          return
         }
-        return pendingFinalResult
-      }
-      throw new Error(`Vibe AI could not complete the outline edit after retrying. Missing required fields: ${missingFields.join(', ')}`)
+        // Argument validation happens before executeTool, so failures never
+        // produce a tool-level status. Surface them instead of leaving the
+        // call stuck at "running".
+        if (status.status === 'error') {
+          options.onToolStatus?.({
+            callId: status.callId,
+            name: status.name,
+            status: 'error',
+            detail: status.detail || status.result?.content || 'Tool call failed.',
+          })
+        }
+      },
+      // Do not force tool_choice here. Some OpenAI-compatible relays honor the
+      // forced function name but drop the arguments, producing an unusable
+      // call. The turn prompts below still require a tool and let the model
+      // choose the one it can populate correctly.
+      forceToolName: () => null,
+      streamAssistantText: false,
+      maxRounds: 6,
+      workflowName: 'Chapter outline edit',
+      stopAfterToolCallRound: async () => {
+        ensureNonEmptyTitle()
+        if (!pendingFinalResult || getMissingOutlineFields().length) return false
+        if (getOpenTodos().length) await autoCloseRemainingTodos()
+        return getMissingOutlineFields().length === 0 && getOpenTodos().length === 0
+      },
+      onTurnEnd: async turn => {
+        round = turn.round
+        if (!turn.toolCalls.length) {
+          return {
+            followUp: pendingFinalResult && getOpenTodos().length
+              ? buildTodoResumePrompt('The outline edit is prepared, but the todo list is still open.')
+              : round >= 3
+                ? 'Call rewrite_chapter_outline now with all required fields. Do not return plain text.'
+                : 'Use an outline tool to complete the request. Do not return outline text directly.',
+          }
+        }
+        if (pendingFinalResult && getMissingOutlineFields().length === 0 && getOpenTodos().length === 0) return undefined
+        return { steer: pendingFinalResult ? buildTodoResumePrompt('Continue until the outline and todo list are complete.') : 'Continue with the outline tools until all required fields are complete.' }
+      },
+    })
+
+    ensureNonEmptyTitle()
+    const missingFields = getMissingOutlineFields()
+    if (!pendingFinalResult || missingFields.length) {
+      throw new Error(`Vibe AI could not complete the outline edit. Missing required fields: ${missingFields.join(', ') || 'outline replacement'}`)
     }
-    throw new Error('Vibe AI could not complete the outline edit after retrying.')
+    return pendingFinalResult
   } catch (error: any) {
     options.onToolStatus?.({ name: 'rewrite_chapter_outline', status: 'error', detail: error?.message || 'Unknown error' })
     throw new Error(`Outline edit error: ${error?.message || 'Unknown error'}`)

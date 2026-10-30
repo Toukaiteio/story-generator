@@ -44,7 +44,7 @@ watch(() => props.modelValue, () => {
 
 <template>
   <div class="flex flex-col gap-1.5">
-    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ translatedLabel }}</label>
+    <label v-if="label" class="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">{{ translatedLabel }}</label>
     <textarea
       ref="textareaRef"
       :value="modelValue"
@@ -52,8 +52,8 @@ watch(() => props.modelValue, () => {
       :rows="rows"
       :disabled="disabled"
       :class="[
-        'w-full px-3 py-2 rounded-md border text-sm bg-surface-1 text-text-primary placeholder:text-text-muted outline-none transition-all duration-100 resize-none overflow-y-auto',
-        focused ? 'border-accent ring-1 ring-accent/20' : 'border-surface-4 hover:border-surface-5',
+        'w-full px-3 py-2 rounded-md border bg-surface-1 text-sm text-text-primary placeholder:text-text-muted outline-none transition-all duration-150 resize-none overflow-y-auto',
+        focused ? 'border-accent' : 'border-surface-4 hover:border-surface-5',
         error ? 'border-danger' : '',
         disabled ? 'opacity-50 cursor-not-allowed' : '',
       ]"

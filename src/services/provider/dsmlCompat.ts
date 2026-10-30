@@ -57,6 +57,12 @@ function parseInvokeArguments(invokeBody: string): Record<string, any> {
     const [, name, rawValue] = match
     args[name] = parseJsonWithFallback(rawValue)
   }
+  if (Object.keys(args).length === 0) {
+    const parsed = parseJsonWithFallback(normalized)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, any>
+    }
+  }
   return args
 }
 
@@ -86,8 +92,9 @@ function parseLongcatJsonCall(inner: string): ToolCall | null {
   try {
     const parsed = JSON.parse(trimmed)
     const name = typeof parsed?.name === 'string' ? parsed.name.trim() : ''
-    const args = parsed?.arguments && typeof parsed.arguments === 'object' && !Array.isArray(parsed.arguments)
-      ? parsed.arguments
+    const argumentValue = parsed?.arguments ?? parsed?.parameters ?? parsed?.input
+    const args = argumentValue && typeof argumentValue === 'object' && !Array.isArray(argumentValue)
+      ? argumentValue
       : {}
     if (!name) return null
     return {

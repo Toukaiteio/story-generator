@@ -116,7 +116,7 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
         properties: {
           chapterIndex: {
             type: 'number',
-            description: 'Zero-based chapter index. Use -1 for initial state before chapter 1.',
+            description: 'Optional zero-based chapter index. Use -1 for initial state before chapter 1. Omit to use the latest available relationship state.',
           },
           characterName: {
             type: 'string',
@@ -131,7 +131,7 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
             description: 'Maximum number of relationships to return.',
           },
         },
-        required: ['chapterIndex'],
+        required: [],
       },
     },
     {
@@ -168,19 +168,19 @@ export function getRelationshipQueryTools(): ToolDefinition[] {
           },
           fromName: {
             type: 'string',
-            description: 'Source character name.',
+            description: 'Source character name. Provide either fromName or fromId.',
           },
           fromId: {
             type: 'string',
-            description: 'Source character ID.',
+            description: 'Source character ID. Provide either fromId or fromName.',
           },
           toName: {
             type: 'string',
-            description: 'Target character name.',
+            description: 'Target character name. Provide either toName or toId.',
           },
           toId: {
             type: 'string',
-            description: 'Target character ID.',
+            description: 'Target character ID. Provide either toId or toName.',
           },
         },
         required: [],

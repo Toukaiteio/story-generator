@@ -3,7 +3,7 @@ import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, countWords } from './validation'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
-import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
+import { buildWritingFormatInstruction } from '@/services/writingFormat'
 import { getProofreadingSegmentTaskInstruction } from '@/services/generation/proofreadingTools'
 
 export class ProofreaderExpert extends BaseAgent {

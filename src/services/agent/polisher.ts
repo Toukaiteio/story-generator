@@ -1,7 +1,7 @@
 import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
-import { containsMetaCommentary, countWords } from './validation'
+import { countWords } from './validation'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import { buildWritingFormatInstruction, sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 
@@ -142,7 +142,7 @@ Tools available:
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { content, chapterTitle, chapterNumber, characters, language, style, writingFormat, proofreadingIssues, range } = context
+    const { content, chapterTitle, chapterNumber, characters, language, style, writingFormat, proofreadingIssues, humanizerFindings, range } = context
 
     const isChunked = !!range
     const rangeInfo = range ? `\nProcessing segment: part ${range.index + 1}/${range.total}, estimated tokens ${range.tokenStart}-${range.tokenEnd} of ${range.tokenTotal}.` : ''
@@ -154,14 +154,17 @@ Tools available:
       ).join('\n\n')}\n`
     }
 
+    const humanizerSection = humanizerFindings
+      ? `\nHumanizer tells to remove:\n${humanizerFindings}\nRewrite the flagged prose so it reads like a person wrote it. Sentence-level rewriting is allowed for these tells. Keep every fact, story beat, and character voice.\n`
+      : ''
+
     if (isChunked) {
       return `Polish this chapter segment for prose quality and address any issues:
 
 Chapter: ${chapterNumber ? `${chapterNumber}. ` : ''}${chapterTitle}${rangeInfo}
 Language: ${language || 'English'}
 Format: ${writingFormat || 'plaintext'}
-${issuesSection || '\nNo specific issue was assigned to this segment. Return the segment unchanged through polish_complete.\n'}
-
+${issuesSection}${humanizerSection}${issuesSection || humanizerSection ? '' : '\nNo issue was assigned to this segment. Return the segment unchanged through polish_complete.\n'}
 Compact Character Directory:
 ${characters || 'No characters'}
 
@@ -170,7 +173,7 @@ ${content}
 
 Use get_character_profile or relationship query tools only for specific character facts needed in this segment.
 
-Only change text needed to fix the listed issues or the explicit user adjustment. Do not perform broad style rewrites, do not reorder paragraphs, and do not add or remove scene content.
+Only change text needed to fix the listed issues or the explicit user adjustment. Do not reorder paragraphs or add or remove scene content.
 Use fix_section only for targeted fixes. When done with this segment, call polish_complete with only the polished segment text in finalContent. Do not output polished prose outside tool arguments.
 For every issue listed above, include an item in issueResults using that issue id and status fixed, ignored, or failed.`
     }
@@ -182,8 +185,7 @@ Primary Language: ${language || 'English'}
 ${style ? `Target Style Guide:\n${style}` : ''}
 
 ${buildWritingFormatInstruction(writingFormat, style)}
-${issuesSection}
-
+${issuesSection}${humanizerSection}
 Compact Character Directory:
 ${characters || 'No characters'}
 

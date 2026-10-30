@@ -74,7 +74,7 @@ export function getVibePlanningTools(): ToolDefinition[] {
         properties: {
           title: { type: 'string', description: 'Optional story title suggestion.' },
           synopsis: { type: 'string', description: 'Optional short synopsis.' },
-          outline: { type: 'string', description: 'The complete replacement master story outline.' },
+          outline: { type: 'string', description: 'Required. The complete replacement master story outline as a plain string. Put the full outline in this exact field, not in content, storyOutline, masterOutline, or summary.' },
           summary: { type: 'string', description: 'Short summary of the outline change.' },
         },
         required: ['outline'],
@@ -88,6 +88,7 @@ export function getVibePlanningTools(): ToolDefinition[] {
         properties: {
           characters: {
             type: 'array',
+            description: 'Required. Complete replacement character list. Use this exact field name: characters.',
             items: {
               type: 'object',
               properties: {

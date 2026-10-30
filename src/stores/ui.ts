@@ -54,7 +54,6 @@ export const useUiStore = defineStore('ui', () => {
       ? persisted.customSystemPrompt
       : DEFAULT_CUSTOM_SYSTEM_PROMPT
   )
-  const meetingProposerPrompt = ref<string>('')
   const aiSidebarWidth = ref<number>(normalizeAiSidebarWidth(persisted.aiSidebarWidth))
   const unsavedWorkspaceNodes = ref<Record<string, boolean>>({})
   const chapterEditorDrafts = ref<Record<string, ChapterEditorDraft>>({})
@@ -106,10 +105,6 @@ export const useUiStore = defineStore('ui', () => {
 
   function setCustomSystemPrompt(value: string) {
     customSystemPrompt.value = value
-  }
-
-  function setMeetingProposerPrompt(value: string) {
-    meetingProposerPrompt.value = value
   }
 
   function setAiSidebarWidth(value: number) {
@@ -210,7 +205,6 @@ export const useUiStore = defineStore('ui', () => {
     vibeModelRef,
     editingAiModelRef,
     customSystemPrompt,
-    meetingProposerPrompt,
     aiSidebarWidth,
     unsavedWorkspaceNodes,
     chapterEditorDrafts,
@@ -227,7 +221,6 @@ export const useUiStore = defineStore('ui', () => {
     setVibeModelRef,
     setEditingAiModelRef,
     setCustomSystemPrompt,
-    setMeetingProposerPrompt,
     setAiSidebarWidth,
     t,
     text,

@@ -3,12 +3,15 @@ import type AnthropicSDK from '@anthropic-ai/sdk'
 import type { ChatMessage } from '@/types/provider'
 import type { ProviderAdapter, ChatOptions, StreamCallbacks, FunctionCallingResponse, StreamWithToolsCallbacks, ToolCallOptions } from './types'
 import type { ToolDefinition, ToolCall } from './tools'
+import { providerFetch } from './transport'
 
 export class AnthropicAdapter implements ProviderAdapter {
   private getClient(options: ChatOptions): Anthropic {
     return new Anthropic({
       apiKey: options.apiKey,
       baseURL: options.baseUrl,
+      dangerouslyAllowBrowser: true,
+      fetch: providerFetch,
     })
   }
 
@@ -166,16 +169,6 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       stream.on('text', (text) => {
         callbacks.onToken(text)
-      })
-
-      stream.on('streamEvent', (event) => {
-        if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-          callbacks.onToolCall({
-            id: event.content_block.id,
-            name: event.content_block.name,
-            arguments: {},
-          })
-        }
       })
 
       stream.on('message', (message) => {

@@ -1,15 +1,140 @@
-import { providerManager } from '@/services/provider'
+import { providerManager, type ToolDefinition } from '@/services/provider'
 import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 import { countWords } from '@/services/agent/validation'
 import { getChapterRegion } from '@/services/generation/proofreadingTools'
 import { handleTodoListToolCall, isTodoListTool, getTodoListTool, type AgentTodoListState } from '@/services/agent/todolist'
 import { getRelationshipQueryTools, handleRelationshipQueryTool } from '@/services/relationship/tools'
 import { useProjectStore } from '@/stores/project'
-import type { ToolDefinition } from '@/services/provider'
-import type { FunctionCallingResponse, ToolCallOptions } from '@/services/provider/types'
+import type { ToolCall, ToolResult } from '@/services/provider/tools'
 import type { ProviderModelRef, ChatMessage } from '@/types/provider'
 import type { ToolStatusUpdate } from './types'
-import { fitToolMessagesForModel, getUsableAgentModelRef } from './helpers'
+import { getUsableAgentModelRef } from './helpers'
+import { runPiAgent } from '@/services/agent/piRuntime'
+
+function readStringArgument(args: Record<string, any> | undefined, names: string[]): { value: string; key: string | null } {
+  if (!args || typeof args !== 'object') return { value: '', key: null }
+  for (const name of names) {
+    if (typeof args[name] !== 'string') continue
+    const value = args[name] as string
+    if (value.trim()) return { value, key: name }
+  }
+  return { value: '', key: null }
+}
+
+function receivedArgumentKeys(args: Record<string, any> | undefined): string[] {
+  return args && typeof args === 'object' ? Object.keys(args) : []
+}
+
+type TextMatchRange = {
+  startOffset: number
+  endOffset: number
+  normalizedLineEndings: boolean
+}
+
+function normalizedOffsetMap(content: string): number[] {
+  const offsets = [0]
+  let normalizedOffset = 0
+  let originalOffset = 0
+  while (originalOffset < content.length) {
+    if (content[originalOffset] === '\r' && content[originalOffset + 1] === '\n') {
+      originalOffset += 2
+    } else {
+      originalOffset += 1
+    }
+    normalizedOffset += 1
+    offsets[normalizedOffset] = originalOffset
+  }
+  return offsets
+}
+
+function findTextMatchRanges(content: string, target: string): TextMatchRange[] {
+  if (!target) return []
+
+  const exactMatches: TextMatchRange[] = []
+  let exactStart = 0
+  while (true) {
+    const matchStart = content.indexOf(target, exactStart)
+    if (matchStart < 0) break
+    exactMatches.push({
+      startOffset: matchStart,
+      endOffset: matchStart + target.length,
+      normalizedLineEndings: false,
+    })
+    exactStart = matchStart + Math.max(target.length, 1)
+  }
+  if (exactMatches.length) return exactMatches
+
+  const normalizedContent = content.replace(/\r\n?/g, '\n')
+  const normalizedTarget = target.replace(/\r\n?/g, '\n')
+  const offsetMap = normalizedOffsetMap(content)
+  const normalizedMatches: TextMatchRange[] = []
+  let normalizedStart = 0
+  while (true) {
+    const matchStart = normalizedContent.indexOf(normalizedTarget, normalizedStart)
+    if (matchStart < 0) break
+    normalizedMatches.push({
+      startOffset: offsetMap[matchStart] ?? matchStart,
+      endOffset: offsetMap[matchStart + normalizedTarget.length] ?? content.length,
+      normalizedLineEndings: true,
+    })
+    normalizedStart = matchStart + Math.max(normalizedTarget.length, 1)
+  }
+  return normalizedMatches
+}
+
+function validateCompleteChapterReplacement(
+  currentContent: string,
+  revisedContent: string,
+  allowShorterContent: boolean
+) {
+  const trimmed = revisedContent.trim()
+  if (!trimmed) {
+    return {
+      code: 'EMPTY_REPLACEMENT',
+      error: 'The replacement chapter content cannot be empty.',
+      expected: 'Provide the complete replacement chapter text in revisedContent.',
+    }
+  }
+
+  if (/^(?:\.{3,}|…+|待续|to be continued|\[[^\]]+\]|（[^）]*(?:省略|待续)[^）]*）)$/i.test(trimmed)) {
+    return {
+      code: 'PLACEHOLDER_REPLACEMENT',
+      error: 'The replacement looks like a placeholder or continuation marker, not a complete chapter.',
+      expected: 'Provide the complete replacement chapter text, without placeholders or summaries.',
+    }
+  }
+
+  if (/^```[\s\S]*```$/.test(trimmed)) {
+    return {
+      code: 'MARKDOWN_WRAPPED_REPLACEMENT',
+      error: 'The replacement is wrapped in a markdown code fence instead of raw chapter text.',
+      expected: 'Send only the complete chapter content without markdown fences or explanatory text.',
+    }
+  }
+
+  const currentWords = countWords(currentContent)
+  const revisedWords = countWords(revisedContent)
+  if (!allowShorterContent && currentWords >= 120 && revisedWords < Math.max(30, Math.floor(currentWords * 0.15))) {
+    return {
+      code: 'SUSPICIOUSLY_SHORT_REPLACEMENT',
+      error: `The replacement is suspiciously short (${revisedWords} words versus ${currentWords} in the current chapter).`,
+      expected: 'Provide the complete chapter text. Set allowShorterContent to true only when an intentionally shorter chapter is requested.',
+      currentWords,
+      revisedWords,
+      allowShorterContent: true,
+    }
+  }
+
+  return null
+}
+
+function estimateReplacementTokens(content: string): number {
+  const nonWhitespace = content.replace(/\s/g, '')
+  if (!nonWhitespace) return 0
+  const cjkCharacters = (nonWhitespace.match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length
+  const otherCharacters = nonWhitespace.length - cjkCharacters
+  return Math.ceil(cjkCharacters * 1.2 + otherCharacters / 4)
+}
 
 export async function editChapterWithTool(
   prompt: string,
@@ -28,115 +153,80 @@ export async function editChapterWithTool(
     getTodoListTool(),
     {
       name: 'insert_todolist_item',
-      description: 'Insert a new todo item into the current todo list without resubmitting the whole list. Use this when a complex edit discovers a new required step.',
+      description: 'Insert a new todo item into the current todo list without resubmitting the whole list.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'A unique short id for the new todo item.' },
-          title: { type: 'string', description: 'The todo item title.' },
-          status: {
-            type: 'string',
-            enum: ['todo', 'in_progress', 'done', 'blocked'],
-            description: 'Initial status for this todo item. Defaults to todo.',
-          },
-          notes: { type: 'string', description: 'Optional note for this todo item.' },
-          afterId: { type: 'string', description: 'Optional existing todo id to insert this item after. If omitted or not found, the item is appended.' },
+          id: { type: 'string' },
+          title: { type: 'string' },
+          status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'blocked'] },
+          notes: { type: 'string' },
+          afterId: { type: 'string' },
         },
         required: ['id', 'title'],
       },
     },
     {
       name: 'modify_todolist_item',
-      description: 'Modify one existing todo item without resubmitting the whole todo list. Use this to mark an item done, blocked, in progress, or to adjust its note.',
+      description: 'Modify one existing todo item without resubmitting the whole todo list.',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'The id of the todo item to modify.' },
-          status: {
-            type: 'string',
-            enum: ['todo', 'in_progress', 'done', 'blocked'],
-            description: 'Optional next status for this todo item.',
-          },
-          title: { type: 'string', description: 'Optional replacement title.' },
-          notes: { type: 'string', description: 'Optional replacement note.' },
+          id: { type: 'string' },
+          status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'blocked'] },
+          title: { type: 'string' },
+          notes: { type: 'string' },
         },
         required: ['id'],
       },
     },
     {
       name: 'get_chapter_word_count',
-      description: 'Get the current chapter word/character count using the same counting logic as the editor. Use this before or after edits that target length.',
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
+      description: 'Get the current chapter word/character count using the same counting logic as the editor.',
+      parameters: { type: 'object', properties: {}, required: [] },
     },
     {
       name: 'get_chapter_region',
-      description: 'Read a specific region from the current chapter by line number, paragraph index, or section index before preparing a localized edit.',
+      description: 'Read an exact, copyable region from the current chapter by line number, paragraph index, or section index. The result includes startOffset and endOffset for unambiguous replacement.',
       parameters: {
         type: 'object',
         properties: {
-          mode: {
-            type: 'string',
-            enum: ['lines', 'paragraphs', 'sections'],
-            description: 'Region lookup mode.',
-          },
-          start: {
-            type: 'number',
-            description: 'One-based start index for lines/paragraphs/sections.',
-          },
-          end: {
-            type: 'number',
-            description: 'Optional one-based inclusive end index. Defaults to start.',
-          },
+          mode: { type: 'string', enum: ['lines', 'paragraphs', 'sections'] },
+          start: { type: 'number' },
+          end: { type: 'number' },
         },
         required: ['mode', 'start'],
       },
     },
     {
       name: 'replace_chapter_section',
-      description: 'Replace one exact passage in the current chapter while leaving the rest of the chapter unchanged.',
+      description: 'Replace one exact passage in the current chapter while leaving the rest unchanged.',
       parameters: {
         type: 'object',
         properties: {
-          targetText: {
-            type: 'string',
-            description: 'The exact current passage to replace. It must appear verbatim in the current chapter content.',
-          },
-          revisedSectionContent: {
-            type: 'string',
-            description: 'The revised content for only that passage.',
-          },
-          summary: {
-            type: 'string',
-            description: 'A short summary of the localized change made.',
-          },
+          targetText: { type: 'string', description: 'Exact current passage to replace.' },
+          revisedSectionContent: { type: 'string', description: 'Revised content for only that passage.' },
+          startOffset: { type: 'integer', description: 'Optional zero-based start offset returned by get_chapter_region.' },
+          endOffset: { type: 'integer', description: 'Optional exclusive end offset returned by get_chapter_region.' },
+          summary: { type: 'string' },
         },
         required: ['targetText', 'revisedSectionContent'],
       },
     },
     {
       name: 'replace_chapter_content',
-      description: 'Replace the current chapter content with a complete revised version when the requested edit affects broad structure or many passages.',
+      description: 'Replace the current chapter content with a complete revised version.',
       parameters: {
         type: 'object',
         properties: {
-          revisedContent: {
-            type: 'string',
-            description: 'The complete updated chapter content. This must include the full chapter, not a patch or excerpt.',
-          },
-          summary: {
-            type: 'string',
-            description: 'A short summary of the changes made.',
-          },
+          revisedContent: { type: 'string', description: 'Complete updated chapter content. Do not send a summary, placeholder, or partial excerpt.' },
+          allowShorterContent: { type: 'boolean', description: 'Set true only when intentionally replacing the chapter with a substantially shorter complete chapter.' },
+          summary: { type: 'string' },
         },
         required: ['revisedContent'],
       },
     },
   ]
-
   const messages: ChatMessage[] = [
     {
       role: 'system',
@@ -144,540 +234,333 @@ export async function editChapterWithTool(
         'You are Vibe AI inside a chapter editor.',
         'You must use a tool for every successful edit.',
         'Prefer Function Calling for every tool-eligible step; do not solve edits in plain assistant text.',
-        'For multi-step edits, call update_todolist first and update it as you inspect, edit, and complete the request.',
-        'Use insert_todolist_item when you discover a new necessary step after the todo list already exists.',
-        'Use modify_todolist_item to update a single todo item when only one item changes.',
-        'Use get_chapter_word_count when the request mentions length, word count, expansion, trimming, or target size.',
-        'Prefer replace_chapter_section for localized changes to a paragraph, sentence, dialogue exchange, or short passage.',
-        'Use replace_chapter_content only when the request affects broad structure, many passages, or the whole chapter.',
-        'For replace_chapter_section, targetText must be copied exactly from the current chapter content.',
-        'If you are unsure about the exact targetText, call get_chapter_region first by line, paragraph, or section index.',
-        'If a section replacement fails because targetText does not match, use get_chapter_region to inspect the relevant area and retry with exact text.',
-        'Do not respond with plain prose when an edit is requested.',
+        'For genuinely multi-step edits, use update_todolist with a non-empty items array and update it as you inspect, edit, and complete the request. Do not call it with an empty object or empty items array.',
+        'Use insert_todolist_item when a complex edit discovers a new required step and modify_todolist_item for one-item updates.',
+        'Use get_chapter_word_count for length-related requests.',
+        'Prefer replace_chapter_section for localized changes and replace_chapter_content for broad structure or whole-chapter changes.',
+        'For replace_chapter_section, copy targetText exactly from the content returned by get_chapter_region. Preserve its whitespace and line endings; use the returned startOffset and endOffset when available.',
+        'For replace_chapter_content, revisedContent must contain the complete raw chapter text, not a summary, explanation, placeholder, markdown fence, or partial excerpt. Set allowShorterContent to true only for an intentional complete shortening. For a localized change, prefer replace_chapter_section so the full chapter does not have to fit into one tool call.',
+        'If unsure about targetText, call get_chapter_region first. Do not respond with plain prose when an edit is requested.',
       ].join('\n')),
     },
     { role: 'user', content: prompt },
   ]
 
+  let lastToolName = 'chapter_edit_workflow'
+  let lastToolCallId = ''
   try {
     const currentContent = options.currentContent ?? ''
     const hasCurrentContent = currentContent.trim().length > 0
-    const currentMessages = [...messages]
-    const toolContext: Record<string, any> = {
-      _onTodoListUpdated: options.onTodoList,
-    }
+    const toolContext: Record<string, any> = { _onTodoListUpdated: options.onTodoList }
     const activeProject = useProjectStore().activeProject
-    const maxRounds = 6
-    let pendingFinalResult: { content: string; summary: string; toolName: string } | null = null
-
-    const getOpenTodos = () => {
-      const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-      return items.filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
-    }
-    const getDoneTodos = () => {
-      const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-      return items.filter((item: any) => item?.status === 'done')
-    }
-    const looksLikeEndedResponse = (text: string) => {
-      const normalized = (text || '').toLowerCase()
-      return /(\bdone\b|\bcompleted\b|\bfinished\b|\bfinal\b|已完成|完成|结束|总结)/i.test(normalized)
-    }
+    const getOpenTodos = () => (Array.isArray(toolContext._todoList) ? toolContext._todoList : [])
+      .filter((item: any) => item?.status !== 'done' && item?.status !== 'blocked')
+    const getDoneTodos = () => (Array.isArray(toolContext._todoList) ? toolContext._todoList : [])
+      .filter((item: any) => item?.status === 'done')
     const buildTodoResumePrompt = (reason: string) => {
-      const doneItems = getDoneTodos()
-      const openItems = getOpenTodos()
-      const nextItem = openItems.find((item: any) => item?.status === 'in_progress') || openItems[0]
-      const doneText = doneItems.length
-        ? doneItems.map((item: any) => `- [done] ${item.id}: ${item.title}`).join('\n')
-        : '- (none)'
-      const openText = openItems.length
-        ? openItems.map((item: any) => `- [${item.status || 'todo'}] ${item.id}: ${item.title}`).join('\n')
-        : '- (none)'
-      const nextText = nextItem ? `${nextItem.id}: ${nextItem.title}` : '(no pending item)'
-      return [
-        reason,
-        'Continue execution now. Do not stop yet.',
-        'Call update_todolist to sync progress, then continue tool-based editing until all necessary work is done.',
-        '',
-        'Completed todo items:',
-        doneText,
-        '',
-        'Open todo items:',
-        openText,
-        '',
-        `Current next item: ${nextText}`,
-      ].join('\n')
+      const hasTodoList = Array.isArray(toolContext._todoList) && toolContext._todoList.length > 0
+      const done = getDoneTodos().map((item: any) => `- [done] ${item.id}: ${item.title}`).join('\n') || '- (none)'
+      const open = getOpenTodos().map((item: any) => `- [${item.status || 'todo'}] ${item.id}: ${item.title}`).join('\n') || '- (none)'
+      const todoInstruction = hasTodoList
+        ? 'Call update_todolist to sync progress, then continue tool-based editing until all necessary work is done.'
+        : 'Use update_todolist only if this request needs a checklist. If you call it, include at least one concrete task; otherwise continue directly with the editing tools.'
+      return [reason, 'Continue execution now. Do not stop yet.', todoInstruction, '', 'Completed todo items:', done, '', 'Open todo items:', open].join('\n')
     }
-
     const publishTodoList = async () => {
-      if (typeof options.onTodoList !== 'function') return
-      await options.onTodoList({
-        agent: 'Vibe AI',
-        updatedAt: new Date().toISOString(),
-        items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [],
-      })
+      await options.onTodoList?.({ agent: 'Vibe AI', updatedAt: new Date().toISOString(), items: Array.isArray(toolContext._todoList) ? toolContext._todoList : [] })
     }
-
     const autoCloseRemainingTodos = async () => {
       const items = Array.isArray(toolContext._todoList) ? [...toolContext._todoList] : []
-      if (!items.length) return false
       let changed = false
       for (const item of items) {
         if (item?.status === 'done' || item?.status === 'blocked') continue
         item.status = 'done'
-        item.notes = 'Auto-closed after successful outline tool execution.'
+        item.notes = 'Auto-closed after successful chapter content edit.'
         changed = true
       }
-      if (!changed) return false
+      if (!changed) return
       toolContext._todoList = items
       await publishTodoList()
-      options.onToolStatus?.({
-        name: 'update_todolist',
-        status: 'warning',
-        detail: 'Todo list was auto-closed after successful outline edit to avoid retry deadlock.',
-      })
-      return true
+      options.onToolStatus?.({ name: 'update_todolist', status: 'warning', detail: 'Todo list was auto-closed after successful chapter edit.' })
     }
+    let pendingFinalResult: { content: string; summary: string; toolName: string } | null = null
+    let round = 0
+    let todoSyncRequested = false
 
-    const forceToolChoice = (name: string): ToolCallOptions => ({
-      toolChoice: { type: 'function', function: { name } },
-    })
-
-    const editToolChoiceForRound = (round: number): ToolCallOptions | undefined => {
-      if (round === 0) return forceToolChoice('update_todolist')
-      if (pendingFinalResult && getOpenTodos().length) return forceToolChoice('update_todolist')
-      if (!hasCurrentContent && round >= 1) return forceToolChoice('replace_chapter_content')
-      if (round >= 3) {
-        const openTodos = getOpenTodos()
-        if (!pendingFinalResult) {
-          const hasTodoHint = openTodos.some((item: any) => {
-            const title = String(item?.title ?? '').toLowerCase()
-            return title.includes('outline') || title.includes('rewrite') || title.includes('content') || title.includes('chapter')
-          })
-          if (hasTodoHint || openTodos.length > 0) {
-            return forceToolChoice(hasCurrentContent ? 'replace_chapter_section' : 'replace_chapter_content')
-          }
+    const executeTool = async (toolCall: ToolCall): Promise<ToolResult> => {
+      lastToolName = toolCall.name
+      lastToolCallId = toolCall.id
+      if (isTodoListTool(toolCall.name)) {
+        const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
+        let detail = 'Todo list updated.'
+        try {
+          const parsed = JSON.parse(result.content)
+          if (parsed?.error) detail = parsed.error
+          else if (typeof parsed?.done === 'number' && typeof parsed?.total === 'number') detail = `${parsed.done}/${parsed.total} complete.`
+        } catch {
+          // Keep generic detail.
         }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.content.includes('"ok":false') ? 'error' : 'success', detail })
+        await publishTodoList()
+        return result
       }
-      return undefined
+      const relationshipResult = activeProject ? await handleRelationshipQueryTool(toolCall, activeProject) : null
+      if (relationshipResult) {
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
+        return { tool_call_id: toolCall.id, content: relationshipResult.content }
+      }
+
+      if (toolCall.name === 'insert_todolist_item') {
+        const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+        const id = String(toolCall.arguments?.id ?? '').trim()
+        const title = String(toolCall.arguments?.title ?? '').trim()
+        const status = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status) ? toolCall.arguments.status : 'todo'
+        const notes = typeof toolCall.arguments?.notes === 'string' ? toolCall.arguments.notes.trim() || undefined : undefined
+        const afterId = String(toolCall.arguments?.afterId ?? '').trim()
+        let result: any
+        if (!id || !title) result = { ok: false, error: 'id and title are required.' }
+        else if (items.some((item: any) => item.id === id)) result = { ok: false, error: `Todo item already exists: ${id}` }
+        else if (items.length >= 12) result = { ok: false, error: 'Todo list cannot contain more than 12 items.' }
+        else if (status === 'in_progress' && items.some((item: any) => item.status === 'in_progress')) result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
+        else {
+          const newItem = { id, title, status, notes }
+          const insertIndex = afterId ? items.findIndex((item: any) => item.id === afterId) : -1
+          const nextItems = [...items]
+          if (insertIndex >= 0) nextItems.splice(insertIndex + 1, 0, newItem)
+          else nextItems.push(newItem)
+          toolContext._todoList = nextItems
+          await publishTodoList()
+          result = { ok: true, item: newItem, total: nextItems.length }
+        }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.ok ? 'success' : 'error', detail: result.ok ? `${result.item.id}: ${result.item.title}` : result.error })
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+      }
+
+      if (toolCall.name === 'modify_todolist_item') {
+        const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
+        const targetId = String(toolCall.arguments?.id ?? '').trim()
+        const index = items.findIndex((item: any) => item.id === targetId)
+        if (!targetId || index === -1) {
+          const result = { ok: false, error: targetId ? `Todo item not found: ${targetId}` : 'id is required.' }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const nextStatus = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status) ? toolCall.arguments.status : items[index].status
+        if (nextStatus === 'in_progress' && items.some((item: any, itemIndex: number) => itemIndex !== index && item.status === 'in_progress')) {
+          const result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        items[index] = {
+          ...items[index],
+          title: typeof toolCall.arguments?.title === 'string' && toolCall.arguments.title.trim() ? toolCall.arguments.title.trim() : items[index].title,
+          status: nextStatus,
+          notes: typeof toolCall.arguments?.notes === 'string' ? toolCall.arguments.notes.trim() || undefined : items[index].notes,
+        }
+        toolContext._todoList = items
+        await publishTodoList()
+        const result = { ok: true, item: items[index] }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${targetId}: ${nextStatus}` })
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+      }
+
+      if (toolCall.name === 'get_chapter_word_count') {
+        const source = pendingFinalResult?.content ?? currentContent
+        const result = { ok: true, words: countWords(source), characters: source.length, nonWhitespaceCharacters: source.replace(/\s/g, '').length }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${result.words} words.` })
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+      }
+
+      if (toolCall.name === 'get_chapter_region') {
+        const result = getChapterRegion(currentContent, toolCall.arguments)
+        const warning = 'warning' in result && typeof result.warning === 'string' ? result.warning : ''
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: result.ok ? (warning ? 'warning' : 'success') : 'error', detail: result.ok && 'label' in result ? (warning || result.label) : result.error })
+        return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+      }
+
+      if (toolCall.name === 'replace_chapter_section') {
+        if (pendingFinalResult) {
+          const result = { ok: false, code: 'REPLACEMENT_ALREADY_PREPARED', error: 'A successful chapter replacement is already prepared for this run. Do not overwrite it with another replacement call.', expected: 'Update the todolist if needed, then finish the tool workflow.' }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const targetText = readStringArgument(toolCall.arguments, ['targetText', 'target_text', 'originalText', 'original_text', 'sourceText', 'source_text', 'currentText', 'current_text', 'target']).value
+        const revised = readStringArgument(toolCall.arguments, ['revisedSectionContent', 'revised_section_content', 'replacementText', 'replacement_text', 'revisedText', 'revised_text', 'replacement', 'content']).value
+        if (!hasCurrentContent && revised) {
+          pendingFinalResult = { content: revised, summary: String(toolCall.arguments?.summary ?? '').trim() || 'Created chapter content from a section replacement.', toolName: toolCall.name }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'warning', detail: 'Chapter was empty; used the section replacement as the full chapter content.', before: currentContent, after: revised })
+          return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, warning: 'Chapter was empty; section replacement was applied as full chapter content.' }) }
+        }
+        const rawStartOffset = Number(toolCall.arguments?.startOffset ?? toolCall.arguments?.start_offset)
+        const rawEndOffset = Number(toolCall.arguments?.endOffset ?? toolCall.arguments?.end_offset)
+        const hasValidOffsets = Number.isInteger(rawStartOffset)
+          && Number.isInteger(rawEndOffset)
+          && rawStartOffset >= 0
+          && rawEndOffset > rawStartOffset
+          && rawEndOffset <= currentContent.length
+        let matches = findTextMatchRanges(currentContent, targetText)
+        if (hasValidOffsets) {
+          const offsetTarget = currentContent.slice(rawStartOffset, rawEndOffset)
+          const targetMatchesOffset = !targetText
+            || offsetTarget === targetText
+            || offsetTarget.replace(/\r\n?/g, '\n') === targetText.replace(/\r\n?/g, '\n')
+          matches = targetMatchesOffset
+            ? [{ startOffset: rawStartOffset, endOffset: rawEndOffset, normalizedLineEndings: false }]
+            : []
+        }
+        if ((!targetText && !hasValidOffsets) || !revised || !matches.length) {
+          const result = {
+            ok: false,
+            code: 'SECTION_TARGET_NOT_FOUND',
+            error: 'The targetText did not match the current chapter. Use get_chapter_region and retry with its exact content or offsets.',
+            expected: 'Call replace_chapter_section with targetText, revisedSectionContent, and optionally startOffset/endOffset from get_chapter_region.',
+            receivedKeys: receivedArgumentKeys(toolCall.arguments),
+          }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        if (matches.length > 1) {
+          const result = {
+            ok: false,
+            code: 'SECTION_TARGET_AMBIGUOUS',
+            error: `The targetText appears ${matches.length} times in the current chapter. Retry with startOffset and endOffset from get_chapter_region.`,
+            expected: 'Use the exact region offsets to identify one passage.',
+            matches: matches.length,
+            receivedKeys: receivedArgumentKeys(toolCall.arguments),
+          }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const match = matches[0]
+        const matchedText = currentContent.slice(match.startOffset, match.endOffset)
+        const nextContent = `${currentContent.slice(0, match.startOffset)}${revised}${currentContent.slice(match.endOffset)}`
+        pendingFinalResult = { content: nextContent, summary: String(toolCall.arguments?.summary ?? '').trim(), toolName: toolCall.name }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: match.normalizedLineEndings ? 'Matched and replaced one passage after normalizing line endings.' : 'Matched and replaced one passage.', before: matchedText, after: revised })
+        return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, summary: pendingFinalResult.summary || 'Replaced one chapter section.' }) }
+      }
+
+      if (toolCall.name === 'replace_chapter_content') {
+        if (pendingFinalResult) {
+          const result = { ok: false, code: 'REPLACEMENT_ALREADY_PREPARED', error: 'A successful chapter replacement is already prepared for this run. Do not overwrite it with another replacement call.', expected: 'Update the todolist if needed, then finish the tool workflow.' }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const revisedArg = readStringArgument(toolCall.arguments, ['revisedContent', 'revised_content', 'chapterContent', 'chapter_content', 'revisedChapterContent', 'revised_chapter_content', 'fullContent', 'full_content', 'content', 'text'])
+        if (!revisedArg.value) {
+          const result = { ok: false, code: 'MISSING_REVISED_CONTENT', error: 'revisedContent is required.', expected: 'Call replace_chapter_content with revisedContent containing the complete replacement chapter text.', receivedKeys: receivedArgumentKeys(toolCall.arguments) }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        const allowShorterValue = toolCall.arguments?.allowShorterContent ?? toolCall.arguments?.allow_shorter_content
+        const allowShorterContent = allowShorterValue === true || allowShorterValue === 'true'
+        const validationError = validateCompleteChapterReplacement(currentContent, revisedArg.value, allowShorterContent)
+        if (validationError) {
+          const result = {
+            ok: false,
+            ...validationError,
+            receivedKeys: receivedArgumentKeys(toolCall.arguments),
+          }
+          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+          return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
+        }
+        pendingFinalResult = { content: revisedArg.value, summary: String(toolCall.arguments?.summary ?? '').trim(), toolName: toolCall.name }
+        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Prepared a complete chapter replacement.', before: currentContent, after: revisedArg.value })
+        return { tool_call_id: toolCall.id, content: JSON.stringify({ ok: true, summary: pendingFinalResult.summary || 'Replaced full chapter content.', acceptedField: revisedArg.key ?? 'revisedContent', words: countWords(revisedArg.value), characters: revisedArg.value.length }) }
+      }
+
+      const result = { ok: false, error: `Unsupported tool: ${toolCall.name}` }
+      options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
+      return { tool_call_id: toolCall.id, content: JSON.stringify(result) }
     }
 
     if (!hasCurrentContent) {
-      currentMessages.push({
+      messages.push({
         role: 'user',
         content: [
           'Important: the current chapter content is empty.',
           'get_chapter_region will return an empty region with a warning.',
-          'replace_chapter_section can still create content when revisedSectionContent is provided; it will be treated as the full chapter content with a warning.',
-          'For a draft, continuation, rewrite, or any broad content change, prefer replace_chapter_content with the complete new chapter text.',
+          'replace_chapter_section can create content when revisedSectionContent is provided; it will be treated as the full chapter content.',
+          'For a draft, continuation, rewrite, or broad content change, prefer replace_chapter_content with the complete new chapter text.',
         ].join('\n'),
       })
     }
 
-    for (let round = 0; round < maxRounds; round++) {
-      if (pendingFinalResult) {
-        const openTodos = getOpenTodos()
-        if (!openTodos.length) return pendingFinalResult
+    const modelMaxTokens = providerManager.getModelConfigForRef(modelRef)?.model.maxTokens || 8192
+    const estimatedContentTokens = estimateReplacementTokens(currentContent)
+    const requestedOutputTokens = hasCurrentContent
+      ? Math.max(8192, Math.ceil(estimatedContentTokens * 1.35) + 2048)
+      : 16384
+    const workflowMaxTokens = Math.min(modelMaxTokens, requestedOutputTokens)
 
-        currentMessages.push({
-          role: 'user',
-          content: buildTodoResumePrompt(
-            `The edit is prepared, but the todolist is still incomplete (${openTodos.length} open).`
-          ),
-        })
-      }
-
-      let streamedContent = ''
-      const outboundMessages = fitToolMessagesForModel(currentMessages, modelRef, 8192)
-      const toolOptions = editToolChoiceForRound(round)
-      const response = await new Promise<FunctionCallingResponse>((resolve, reject) => {
-        providerManager.streamWithTools(
-          outboundMessages,
-          modelRef,
-          tools,
-          {
-            onToken: token => {
-              streamedContent += token
-              options.onToken?.(token)
-            },
-            onReasoningToken: token => {
-              options.onReasoningToken?.(token)
-            },
-            onToolCall: toolCall => {
-              options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Preparing tool call.' })
-            },
-            onToolResult: () => {},
-            onComplete: result => {
-              resolve(result)
-            },
-            onError: error => {
-              reject(error)
-            },
-          },
-          8192,
-          0.5,
-          toolOptions,
-          options.signal
-        ).catch(reject)
-      })
-
-      if (streamedContent && response.content == null) {
-        response.content = streamedContent
-      }
-
-      if (!response.tool_calls.length) {
-        const assistantText = response.content || ''
-        currentMessages.push({
-          role: 'assistant',
-          content: assistantText || null,
-          reasoning_content: response.reasoning_content ?? null,
-        })
-        const openTodos = getOpenTodos()
-        if (pendingFinalResult && openTodos.length && looksLikeEndedResponse(assistantText)) {
-          currentMessages.push({
-            role: 'user',
-            content: buildTodoResumePrompt(
-              'You appear to have ended early while pending work still exists in todolist.'
-            ),
-          })
-          continue
+    await runPiAgent({
+      modelRef,
+      messages,
+      tools,
+      maxTokens: workflowMaxTokens,
+      temperature: 0.5,
+      contextTokens: undefined,
+      signal: options.signal,
+      executeTool,
+      onToken: token => options.onToken?.(token),
+      onReasoningToken: token => options.onReasoningToken?.(token),
+      onToolStatus: status => {
+        if (status.status === 'running') {
+          options.onToolStatus?.({ callId: status.callId, name: status.name, status: 'running', detail: 'Preparing tool call.' })
+          return
         }
-        currentMessages.push({
-          role: 'user',
-          content: round >= 3
-            ? `Hard requirement: call ${hasCurrentContent ? 'replace_chapter_section or replace_chapter_content' : 'replace_chapter_content'} now. Do not reply with plain text.`
-            : 'Use a tool to complete the edit. For small changes, inspect the needed region with get_chapter_region and then call replace_chapter_section.',
-        })
-        continue
-      }
-
-      currentMessages.push({
-        role: 'assistant',
-        content: response.content || null,
-        reasoning_content: response.reasoning_content ?? null,
-        tool_calls: response.tool_calls.map(toolCall => ({
-          id: toolCall.id,
-          type: 'function',
-          function: {
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          },
-        })),
-      })
-
-      for (const toolCall of response.tool_calls) {
-        options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'running', detail: 'Running tool.' })
-
-        if (isTodoListTool(toolCall.name)) {
-          const result = await handleTodoListToolCall(toolCall, toolContext, 'Vibe AI')
-          let detail = 'Todo list updated.'
-          try {
-            const parsed = JSON.parse(result.content)
-            if (parsed?.error) detail = parsed.error
-            else if (typeof parsed?.done === 'number' && typeof parsed?.total === 'number') detail = `${parsed.done}/${parsed.total} complete.`
-          } catch {
-            // keep fallback detail
-          }
+        // Argument validation happens before executeTool, so failures never
+        // produce a tool-level status. Surface them instead of leaving the
+        // call stuck at "running".
+        if (status.status === 'error') {
           options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: result.content.includes('"ok":false') ? 'error' : 'success',
-            detail,
+            callId: status.callId,
+            name: status.name,
+            status: 'error',
+            detail: status.detail || status.result?.content || 'Tool call failed.',
           })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: result.content,
-          })
-          continue
         }
-
-        const relationshipResult = activeProject
-          ? await handleRelationshipQueryTool(toolCall, activeProject)
-          : null
-        if (relationshipResult) {
-          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: 'Relationship context loaded.' })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: relationshipResult.content,
-          })
-          continue
+      },
+      // Do not force tool_choice here. Some OpenAI-compatible relays honor the
+      // forced function name but drop the arguments, producing an unusable
+      // call. The turn prompts below still require a tool and let the model
+      // choose the one it can populate correctly.
+      forceToolName: () => null,
+      streamAssistantText: true,
+      maxRounds: 6,
+      workflowName: 'Chapter content edit',
+      stopAfterToolCallRound: async () => {
+        if (!pendingFinalResult) return false
+        if (getOpenTodos().length && !todoSyncRequested) {
+          todoSyncRequested = true
+          return false
         }
-
-        if (toolCall.name === 'insert_todolist_item') {
-          const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-          const id = String(toolCall.arguments?.id ?? '').trim()
-          const title = String(toolCall.arguments?.title ?? '').trim()
-          const status = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status)
-            ? toolCall.arguments.status
-            : 'todo'
-          const notes = typeof toolCall.arguments?.notes === 'string'
-            ? toolCall.arguments.notes.trim() || undefined
-            : undefined
-          const afterId = String(toolCall.arguments?.afterId ?? '').trim()
-
-          let result: any
-          if (!id || !title) {
-            result = { ok: false, error: 'id and title are required.' }
-          } else if (items.some((item: any) => item.id === id)) {
-            result = { ok: false, error: `Todo item already exists: ${id}` }
-          } else if (items.length >= 12) {
-            result = { ok: false, error: 'Todo list cannot contain more than 12 items.' }
-          } else if (status === 'in_progress' && items.some((item: any) => item.status === 'in_progress')) {
-            result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
-          } else {
-            const newItem = { id, title, status, notes }
-            const insertIndex = afterId ? items.findIndex((item: any) => item.id === afterId) : -1
-            const nextItems = [...items]
-            if (insertIndex >= 0) nextItems.splice(insertIndex + 1, 0, newItem)
-            else nextItems.push(newItem)
-            toolContext._todoList = nextItems
-            await publishTodoList()
-            result = { ok: true, item: newItem, total: nextItems.length }
+        if (getOpenTodos().length) await autoCloseRemainingTodos()
+        return getOpenTodos().length === 0
+      },
+      onTurnEnd: async turn => {
+        round = turn.round
+        if (!turn.toolCalls.length) {
+          return {
+            followUp: pendingFinalResult && getOpenTodos().length
+              ? buildTodoResumePrompt('The edit is prepared, but pending work still exists in todolist.')
+              : round >= 3
+                ? `Hard requirement: call ${hasCurrentContent ? 'replace_chapter_section or replace_chapter_content' : 'replace_chapter_content'} now. Do not reply with plain text.`
+                : 'Use a tool to complete the edit. For small changes, inspect the needed region and then call replace_chapter_section.',
           }
-
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: result.ok ? 'success' : 'error',
-            detail: result.ok ? `${result.item.id}: ${result.item.title}` : result.error,
-          })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          })
-          continue
         }
-
-        if (toolCall.name === 'modify_todolist_item') {
-          const items = Array.isArray(toolContext._todoList) ? toolContext._todoList : []
-          const targetId = String(toolCall.arguments?.id ?? '').trim()
-          const index = items.findIndex((item: any) => item.id === targetId)
-          if (!targetId || index === -1) {
-            const result = { ok: false, error: targetId ? `Todo item not found: ${targetId}` : 'id is required.' }
-            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
-            currentMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result),
-            })
-            continue
-          }
-
-          const nextStatus = ['todo', 'in_progress', 'done', 'blocked'].includes(toolCall.arguments?.status)
-            ? toolCall.arguments.status
-            : items[index].status
-          if (nextStatus === 'in_progress' && items.some((item: any, itemIndex: number) => itemIndex !== index && item.status === 'in_progress')) {
-            const result = { ok: false, error: 'Only one todolist item may be in_progress at a time.' }
-            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
-            currentMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result),
-            })
-            continue
-          }
-
-          items[index] = {
-            ...items[index],
-            title: typeof toolCall.arguments?.title === 'string' && toolCall.arguments.title.trim()
-              ? toolCall.arguments.title.trim()
-              : items[index].title,
-            status: nextStatus,
-            notes: typeof toolCall.arguments?.notes === 'string'
-              ? toolCall.arguments.notes.trim() || undefined
-              : items[index].notes,
-          }
-          toolContext._todoList = items
-          await publishTodoList()
-          const result = { ok: true, item: items[index] }
-          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${targetId}: ${nextStatus}` })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          })
-          continue
-        }
-
-        if (toolCall.name === 'get_chapter_word_count') {
-          const countSource = pendingFinalResult?.content ?? currentContent
-          const result = {
-            ok: true,
-            words: countWords(countSource),
-            characters: countSource.length,
-            nonWhitespaceCharacters: countSource.replace(/\s/g, '').length,
-          }
-          options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'success', detail: `${result.words} words.` })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          })
-          continue
-        }
-
-        if (toolCall.name === 'get_chapter_region') {
-          const result = getChapterRegion(currentContent, toolCall.arguments)
-          const warning = 'warning' in result && typeof result.warning === 'string' ? result.warning : ''
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: result.ok ? (warning ? 'warning' : 'success') : 'error',
-            detail: result.ok && 'label' in result ? (warning || result.label) : result.error,
-          })
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result),
-          })
-          if (result.ok && warning && !hasCurrentContent) {
-            currentMessages.push({
-              role: 'user',
-              content: 'The chapter is empty, so the region lookup returned an empty region as a warning. You can continue by calling replace_chapter_content, or use replace_chapter_section with revisedSectionContent to create the initial content.',
-            })
-          }
-          continue
-        }
-
-        if (toolCall.name === 'replace_chapter_section') {
-          const targetText = typeof toolCall.arguments?.targetText === 'string'
-            ? toolCall.arguments.targetText
-            : ''
-          const revisedSectionContent = typeof toolCall.arguments?.revisedSectionContent === 'string'
-            ? toolCall.arguments.revisedSectionContent
-            : ''
-
-          if (!hasCurrentContent && revisedSectionContent.trim()) {
-            const result = {
-              ok: true,
-              warning: 'Chapter was empty; section replacement was applied as full chapter content.',
-              summary: typeof toolCall.arguments?.summary === 'string'
-                ? toolCall.arguments.summary.trim()
-                : 'Created chapter content from a section replacement.',
-            }
-            options.onToolStatus?.({
-              callId: toolCall.id,
-              name: toolCall.name,
-              status: 'warning',
-              detail: 'Chapter was empty; used the section replacement as the full chapter content.',
-              before: currentContent,
-              after: revisedSectionContent.trim(),
-            })
-            pendingFinalResult = {
-              content: revisedSectionContent.trim(),
-              summary: typeof toolCall.arguments?.summary === 'string'
-                ? toolCall.arguments.summary.trim()
-                : 'Created chapter content from a section replacement.',
-              toolName: 'replace_chapter_section',
-            }
-            currentMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result),
-            })
-            continue
-          }
-
-          if (!targetText || !revisedSectionContent || !currentContent.includes(targetText)) {
-            const result = {
-              ok: false,
-              error: 'The targetText did not match the current chapter exactly. Use get_chapter_region to inspect the relevant lines, paragraphs, or sections, then retry replace_chapter_section with exact targetText.',
-            }
-            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
-            currentMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result),
-            })
-            continue
-          }
-
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: 'success',
-            detail: 'Matched and replaced one passage.',
-            before: targetText,
-            after: revisedSectionContent.trim(),
-          })
-          pendingFinalResult = {
-            content: currentContent.replace(targetText, revisedSectionContent.trim()),
-            summary: typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
-            toolName: 'replace_chapter_section',
-          }
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify({ ok: true, summary: pendingFinalResult.summary || 'Replaced one chapter section.' }),
-          })
-          continue
-        }
-
-        if (toolCall.name === 'replace_chapter_content') {
-          const revisedContent = typeof toolCall.arguments?.revisedContent === 'string'
-            ? toolCall.arguments.revisedContent.trim()
-            : ''
-          if (!revisedContent) {
-            const result = { ok: false, error: 'revisedContent is required.' }
-            options.onToolStatus?.({ callId: toolCall.id, name: toolCall.name, status: 'error', detail: result.error })
-            currentMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result),
-            })
-            continue
-          }
-
-          options.onToolStatus?.({
-            callId: toolCall.id,
-            name: toolCall.name,
-            status: 'success',
-            detail: 'Prepared a complete chapter replacement.',
-            before: currentContent,
-            after: revisedContent,
-          })
-          pendingFinalResult = {
-            content: revisedContent,
-            summary: typeof toolCall.arguments?.summary === 'string' ? toolCall.arguments.summary.trim() : '',
-            toolName: 'replace_chapter_content',
-          }
-          currentMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify({ ok: true, summary: pendingFinalResult.summary || 'Replaced full chapter content.' }),
-          })
-          continue
-        }
-
-        currentMessages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: JSON.stringify({ ok: false, error: `Unsupported tool: ${toolCall.name}` }),
-        })
-      }
-
-      if (pendingFinalResult && !getOpenTodos().length) {
-        return pendingFinalResult
-      }
-    }
+        if (pendingFinalResult && !getOpenTodos().length) return undefined
+        return { steer: buildTodoResumePrompt('Continue the tool edit until the replacement is prepared and the todo list is complete.') }
+      },
+    })
 
     if (pendingFinalResult) {
-      if (getOpenTodos().length) {
-        await autoCloseRemainingTodos()
-      }
+      if (getOpenTodos().length) await autoCloseRemainingTodos()
       if (!getOpenTodos().length) return pendingFinalResult
     }
-    const openTodos = getOpenTodos()
-    const lastAssistantMessage = [...currentMessages].reverse().find((message) => message.role === 'assistant')
-    throw new Error(
-      `Vibe AI could not complete the tool edit after retrying. ` +
-      `PendingFinalResult=${pendingFinalResult ? 'yes' : 'no'}, openTodos=${openTodos.length}, ` +
-      `lastAssistantHasToolCalls=${Array.isArray((lastAssistantMessage as any)?.tool_calls) ? 'yes' : 'no'}.`
-    )
+    throw new Error(`Vibe AI could not complete the tool edit. PendingFinalResult=${pendingFinalResult ? 'yes' : 'no'}, openTodos=${getOpenTodos().length}.`)
   } catch (error: any) {
-    options.onToolStatus?.({ name: 'replace_chapter_content', status: 'error', detail: error?.message || 'Unknown error' })
-    throw new Error(`Tool edit error: ${error?.message || 'Unknown error'}`)
+    const message = error?.message || 'Unknown error'
+    options.onToolStatus?.({ name: lastToolName, callId: lastToolCallId || undefined, status: 'error', detail: message })
+    throw new Error(`Tool edit error (${lastToolName}): ${message}`)
   }
 }

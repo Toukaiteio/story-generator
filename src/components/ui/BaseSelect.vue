@@ -52,14 +52,14 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
 
 <template>
   <div class="flex flex-col gap-1.5" ref="containerRef">
-    <label v-if="label" class="text-xs font-medium text-text-secondary">{{ translatedLabel }}</label>
+    <label v-if="label" class="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">{{ translatedLabel }}</label>
     <div class="relative">
       <button
         type="button"
         :class="[
-          'flex items-center justify-between w-full h-9 px-3 rounded-md border text-sm transition-all duration-100',
+          'flex items-center justify-between w-full h-9 px-3 rounded-md border text-sm transition-all duration-150',
           'bg-surface-1',
-          open ? 'border-accent ring-1 ring-accent/20' : 'border-surface-4 hover:border-surface-5',
+          open ? 'border-accent' : 'border-surface-4 hover:border-surface-5',
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
         ]"
         @click="open = !open"
@@ -74,7 +74,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
       <Transition name="fade">
         <div
           v-if="open"
-          class="absolute z-50 w-full mt-1 py-1 rounded-md border border-surface-4 bg-surface-2 shadow-lg max-h-60 overflow-y-auto"
+          class="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-surface-4 bg-surface-2 py-1"
         >
           <button
             v-for="opt in translatedOptions"
@@ -82,7 +82,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', handleClickOutsi
             type="button"
             :class="[
               'flex items-center justify-between w-full px-3 py-2 text-sm text-left transition-colors duration-100',
-              opt.value === modelValue ? 'text-accent bg-accent-subtle' : 'text-text-primary hover:bg-surface-3',
+              opt.value === modelValue ? 'text-accent bg-accent/12' : 'text-text-primary hover:bg-white/[0.05]',
             ]"
             @click="select(opt.value)"
           >

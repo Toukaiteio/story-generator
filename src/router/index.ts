@@ -16,7 +16,7 @@ const router = createRouter({
         {
           path: 'workspace/:id?',
           name: 'Workspace',
-          component: () => import('@/pages/ProjectWorkspace.vue'),
+          component: () => import('@/pages/Studio.vue'),
         },
         {
           path: 'knowledge',

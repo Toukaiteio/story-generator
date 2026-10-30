@@ -42,7 +42,7 @@ const tooltipStyle = computed(() => {
   <Teleport to="body">
     <div
       v-if="visible && text"
-      class="fixed z-[300] px-2 py-1 rounded-md bg-surface-4 text-text-primary text-xs font-medium whitespace-nowrap pointer-events-none shadow-lg"
+        class="fixed z-[300] rounded-md border border-surface-4 bg-surface-2 px-2 py-1 text-xs font-medium text-text-primary whitespace-nowrap pointer-events-none"
       :style="tooltipStyle"
     >
       {{ text }}

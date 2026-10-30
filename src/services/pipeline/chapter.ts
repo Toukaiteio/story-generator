@@ -2,6 +2,7 @@ import type { StoryProject } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import { extractJsonPayload } from '@/services/agent/validation'
 import { buildCharacterContextForTask, buildPreviousSummary, buildProjectRelationshipContext } from './context'
+import { buildElementContextForChapter } from '@/services/elements'
 import { appendRelationshipEventsForChapter } from '@/services/relationship'
 import { getLinkedKnowledgeBases, resolveChapterCount, prepareRuntime } from './runtime'
 import type { ChapterPlanEntry, PipelineCallbacks, PipelineRunOptions } from './types'
@@ -9,6 +10,8 @@ import { generateId } from '@/lib/id'
 import { extractRelationshipEventsForChapter, runStoryPlanningWorkflow } from './planning'
 import { sanitizeGeneratedChapterContent } from '@/services/writingFormat'
 import { buildProofreadingSegments } from '@/services/proofreading/chunking'
+import { auditHumanText, formatAuditForPrompt } from '@/services/humanizer'
+import { buildProjectStylePrompt } from '@/services/writingStyle/skill'
 import { useProviderStore } from '@/stores/provider'
 import { isChapterPlanComplete } from '@/services/generation/flow'
 
@@ -247,7 +250,7 @@ export async function runChapterPlanningWorkflow(
       genre: project.genre,
       targetReader: project.targetReader,
       language: project.language,
-      style: project.style,
+      style: buildProjectStylePrompt(project),
       storyOutline: project.outline,
       characters: buildCharacterContextForTask(project.characters, 'outlining'),
       existingChapters: formatChapterPlanEntryContext(plannedEntries),
@@ -365,7 +368,7 @@ export async function generateAdditionalChapterPlan(
     genre: project.genre,
     targetReader: project.targetReader,
     language: project.language,
-    style: project.style,
+    style: buildProjectStylePrompt(project),
     storyOutline: project.outline,
     characters: buildCharacterContextForTask(project.characters, 'outlining'),
     existingChapters: formatChapterPlanContext(project.chapters),
@@ -504,7 +507,7 @@ export async function completeChapterPlan(
     genre: project.genre,
     targetReader: project.targetReader,
     language: project.language,
-    style: project.style,
+    style: buildProjectStylePrompt(project),
     storyOutline: project.outline,
     characters: buildCharacterContextForTask(project.characters, 'outlining'),
     existingChapters: formatChapterPlanContext(previousChapters),
@@ -559,7 +562,7 @@ export async function reviewAndRewriteChapterPlan(
     characters: buildCharacterContextForTask(project.characters, 'proofreading'),
     previousSummary: formatChapterPlanContext(previousChapters.slice(-12)),
     language: project.language,
-    style: project.style,
+    style: buildProjectStylePrompt(project),
     project: buildProjectRelationshipContext(project),
     writingFormat: project.writingFormat,
     knowledgeBases,
@@ -591,7 +594,7 @@ export async function reviewAndRewriteChapterPlan(
     genre: project.genre,
     targetReader: project.targetReader,
     language: project.language,
-    style: project.style,
+    style: buildProjectStylePrompt(project),
     storyOutline: project.outline,
     characters: buildCharacterContextForTask(project.characters, 'outlining'),
     existingChapters: formatChapterPlanContext(previousChapters),
@@ -647,8 +650,9 @@ export async function generateChapterDraft(
     characters: buildCharacterContextForTask(project.characters, 'writing'),
     relationships: relationshipContext,
     previousSummary: buildPreviousSummary(project, chapterIndex),
+    elements: buildElementContextForChapter(project.elements, chapter.index),
     language: project.language,
-    style: project.style,
+    style: buildProjectStylePrompt(project),
     project: buildProjectRelationshipContext(project),
     writingFormat: project.writingFormat,
     knowledgeBases,
@@ -729,7 +733,7 @@ export async function proofreadChapter(
       characters: buildCharacterContextForTask(project.characters, 'proofreading'),
       previousSummary: buildPreviousSummary(project, chapterIndex),
       language: project.language,
-      style: project.style,
+      style: buildProjectStylePrompt(project),
       project: buildProjectRelationshipContext(project),
       writingFormat: project.writingFormat,
       knowledgeBases,
@@ -830,11 +834,54 @@ export async function polishChapter(
     return 0
   }
 
-  if (!activeIssues.length) {
-    return buildChapterSnapshot('polished')
+  const runHumanizerPass = async () => {
+    for (let index = 0; index < segmentContents.length; index++) {
+      const content = segmentContents[index]
+      if (!content.trim()) continue
+      const audit = auditHumanText(content)
+      if (!audit.blocking && audit.score >= 75) continue
+      const findings = formatAuditForPrompt(audit)
+      if (!findings) continue
+
+      const context: Record<string, any> = {
+        content,
+        chapterTitle: chapter.title,
+        chapterNumber,
+        characters: buildCharacterContextForTask(project.characters, 'polishing'),
+        language: project.language,
+        style: buildProjectStylePrompt(project),
+        project: buildProjectRelationshipContext(project),
+        writingFormat: project.writingFormat,
+        proofreadingIssues: [{
+          id: `humanizer-${index}`,
+          title: 'Remove AI writing tells',
+          severity: 'high',
+          explanation: findings,
+          suggestedFix: 'Rewrite only the flagged prose. Keep every fact, story beat, and character voice.',
+          excerpt: '',
+          segmentIndex: index,
+          forcePolish: true,
+          polishStatus: 'pending',
+        }],
+        humanizerFindings: findings,
+        range: segments[index],
+      }
+      onToken?.(`\n[Humanizer pass ${index + 1}/${segmentContents.length}]\n`)
+      try {
+        const result = await polisherAgent.execute(context, onToken)
+        const polished = typeof context._polishedContent === 'string' && context._polishedContent.trim()
+          ? context._polishedContent
+          : result.content
+        if (polished.trim()) segmentContents[index] = polished
+      } catch {
+        // A failed style pass must not discard a valid chapter.
+      }
+      await onIntermediateChapter?.(buildChapterSnapshot('polishing'))
+    }
   }
 
-  for (let issueIndex = 0; issueIndex < activeIssues.length; issueIndex++) {
+  if (activeIssues.length) {
+    for (let issueIndex = 0; issueIndex < activeIssues.length; issueIndex++) {
     const issue = activeIssues[issueIndex]
     const segmentIndex = resolveIssueSegmentIndex(issue)
     const segment = segments[segmentIndex]
@@ -846,10 +893,11 @@ export async function polishChapter(
       chapterNumber,
       characters: buildCharacterContextForTask(project.characters, 'polishing'),
       language: project.language,
-      style: project.style,
+      style: buildProjectStylePrompt(project),
       project: buildProjectRelationshipContext(project),
       writingFormat: project.writingFormat,
       proofreadingIssues: [issue],
+      humanizerFindings: formatAuditForPrompt(auditHumanText(segmentContents[segmentIndex])),
       range: segment,
     }
     onToken?.(`\n[Polishing issue ${issueIndex + 1}/${activeIssues.length}: ${issue.title}]\n`)
@@ -876,7 +924,10 @@ export async function polishChapter(
     }
 
     await onIntermediateChapter?.(buildChapterSnapshot('polishing'))
+    }
   }
+
+  await runHumanizerPass()
 
   return buildChapterSnapshot('polished')
 }
@@ -983,7 +1034,7 @@ export async function run(
           relationships: relationshipContext,
           previousSummary: buildPreviousSummary(updatedProject, i),
           language: project.language,
-          style: project.style,
+          style: buildProjectStylePrompt(project),
           project: buildProjectRelationshipContext(updatedProject),
           writingFormat: project.writingFormat,
           knowledgeBases,
@@ -1098,7 +1149,7 @@ export async function run(
             characters: charContext,
             previousSummary: buildPreviousSummary(updatedProject, i),
             language: project.language,
-            style: project.style,
+            style: buildProjectStylePrompt(project),
             project: buildProjectRelationshipContext(updatedProject),
             writingFormat: updatedProject.writingFormat,
             knowledgeBases,

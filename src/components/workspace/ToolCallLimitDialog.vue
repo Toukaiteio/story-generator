@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AlertTriangle, RotateCw, Square } from 'lucide-vue-next'
-import { useGenerationStore } from '@/stores/generation'
+import { useStoryEngine } from '@/app'
 import { translatePhrase } from '@/i18n'
 import BaseDialog from '@/components/ui/BaseDialog.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 
 const AUTO_CONTINUE_SECONDS = 8
 
-const genStore = useGenerationStore()
+const engine = useStoryEngine()
 const tr = translatePhrase
 const remainingSeconds = ref(AUTO_CONTINUE_SECONDS)
 let timer: ReturnType<typeof setInterval> | null = null
 
-const request = computed(() => genStore.toolContinuationRequest)
+const request = computed(() => engine.pendingToolContinuation)
 
 function clearTimer() {
   if (!timer) return

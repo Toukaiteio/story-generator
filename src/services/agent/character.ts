@@ -2,6 +2,7 @@ import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { containsMetaCommentary, extractJsonPayload } from './validation'
+import { createCharacterTool } from './schemas'
 
 export class CharacterExpert extends BaseAgent {
   type: AgentType = 'character'
@@ -21,78 +22,7 @@ export class CharacterExpert extends BaseAgent {
 
   protected getTools(): ToolDefinition[] {
     return [
-      {
-        name: 'create_character',
-        description: 'Create a new character with detailed attributes for the story',
-        parameters: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'The character\'s full name',
-            },
-            role: {
-              type: 'string',
-              description: 'The character\'s role in the story',
-              enum: ['protagonist', 'antagonist', 'supporting', 'minor'],
-            },
-            personality: {
-              type: 'array',
-              description: '3-5 concise personality traits',
-              items: {
-                type: 'string',
-              },
-            },
-            appearance: {
-              type: 'string',
-              description: 'Physical appearance description',
-            },
-            backstory: {
-              type: 'string',
-              description: 'Character\'s background history',
-            },
-            motivation: {
-              type: 'string',
-              description: 'What drives this character',
-            },
-            goals: {
-              type: 'string',
-              description: 'Character\'s objectives in the story',
-            },
-            conflicts: {
-              type: 'string',
-              description: 'Internal or external conflicts the character faces',
-            },
-            currentState: {
-              type: 'string',
-              description: 'Character\'s current situation or state',
-            },
-            relations: {
-              type: 'array',
-              description: 'Relationships with other characters',
-              items: {
-                type: 'object',
-                properties: {
-                  targetName: {
-                    type: 'string',
-                    description: 'Name of the related character',
-                  },
-                  relation: {
-                    type: 'string',
-                    description: 'Type of relationship (e.g., friend, enemy, sibling)',
-                  },
-                  description: {
-                    type: 'string',
-                    description: 'Description of the relationship',
-                  },
-                },
-                required: ['targetName', 'relation', 'description'],
-              },
-            },
-          },
-          required: ['name', 'role', 'personality', 'appearance', 'backstory', 'motivation', 'goals', 'conflicts', 'currentState'],
-        },
-      },
+      createCharacterTool('Create a new character with detailed attributes for the story'),
       {
         name: 'finalize_characters',
         description: 'Finalize the character list when all characters have been created',

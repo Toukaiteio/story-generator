@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, reactive } from 'vue'
 import { useUiStore } from '@/stores/ui'
-import { useWritingStyleStore } from '@/stores/writingStyle'
-import { useProviderStore } from '@/stores/provider'
 import { useToast } from '@/composables/useToast'
-import { providerManager, type ToolDefinition, type ToolCall } from '@/services/provider'
-import { injectCustomSystemPrompt } from '@/services/systemPrompt'
+import {
+  useWritingStyleLibrary,
+  useModelCatalog,
+  useProviderRuntime,
+  injectCustomSystemPrompt,
+  type ToolDefinition,
+  type ToolCall,
+} from '@/app'
 import type { ChatMessage } from '@/types/provider'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
@@ -28,11 +32,13 @@ import {
   Download,
   Upload,
 } from 'lucide-vue-next'
-import type { WritingStyle, WritingStyleSource } from '@/types/writingStyle'
+import type { WritingStyle, WritingStyleSkill, WritingStyleSource } from '@/types/writingStyle'
+import { formatStyleSkill } from '@/app'
 
 const ui = useUiStore()
-const styleStore = useWritingStyleStore()
-const providerStore = useProviderStore()
+const styleStore = useWritingStyleLibrary()
+const providerStore = useModelCatalog()
+const providerManager = useProviderRuntime()
 const toast = useToast()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -79,6 +85,7 @@ async function handleImport(event: Event) {
       content: data.content,
       source: 'manual',
       tags: Array.isArray(data.tags) ? data.tags : [],
+      skill: data.skill,
     })
 
     toast.success('Style imported successfully')
@@ -108,6 +115,7 @@ const form = reactive({
   tags: '',
   referenceText: '',
   source: 'manual' as WritingStyleSource,
+  skill: undefined as WritingStyleSkill | undefined,
 })
 
 const filteredStyles = computed(() => {
@@ -129,6 +137,7 @@ function openCreateDrawer() {
   form.tags = ''
   form.referenceText = ''
   form.source = 'manual'
+  form.skill = undefined
   showReferenceSection.value = false
   showDrawer.value = true
 }
@@ -142,6 +151,7 @@ function openEditDrawer(style: WritingStyle) {
   form.tags = style.tags.join(', ')
   form.referenceText = ''
   form.source = style.source
+  form.skill = style.skill
   showReferenceSection.value = false
   showDrawer.value = true
 }
@@ -164,6 +174,7 @@ function saveStyle() {
       content: form.content,
       tags,
       source: form.source,
+      skill: form.skill,
     })
     toast.success('Style updated')
   } else {
@@ -173,6 +184,7 @@ function saveStyle() {
       content: form.content,
       source: form.source,
       tags,
+      skill: form.skill,
     })
     toast.success('Style created')
   }
@@ -198,6 +210,38 @@ type StyleDraft = {
   description: string
   tags: string[]
   content: string
+  whenToUse: string
+  signature: string
+  rules: string[]
+  antiPatterns: string[]
+  exemplars: string[]
+}
+
+function emptyStyleDraft(): StyleDraft {
+  return {
+    name: '',
+    description: '',
+    tags: [],
+    content: '',
+    whenToUse: '',
+    signature: '',
+    rules: [],
+    antiPatterns: [],
+    exemplars: [],
+  }
+}
+
+function draftToSkill(draft: StyleDraft): WritingStyleSkill | undefined {
+  const skill: WritingStyleSkill = {
+    whenToUse: draft.whenToUse.trim(),
+    signature: draft.signature.trim(),
+    rules: draft.rules.filter(Boolean),
+    antiPatterns: draft.antiPatterns.filter(Boolean),
+    exemplars: draft.exemplars.filter(Boolean),
+  }
+  return skill.whenToUse || skill.signature || skill.rules.length || skill.antiPatterns.length || skill.exemplars.length
+    ? skill
+    : undefined
 }
 
 const STYLE_GENERATION_MAX_RETRIES = 2
@@ -229,6 +273,23 @@ function normalizeStyleTags(value: unknown): string[] {
   return []
 }
 
+function normalizeStyleLines(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => typeof item === 'string' ? item.trim() : '')
+      .filter(Boolean)
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\n+/)
+      .map(item => item.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
 function applyStyleDraftUpdate(draft: StyleDraft, payload: Record<string, unknown>) {
   if (typeof payload.name === 'string' && payload.name.trim()) {
     draft.name = payload.name.trim()
@@ -237,6 +298,18 @@ function applyStyleDraftUpdate(draft: StyleDraft, payload: Record<string, unknow
   if (typeof payload.description === 'string' && payload.description.trim()) {
     draft.description = payload.description.trim()
   }
+
+  if (typeof payload.whenToUse === 'string' && payload.whenToUse.trim()) {
+    draft.whenToUse = payload.whenToUse.trim()
+  }
+
+  if (typeof payload.signature === 'string' && payload.signature.trim()) {
+    draft.signature = payload.signature.trim()
+  }
+
+  if ('rules' in payload) draft.rules = normalizeStyleLines(payload.rules)
+  if ('antiPatterns' in payload) draft.antiPatterns = normalizeStyleLines(payload.antiPatterns)
+  if ('exemplars' in payload) draft.exemplars = normalizeStyleLines(payload.exemplars)
 
   if ('tags' in payload) {
     draft.tags = normalizeStyleTags(payload.tags)
@@ -266,6 +339,11 @@ function buildDraftSummary(draft: StyleDraft): string {
   return 'Name: ' + (draft.name || '(empty)')
     + '\nDescription: ' + (draft.description || '(empty)')
     + '\nTags: ' + (draft.tags.length ? draft.tags.join(', ') : '(empty)')
+    + '\nWhen to use: ' + (draft.whenToUse || '(empty)')
+    + '\nVoice signature: ' + (draft.signature || '(empty)')
+    + '\nRules: ' + draft.rules.length
+    + '\nAnti-patterns: ' + draft.antiPatterns.length
+    + '\nExemplars: ' + draft.exemplars.length
     + '\nStyle Guide Content length: ' + draft.content.length + ' chars'
 }
 
@@ -277,6 +355,11 @@ function buildToolResponse(draft: StyleDraft, updatedFields: string[]): string {
       name: draft.name || '',
       description: draft.description || '',
       tags: draft.tags,
+      whenToUse: draft.whenToUse,
+      signature: draft.signature,
+      rules: draft.rules,
+      antiPatterns: draft.antiPatterns,
+      exemplars: draft.exemplars,
       contentLength: draft.content.length,
       contentTail: draft.content.slice(-300),
     },
@@ -304,6 +387,7 @@ function syncDraftToForm(draft: StyleDraft) {
   form.description = draft.description
   form.tags = draft.tags.join(', ')
   form.content = draft.content
+  form.skill = draftToSkill(draft)
   form.source = 'ai-generated'
 }
 
@@ -344,7 +428,7 @@ async function generateFromReference() {
 
     const analysisTool: ToolDefinition = {
       name: 'update_style_draft',
-      description: 'Update one or more fields of the writing style draft. Use this tool to set the style name, description, tags, or add a chunk of the style guide content. Multiple fields can be filled in the same call.',
+      description: 'Update one or more fields of the writing style draft. A writing style is a reusable voice skill: fill whenToUse, signature, rules, antiPatterns, and 2-3 short exemplars, plus the long-form style guide content. Multiple fields can be filled in the same call.',
       parameters: {
         type: 'object',
         properties: {
@@ -354,11 +438,34 @@ async function generateFromReference() {
           },
           description: {
             type: 'string',
-            description: 'Brief description of the style.',
+            description: 'One line describing the voice and the contexts where it applies.',
           },
           tags: {
             type: 'array',
             description: 'Tags for the style. Provide as an array of short strings.',
+            items: { type: 'string' },
+          },
+          whenToUse: {
+            type: 'string',
+            description: 'When this voice should be used: genre, POV, tense, and situations that fit.',
+          },
+          signature: {
+            type: 'string',
+            description: 'Measurable voice fingerprint: POV, tense, typical sentence length and rhythm, dialogue ratio, vocabulary register, punctuation habits.',
+          },
+          rules: {
+            type: 'array',
+            description: '4-8 imperative rules that reproduce this voice. One sentence each.',
+            items: { type: 'string' },
+          },
+          antiPatterns: {
+            type: 'array',
+            description: '3-6 things this voice avoids. One per item.',
+            items: { type: 'string' },
+          },
+          exemplars: {
+            type: 'array',
+            description: '2-3 short original passages (40-80 words each) written in this voice. Do not copy the reference text.',
             items: { type: 'string' },
           },
           content: {
@@ -378,12 +485,7 @@ async function generateFromReference() {
       },
     }
 
-    let finalDraft: StyleDraft = {
-      name: '',
-      description: '',
-      tags: [],
-      content: '',
-    }
+    let finalDraft: StyleDraft = emptyStyleDraft()
     let repairContext = ''
 
     for (let attempt = 0; attempt <= STYLE_GENERATION_MAX_RETRIES; attempt++) {
@@ -401,23 +503,18 @@ async function generateFromReference() {
         : 'Analyzing the reference text.')
       await waitForPaint()
 
-      const attemptDraft: StyleDraft = {
-        name: '',
-        description: '',
-        tags: [],
-        content: '',
-      }
+      const attemptDraft: StyleDraft = emptyStyleDraft()
 
       const guideMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: injectCustomSystemPrompt('You are an expert literary analyst. Analyze the reference text and build a writing style draft. Use the provided tool to fill the style name, description, tags, and Style Guide Content. You may set multiple fields in the same tool call. For Style Guide Content, split long output into multiple smaller chunks rather than dumping everything at once. Prefer one section or subsection per chunk. Do not add meta commentary in plain text; use the tool for structured output.'),
+          content: injectCustomSystemPrompt('You are an expert literary analyst. Turn the reference text into a reusable voice skill. Use the provided tool to fill: name, description, tags, whenToUse, signature, rules, antiPatterns, 2-3 short exemplars, and the long-form Style Guide Content. The voice skill is what the writing engine loads first, so make it specific and imperative. The exemplars must be new prose written in the voice, never copied from the reference. You may set multiple fields in the same call. For Style Guide Content, split long output into smaller chunks under clear section titles. Do not add meta commentary in plain text.'),
         },
         {
           role: 'user',
           content: repairContext
             ? 'The previous style draft did not accurately capture the style of the reference text. Issues found:\n' + repairContext + '\n\nPlease revise the draft to better match the reference text\'s actual style.\n\nCurrent draft snapshot:\n' + buildDraftSummary(finalDraft) + '\n\nReference text:\n' + form.referenceText
-            : 'Analyze the following reference text and produce a complete writing style draft.\n\nRequirements:\n- Fill Style Name, Description, Tags, and Style Guide Content.\n- You may fill several fields in the same tool call.\n- For Style Guide Content, split the output into multiple chunks if it is long. Use several smaller chunks instead of one large block.\n- Keep the style guide markdown clean and reusable.\n\nReference text:\n' + form.referenceText,
+            : 'Analyze the following reference text and produce a complete writing style draft.\n\nRequirements:\n- description: one line on the voice and where it applies.\n- whenToUse: genre, POV, tense, and situations that fit.\n- signature: measurable fingerprint (POV, tense, sentence length and rhythm, dialogue ratio, vocabulary register, punctuation habits).\n- rules: 4-8 imperative rules that reproduce the voice.\n- antiPatterns: 3-6 things this voice avoids.\n- exemplars: 2-3 short original passages in the voice. Do not copy the reference text.\n- content: the long-form reusable style guide. For content, split long output into multiple chunks if needed.\n- You may fill several fields in the same tool call.\n\nReference text:\n' + form.referenceText,
         },
       ]
 
@@ -554,6 +651,11 @@ async function generateFromReference() {
         description: attemptDraft.description,
         tags: [...attemptDraft.tags],
         content: attemptDraft.content,
+        whenToUse: attemptDraft.whenToUse,
+        signature: attemptDraft.signature,
+        rules: [...attemptDraft.rules],
+        antiPatterns: [...attemptDraft.antiPatterns],
+        exemplars: [...attemptDraft.exemplars],
       }
 
       generationPhase.value = 'Validation sample'
@@ -568,7 +670,7 @@ async function generateFromReference() {
         },
         {
           role: 'user',
-          content: 'Write a short sample passage (200-400 words) that demonstrates the writing style described in the following guide. The passage should be original fiction, not a copy of any reference text.\n\nStyle Guide:\n' + finalDraft.content,
+          content: 'Write a short sample passage (200-400 words) that demonstrates the writing style described in the following voice skill and guide. The passage should be original fiction, not a copy of any reference text.\n\n' + formatStyleSkill(draftToSkill(finalDraft), finalDraft.name) + '\n\nStyle Guide:\n' + finalDraft.content,
         },
       ]
 
@@ -648,13 +750,11 @@ function sourceVariant(source: string): 'accent' | 'default' {
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
+  <div class="app-page flex flex-col">
+    <div class="app-toolbar">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Writing Styles') }}</h1>
-        <p class="text-xs text-text-secondary mt-0.5">
-          {{ ui.text('Create and manage reusable writing style guides for story generation') }}
-        </p>
+        <h1 class="app-toolbar-title">{{ ui.text('Writing Styles') }}</h1>
+        <p class="app-toolbar-meta">{{ filteredStyles.length }} {{ ui.text('writing styles') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <input
@@ -675,8 +775,8 @@ function sourceVariant(source: string): 'accent' | 'default' {
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-4xl mx-auto space-y-4">
+    <div class="app-content">
+      <div class="mx-auto max-w-5xl space-y-4">
         <div class="mb-4">
           <BaseInput
             v-model="searchQuery"
@@ -686,7 +786,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
 
         <BaseCard padding="md">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg bg-surface-3 flex items-center justify-center">
+            <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
               <BookOpen :size="18" class="text-text-muted" />
             </div>
             <div class="flex-1 min-w-0">
@@ -722,7 +822,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
           :description="ui.text('Try a different search term.')"
         />
 
-        <div v-else class="space-y-3">
+        <div v-else class="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <BaseCard
             v-for="style in filteredStyles"
             :key="style.id"
@@ -755,21 +855,21 @@ function sourceVariant(source: string): 'accent' | 'default' {
               </div>
               <div class="flex items-center gap-1.5 shrink-0">
                 <button
-                  class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                  class="app-icon-button"
                   :title="ui.text('Export Style')"
                   @click="exportStyle(style)"
                 >
                   <Download :size="14" />
                 </button>
                 <button
-                  class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                  class="app-icon-button"
                   :title="ui.text('Edit Style')"
                   @click="openEditDrawer(style)"
                 >
                   <Pencil :size="14" />
                 </button>
                 <button
-                  class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
+                  class="app-icon-button app-icon-button--danger"
                   :title="ui.text('Delete Style')"
                   @click="requestDelete(style.id)"
                 >
@@ -792,21 +892,21 @@ function sourceVariant(source: string): 'accent' | 'default' {
         <Transition name="slide-right" appear>
           <div
             v-if="showDrawer"
-            class="absolute right-0 top-0 h-full w-[480px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(520px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">
                 {{ ui.text(editingId ? 'Edit Style' : 'Create Style') }}
               </h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="showDrawer = false"
               >
                 <X :size="16" />
               </button>
             </div>
 
-            <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
               <div v-if="isGenerating || generationEvents.length" class="rounded-lg border border-accent/30 bg-accent-subtle/20 p-4 space-y-3">
                 <div class="flex items-start gap-3">
                   <div class="w-9 h-9 rounded-lg bg-surface-1 flex items-center justify-center shrink-0">
@@ -829,15 +929,15 @@ function sourceVariant(source: string): 'accent' | 'default' {
                 </div>
 
                 <div class="grid grid-cols-3 gap-2 text-xs">
-                  <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
+                  <div class="app-subpanel min-w-0 px-2 py-2">
                     <div class="text-2xs text-text-muted">{{ ui.text('Style Name') }}</div>
                     <div class="text-text-primary truncate">{{ form.name || '—' }}</div>
                   </div>
-                  <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
+                  <div class="app-subpanel min-w-0 px-2 py-2">
                     <div class="text-2xs text-text-muted">{{ ui.text('Tags') }}</div>
                     <div class="text-text-primary truncate">{{ form.tags || '—' }}</div>
                   </div>
-                  <div class="rounded-md border border-surface-4 bg-surface-1 px-2 py-2 min-w-0">
+                  <div class="app-subpanel min-w-0 px-2 py-2">
                     <div class="text-2xs text-text-muted">{{ ui.text('Content') }}</div>
                     <div class="text-text-primary">{{ form.content.length }} chars</div>
                   </div>
@@ -847,7 +947,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                   <BaseTag v-for="field in generationCurrentFields" :key="field" size="sm" variant="accent">{{ field }}</BaseTag>
                 </div>
 
-                <div v-if="generationAssistantText" class="rounded-lg border border-surface-4 bg-surface-1 px-3 py-2 text-[11px] leading-5 text-text-secondary max-h-28 overflow-y-auto whitespace-pre-wrap break-words">
+                <div v-if="generationAssistantText" class="app-subpanel max-h-28 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 text-[11px] leading-5 text-text-secondary">
                   {{ generationAssistantText }}
                 </div>
 
@@ -878,6 +978,20 @@ function sourceVariant(source: string): 'accent' | 'default' {
                 :icon="Tag"
               />
 
+              <div v-if="form.skill" class="rounded-xl border border-surface-4 bg-surface-1 p-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-semibold text-text-primary">{{ ui.text('Voice skill') }}</span>
+                  <span class="text-2xs text-text-muted">{{ form.skill.rules.length }} {{ ui.text('rules') }}</span>
+                </div>
+                <p v-if="form.skill.whenToUse" class="mt-1.5 text-xs text-text-secondary">{{ form.skill.whenToUse }}</p>
+                <p v-if="form.skill.signature" class="mt-1 text-2xs text-text-muted">{{ form.skill.signature }}</p>
+                <div v-if="form.skill.rules.length" class="mt-2 flex flex-wrap gap-1.5">
+                  <span v-for="rule in form.skill.rules.slice(0, 6)" :key="rule" class="rounded-full bg-surface-2 px-2 py-0.5 text-2xs text-text-secondary">
+                    {{ rule }}
+                  </span>
+                </div>
+              </div>
+
               <div class="flex-1 flex flex-col gap-2">
                 <div class="flex items-center justify-between">
                   <label class="text-xs font-medium text-text-secondary">{{ ui.text('Style Guide Content') }}</label>
@@ -885,7 +999,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                 </div>
                 <textarea
                   v-model="form.content"
-                  class="flex-1 min-h-[200px] w-full rounded-lg border border-surface-4 bg-surface-2 px-3 py-2 text-sm text-text-primary outline-none focus:border-accent resize-y"
+                  class="app-textarea min-h-[200px] flex-1 resize-y text-sm"
                   placeholder="Write your style guide here in markdown...
 
 Example:
@@ -901,7 +1015,7 @@ Focus on concrete sensory details. Avoid abstraction."
               </div>
 
               <!-- Analyze Reference Text Section -->
-              <div class="rounded-lg border border-surface-4 bg-surface-2">
+              <div class="app-subpanel overflow-hidden">
                 <button
                   class="w-full flex items-center justify-between px-4 py-3 text-left"
                   @click="showReferenceSection = !showReferenceSection"
@@ -917,11 +1031,11 @@ Focus on concrete sensory details. Avoid abstraction."
 
                 <div v-if="showReferenceSection" class="px-4 pb-4 space-y-3">
                   <p class="text-xs text-text-secondary">
-                    {{ ui.text('Paste a sample of the writing style you want to capture. The AI will analyze it, fill Style Name / Description / Tags / Style Guide Content, and can split the guide into smaller chunks for better accuracy.') }}
+                    {{ ui.text('Paste a sample. The AI turns it into a voice skill (when to use, signature, rules, anti-patterns, exemplars) plus a full style guide.') }}
                   </p>
                   <textarea
                     v-model="form.referenceText"
-                    class="w-full h-40 rounded-lg border border-surface-4 bg-surface-1 px-3 py-2 text-sm text-text-primary outline-none focus:border-accent resize-y"
+                    class="app-textarea h-40 resize-y text-sm"
                     placeholder="Paste reference text here..."
                   />
                   <BaseButton
@@ -939,7 +1053,7 @@ Focus on concrete sensory details. Avoid abstraction."
               </div>
             </div>
 
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="showDrawer = false">{{ ui.text('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"

@@ -1,4 +1,5 @@
 import { readJsonStorage } from '@/lib/storage'
+import { withHumanizer } from '@/services/humanizer'
 
 const UI_STORAGE_KEY = 'story-generator.ui.v1'
 
@@ -16,8 +17,9 @@ export function getCustomSystemPrompt(): string {
 }
 
 export function injectCustomSystemPrompt(systemPrompt: string): string {
+  const base = withHumanizer(systemPrompt)
   const customPrompt = getCustomSystemPrompt()
-  if (!customPrompt) return systemPrompt
-  if (systemPrompt.startsWith(customPrompt)) return systemPrompt
-  return `${customPrompt}\n\n${systemPrompt}`
+  if (!customPrompt) return base
+  if (base.startsWith(customPrompt)) return base
+  return `${customPrompt}\n\n${base}`
 }

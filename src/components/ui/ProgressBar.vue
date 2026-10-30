@@ -15,18 +15,18 @@ withDefaults(defineProps<{
 <template>
   <div
     :class="[
-      'w-full rounded-full overflow-hidden bg-surface-3',
+      'w-full overflow-hidden rounded-full border border-surface-4 bg-surface-0',
       size === 'sm' ? 'h-1' : 'h-2',
     ]"
   >
     <div
       v-if="indeterminate"
-      class="h-full bg-accent rounded-full animate-progress-indeterminate"
+      class="h-full rounded-full bg-accent animate-progress-indeterminate"
       style="width: 40%"
     />
     <div
       v-else
-      class="h-full bg-accent rounded-full transition-all duration-300 ease-out"
+      class="h-full rounded-full bg-accent transition-all duration-300 ease-out"
       :style="{ width: `${Math.min(100, (value / max) * 100)}%` }"
     />
   </div>

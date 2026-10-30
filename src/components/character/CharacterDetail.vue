@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
+import { useStoryProject } from '@/app'
 import { useToast } from '@/composables/useToast'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseTextarea from '@/components/ui/BaseTextarea.vue'
@@ -16,7 +16,7 @@ const props = defineProps<{
   characterId: string
 }>()
 
-const projectStore = useProjectStore()
+const projectStore = useStoryProject()
 const ui = useUiStore()
 const toast = useToast()
 const showDeleteConfirm = ref(false)
@@ -189,22 +189,22 @@ defineExpose({
 </script>
 
 <template>
-  <div v-if="character" class="h-full overflow-y-auto">
-    <div class="max-w-5xl mx-auto px-6 py-8">
-      
+  <div v-if="character" class="h-full overflow-y-auto bg-surface-0/60">
+    <div class="mx-auto max-w-5xl px-6 py-6">
+      <div class="app-panel mb-6 overflow-hidden">
       <!-- Top Header Area -->
-      <div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between mb-8 pb-6 border-b border-surface-4">
-        <div class="flex items-start gap-5">
-          <div class="w-16 h-16 rounded-2xl bg-surface-3 flex items-center justify-center shrink-0 border border-surface-4 shadow-sm">
-            <User :size="28" class="text-text-secondary" />
+      <div class="app-panel-header flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div class="flex items-start gap-4">
+          <div class="app-icon-tile flex h-12 w-12 shrink-0 items-center justify-center">
+            <User :size="22" class="text-text-secondary" />
           </div>
-          <div class="space-y-3 pt-1">
+          <div class="space-y-3">
             <div class="space-y-1">
               <div class="flex items-center gap-3 flex-wrap">
-                <h2 class="text-2xl font-bold text-text-primary tracking-tight">{{ form.name || character.name }}</h2>
+                <h2 class="text-lg font-semibold text-text-primary">{{ form.name || character.name }}</h2>
                 <BaseTag :variant="roleVariant" size="sm" class="uppercase tracking-wider font-semibold text-[10px] px-2">{{ form.role }}</BaseTag>
               </div>
-              <p class="text-sm text-text-secondary max-w-2xl leading-relaxed">
+              <p class="max-w-2xl text-xs leading-relaxed text-text-secondary">
                 {{ ui.text("Define the character's core identity, physical traits, emotional drivers, and interpersonal relationships.") }}
               </p>
             </div>
@@ -213,7 +213,7 @@ defineExpose({
               <div
                 v-for="item in metaInfo"
                 :key="item.label"
-                class="px-2.5 py-1 rounded-md bg-surface-2 border border-surface-3 text-xs text-text-secondary flex items-center gap-1.5"
+                class="app-subpanel app-subpanel--muted flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary"
               >
                 <CalendarDays :size="12" class="text-text-muted" />
                 <span class="text-text-muted">{{ ui.text(item.label) }}:</span>
@@ -223,27 +223,28 @@ defineExpose({
           </div>
         </div>
 
-        <div class="flex items-center gap-3 shrink-0">
-          <BaseButton variant="secondary" size="md" @click="requestDelete" class="!text-danger hover:!bg-danger-subtle hover:!border-danger/30">
-            <Trash2 :size="16" />
+        <div class="flex shrink-0 items-center gap-2">
+          <BaseButton variant="secondary" size="sm" @click="requestDelete" class="!text-danger hover:!bg-danger-subtle hover:!border-danger/30">
+            <Trash2 :size="14" />
             <span>{{ ui.text('Delete') }}</span>
           </BaseButton>
-          <BaseButton variant="primary" size="md" @click="save">
-            <Save :size="16" />
+          <BaseButton variant="primary" size="sm" @click="save">
+            <Save :size="14" />
             <span>{{ ui.text('Save Changes') }}</span>
           </BaseButton>
         </div>
       </div>
+      </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div class="lg:col-span-8 space-y-6">
-          <BaseCard class="!p-6 !bg-surface-1 border-surface-3 shadow-sm hover:border-surface-4 transition-colors">
-            <div class="flex items-center gap-3 mb-6">
-              <div class="w-10 h-10 rounded-lg bg-surface-2 flex items-center justify-center border border-surface-3">
+        <div class="lg:col-span-8 space-y-4">
+          <BaseCard class="!p-4">
+            <div class="mb-4 flex items-center gap-3">
+              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
                 <Fingerprint :size="18" class="text-accent" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Core Identity') }}</h3>
+                <h3 class="app-section-title">{{ ui.text('Core Identity') }}</h3>
                 <p class="text-xs text-text-secondary">{{ ui.text('Name, role, and personality traits.') }}</p>
               </div>
             </div>
@@ -253,7 +254,7 @@ defineExpose({
               <BaseSelect v-model="form.role" label="Role" :options="roleOptions" />
             </div>
 
-            <div class="mt-5">
+            <div class="mt-4">
               <BaseTextarea
                 v-model="form.personality"
                 label="Personality Traits"
@@ -264,13 +265,13 @@ defineExpose({
             </div>
           </BaseCard>
 
-          <BaseCard class="!p-6 !bg-surface-1 border-surface-3 shadow-sm hover:border-surface-4 transition-colors">
-            <div class="flex items-center gap-3 mb-6">
-              <div class="w-10 h-10 rounded-lg bg-surface-2 flex items-center justify-center border border-surface-3">
+          <BaseCard class="!p-4">
+            <div class="mb-4 flex items-center gap-3">
+              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
                 <Heart :size="18" class="text-success" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Physical & Past') }}</h3>
+                <h3 class="app-section-title">{{ ui.text('Physical & Past') }}</h3>
                 <p class="text-xs text-text-secondary">{{ ui.text('Concrete details for consistent generation.') }}</p>
               </div>
             </div>
@@ -281,13 +282,13 @@ defineExpose({
             </div>
           </BaseCard>
 
-          <BaseCard class="!p-6 !bg-surface-1 border-surface-3 shadow-sm hover:border-surface-4 transition-colors">
-            <div class="flex items-center gap-3 mb-6">
-              <div class="w-10 h-10 rounded-lg bg-surface-2 flex items-center justify-center border border-surface-3">
+          <BaseCard class="!p-4">
+            <div class="mb-4 flex items-center gap-3">
+              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
                 <Target :size="18" class="text-warning" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Motivation & Conflict') }}</h3>
+                <h3 class="app-section-title">{{ ui.text('Motivation & Conflict') }}</h3>
                 <p class="text-xs text-text-secondary">{{ ui.text('What drives them and what stands in their way.') }}</p>
               </div>
             </div>
@@ -297,24 +298,24 @@ defineExpose({
               <BaseTextarea v-model="form.goals" label="Goals" :rows="3" :auto-resize="true" placeholder="What are their current concrete objectives..." />
             </div>
 
-            <div class="mt-5">
+            <div class="mt-4">
               <BaseTextarea v-model="form.conflicts" label="Conflicts" :rows="3" :auto-resize="true" placeholder="Internal struggles and external obstacles..." />
             </div>
 
-            <div class="mt-5">
+            <div class="mt-4">
               <BaseTextarea v-model="form.currentState" label="Current State" :rows="2" :auto-resize="true" placeholder="Current situation, mood, or status in the narrative..." />
             </div>
           </BaseCard>
         </div>
 
-        <div class="lg:col-span-4 space-y-6">
-          <BaseCard class="!p-6 !bg-surface-1 border-surface-3 shadow-sm hover:border-surface-4 transition-colors">
-            <div class="flex items-center gap-3 mb-6">
-              <div class="w-10 h-10 rounded-lg bg-surface-2 flex items-center justify-center border border-surface-3">
+        <div class="lg:col-span-4 space-y-4">
+          <BaseCard class="!p-4">
+            <div class="mb-4 flex items-center gap-3">
+              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
                 <ArrowLeftRight :size="18" class="text-accent" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Relationships') }}</h3>
+                <h3 class="app-section-title">{{ ui.text('Relationships') }}</h3>
                 <p class="text-xs text-text-secondary">{{ ui.text('Connections to others.') }}</p>
               </div>
             </div>
@@ -323,7 +324,7 @@ defineExpose({
               <div
                 v-for="rel in character.relations"
                 :key="rel.targetId"
-                class="rounded-xl border border-surface-4 bg-surface-2 px-4 py-3.5 space-y-2.5 transition-colors hover:border-surface-5"
+                class="app-subpanel app-subpanel--muted space-y-2.5 px-4 py-3.5 transition-colors hover:border-surface-5"
               >
                 <div class="flex items-center justify-between gap-3">
                   <BaseTag size="sm" variant="accent" class="text-[10px] font-medium tracking-wide">{{ rel.relation }}</BaseTag>
@@ -332,8 +333,8 @@ defineExpose({
                 <p class="text-sm text-text-primary leading-relaxed">{{ rel.description }}</p>
               </div>
             </div>
-            <div v-else class="rounded-xl border-2 border-dashed border-surface-4 bg-surface-2/50 px-4 py-8 flex flex-col items-center justify-center text-center">
-              <div class="w-12 h-12 rounded-full bg-surface-3 flex items-center justify-center mb-3">
+            <div v-else class="app-subpanel app-subpanel--muted flex flex-col items-center justify-center px-4 py-8 text-center">
+              <div class="app-icon-tile mb-3 flex h-12 w-12 items-center justify-center">
                 <ArrowLeftRight :size="20" class="text-text-muted" />
               </div>
               <p class="text-sm font-medium text-text-primary">{{ ui.text('No relationships yet') }}</p>
@@ -341,18 +342,18 @@ defineExpose({
             </div>
           </BaseCard>
 
-          <BaseCard class="!p-6 !bg-danger-subtle/30 border-danger/20 shadow-sm">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-10 h-10 rounded-lg bg-danger-subtle flex items-center justify-center border border-danger/20">
+          <div class="app-danger-panel p-4">
+            <div class="mb-4 flex items-center gap-3">
+              <div class="app-icon-tile flex h-10 w-10 items-center justify-center border-danger/25 bg-danger-subtle/50">
                 <Trash2 :size="18" class="text-danger" />
               </div>
               <div>
-                <h3 class="text-base font-semibold text-text-primary">{{ ui.text('Danger Zone') }}</h3>
+                <h3 class="app-section-title">{{ ui.text('Danger Zone') }}</h3>
                 <p class="text-xs text-danger/80">{{ ui.text('Irreversible actions.') }}</p>
               </div>
             </div>
 
-            <p class="text-sm text-text-secondary leading-relaxed mb-5">
+            <p class="mb-4 text-xs leading-relaxed text-text-secondary">
               {{ ui.text('Permanently delete this character from the project. All related references in other characters will be cleaned up.') }}
             </p>
             
@@ -360,7 +361,7 @@ defineExpose({
               <Trash2 :size="16" />
               <span>{{ ui.text('Delete Character') }}</span>
             </BaseButton>
-          </BaseCard>
+          </div>
         </div>
       </div>
     </div>

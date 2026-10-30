@@ -15,19 +15,15 @@
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-    background-color: #0d1117;
-    color: #e6edf3;
+    @apply bg-surface-0 text-text-primary;
   }
 
   ::selection {
-    background-color: rgba(88, 166, 255, 0.3);
-    color: #e6edf3;
+    @apply bg-accent/30 text-text-primary;
   }
 
   :focus-visible {
-    outline: 2px solid #58a6ff;
-    outline-offset: 2px;
-    border-radius: 4px;
+    @apply rounded outline outline-2 outline-offset-2 outline-accent;
   }
 }
 
@@ -40,33 +36,240 @@
     -webkit-app-region: no-drag;
   }
 
-  .surface-0 { background-color: #0d1117; }
-  .surface-1 { background-color: #161b22; }
-  .surface-2 { background-color: #1c2128; }
-  .surface-3 { background-color: #21262d; }
-  .surface-4 { background-color: #2d333b; }
+  .surface-0 { @apply bg-surface-0; }
+  .surface-1 { @apply bg-surface-1; }
+  .surface-2 { @apply bg-surface-2; }
+  .surface-3 { @apply bg-surface-3; }
+  .surface-4 { @apply bg-surface-4; }
 
   .border-subtle {
-    border-color: #21262d;
+    @apply border-surface-3;
   }
 
   .border-default {
-    border-color: #2d333b;
+    @apply border-surface-4;
   }
 
-  .text-primary { color: #e6edf3; }
-  .text-secondary { color: #8b949e; }
-  .text-muted { color: #484f58; }
+  .text-primary { @apply text-text-primary; }
+  .text-secondary { @apply text-text-secondary; }
+  .text-muted { @apply text-text-muted; }
 
   .interactive {
     transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
   }
 
   .interactive:hover {
-    background-color: #21262d;
+    @apply bg-surface-3;
   }
 
   .interactive:active {
-    background-color: #2d333b;
+    @apply bg-surface-4;
+  }
+
+  .app-page {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    @apply bg-surface-0;
+  }
+
+  .app-toolbar {
+    display: flex;
+    min-height: 56px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    @apply border-b border-surface-3 bg-surface-1;
+    padding: 0.75rem 1.25rem;
+  }
+
+  .app-toolbar-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    @apply text-text-primary;
+  }
+
+  .app-toolbar-meta {
+    margin-top: 0.125rem;
+    font-size: 0.6875rem;
+    @apply text-text-secondary;
+  }
+
+  .app-content {
+    min-height: 0;
+    flex: 1 1 0%;
+    overflow: auto;
+    padding: 1.25rem;
+    scrollbar-gutter: stable;
+  }
+
+  .app-content::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .app-content::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: rgba(111, 125, 140, 0.34);
+    background-clip: padding-box;
+  }
+
+  .app-content::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .app-panel {
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-1;
+  }
+
+  .app-panel-header {
+    @apply border-b border-surface-4;
+    padding: 0.875rem 1rem;
+  }
+
+  .app-section-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    @apply text-text-primary;
+  }
+
+  .app-muted {
+    @apply text-text-secondary;
+  }
+
+  .app-list-item {
+    width: 100%;
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-0;
+    text-align: left;
+    transition: border-color 150ms ease, background 150ms ease;
+  }
+
+  .app-list-item:hover {
+    @apply border-surface-5 bg-surface-2;
+  }
+
+  .app-list-item--active {
+    @apply border-accent bg-accent-subtle;
+  }
+
+  .app-subpanel {
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-0;
+  }
+
+  .app-subpanel--muted {
+    @apply border-surface-3 bg-surface-1;
+  }
+
+  .app-icon-button {
+    display: inline-flex;
+    width: 1.75rem;
+    height: 1.75rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    @apply text-text-secondary;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+  }
+
+  .app-icon-button:hover {
+    background: rgba(255, 255, 255, 0.055);
+    @apply text-text-primary;
+  }
+
+  .app-icon-button--danger:hover {
+    background: rgba(248, 81, 73, 0.12);
+    @apply text-danger;
+  }
+
+  .app-textarea {
+    width: 100%;
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-0;
+    padding: 0.625rem 0.75rem;
+    @apply text-text-primary;
+    outline: none;
+    transition: border-color 150ms ease, background 150ms ease;
+  }
+
+  .app-textarea::placeholder {
+    @apply text-text-muted;
+  }
+
+  .app-textarea:focus {
+    @apply border-accent bg-surface-1;
+  }
+
+  .app-toolbar-pill {
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-0;
+    padding: 0.125rem;
+  }
+
+  .app-icon-tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-0;
+  }
+
+  .app-danger-panel {
+    @apply border border-danger;
+    border-radius: 0.375rem;
+    @apply bg-danger-subtle;
+  }
+
+  .app-drawer {
+    @apply border-l border-surface-4 bg-surface-1;
+  }
+
+  .app-drawer-header {
+    @apply border-b border-surface-4;
+    padding: 1rem 1.25rem;
+  }
+
+  .app-drawer-body {
+    padding: 1rem 1.25rem;
+  }
+
+  .app-drawer-footer {
+    @apply border-t border-surface-4;
+    padding: 0.75rem 1.25rem;
+  }
+
+  .settings-panel {
+    position: relative;
+    overflow: hidden;
+    @apply border border-surface-4;
+    border-radius: 0.375rem;
+    @apply bg-surface-1;
+    padding: 1rem;
+  }
+
+  @media (max-width: 720px) {
+    .app-toolbar {
+      align-items: stretch;
+      flex-direction: column;
+      padding: 0.75rem 1rem;
+    }
+
+    .app-content {
+      padding: 1rem;
+    }
   }
 }

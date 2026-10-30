@@ -22,6 +22,7 @@ export const useWritingStyleStore = defineStore('writingStyle', () => {
     content: string
     source: 'manual' | 'ai-generated'
     tags: string[]
+    skill?: WritingStyle['skill']
   }): WritingStyle {
     const style = writingStyleService.create(data)
     styles.value.push(style)

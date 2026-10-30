@@ -4,8 +4,14 @@ import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/t
 import { extractJsonObject } from './validation'
 
 export class DetailerExpert extends BaseAgent {
-  type: AgentType = 'detailer'
-  name = 'Detailer Expert'
+  type: AgentType
+  name: string
+
+  constructor(type: AgentType = 'detailer', name = 'Detailer Expert') {
+    super()
+    this.type = type
+    this.name = name
+  }
 
   protected getValidationRetryLimit(): number {
     return 2

@@ -1,6 +1,8 @@
 import type { ID, Timestamps } from './common'
 import type { Chapter } from './chapter'
 import type { Character } from './character'
+import type { StoryElement } from './element'
+import type { WritingStyleSkill } from './writingStyle'
 import type { CharacterRelationshipEvent } from './relationship'
 
 export type StoryLength = 'short' | 'medium' | 'long'
@@ -11,7 +13,6 @@ export type GenerationStage =
   | 'idle'
   | 'planning'
   | 'chapter-outline'
-  | 'chapter-outline-review'
   | 'writing'
   | 'proofreading'
   | 'polishing'
@@ -27,22 +28,8 @@ export interface ProjectWritingStyleSnapshot {
   description?: string
   content: string
   tags?: string[]
+  skill?: WritingStyleSkill
   capturedAt: string
-}
-
-export interface ProjectReviewAgentSettings {
-  agents: Record<string, {
-    name?: string
-    role?: string
-    brief?: string
-    defaultModelRole?: 'chapterPlanner' | 'proofreader' | 'proposerAgent'
-    modelValue?: string
-    systemPrompt?: string
-    customSystemPrompt?: string
-    disabled?: boolean
-    deleted?: boolean
-    custom?: boolean
-  }>
 }
 
 export interface StoryProject extends Timestamps {
@@ -67,11 +54,11 @@ export interface StoryProject extends Timestamps {
   customRequirements: string
   chapters: Chapter[]
   characters: Character[]
+  elements?: StoryElement[]
   relationshipEvents: CharacterRelationshipEvent[]
   knowledgeBaseIds: ID[]
   status: StoryStatus
   generationStage: GenerationStage
   outline: string
   summary: string
-  reviewAgentSettings?: ProjectReviewAgentSettings
 }

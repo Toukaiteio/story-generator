@@ -11,13 +11,13 @@ withDefaults(defineProps<{
 <template>
   <span
     :class="[
-      'inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full text-2xs font-bold leading-none',
+      'inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full border px-1.5 text-2xs font-bold leading-none',
       {
-        'bg-surface-4 text-text-secondary': variant === 'default',
-        'bg-accent text-text-inverse': variant === 'accent',
-        'bg-success text-text-inverse': variant === 'success',
-        'bg-warning text-text-inverse': variant === 'warning',
-        'bg-danger text-text-inverse': variant === 'danger',
+        'border-surface-4 bg-surface-2 text-text-secondary': variant === 'default',
+        'border-accent/30 bg-accent-subtle text-accent': variant === 'accent',
+        'border-success/30 bg-success-subtle text-success': variant === 'success',
+        'border-warning/30 bg-warning-subtle text-warning': variant === 'warning',
+        'border-danger/30 bg-danger-subtle text-danger': variant === 'danger',
       },
     ]"
   >

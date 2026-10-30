@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { Calendar, BookOpen, MoreVertical, Trash2, FolderOpen, FileDown, Link, Unlink, RefreshCw, Search } from 'lucide-vue-next'
 import type { StoryProject } from '@/types/project'
-import type { ProjectExportBinding } from '@/services/projectExportSync'
+import type { ProjectExportBinding } from '@/app'
 import { translatePhrase } from '@/i18n'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseDropdown from '@/components/ui/BaseDropdown.vue'
@@ -56,12 +56,14 @@ const dropdownItems = computed(() => [
 
 <template>
   <div
-    class="group relative rounded-lg border border-surface-4 bg-surface-2 p-4 cursor-pointer transition-all duration-100 hover:border-surface-5 hover:bg-surface-3 active:scale-[0.99]"
+    class="group relative cursor-pointer overflow-hidden rounded-md border border-surface-4 bg-surface-1 p-4 transition-colors duration-150 hover:border-surface-5 hover:bg-surface-2"
     @click="emit('open', project.id)"
   >
     <div class="flex items-start justify-between mb-3">
-      <div class="flex items-center gap-2 min-w-0">
-        <BookOpen :size="16" class="text-accent shrink-0" />
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-accent/30 bg-accent-subtle text-accent">
+          <BookOpen :size="15" />
+        </span>
         <h3 class="text-sm font-semibold text-text-primary truncate">{{ project.name }}</h3>
       </div>
       <div class="opacity-0 group-hover:opacity-100 transition-opacity duration-100" @click.stop>
@@ -75,7 +77,7 @@ const dropdownItems = computed(() => [
       </div>
     </div>
 
-    <p class="text-xs text-text-secondary line-clamp-2 mb-3 min-h-[2rem]">
+    <p class="mb-3 min-h-[2rem] line-clamp-2 text-xs leading-relaxed text-text-secondary">
       {{ project.theme || tr('No theme specified') }}
     </p>
 

@@ -148,7 +148,7 @@ Write prose only.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
-    const { chapterOutline, chapterTitle, chapterIndex, chapterNumber, characters, relationships, previousSummary, language, style, writingFormat } = context
+    const { chapterOutline, chapterTitle, chapterIndex, chapterNumber, characters, relationships, previousSummary, elements, language, style, writingFormat } = context
     const displayChapterNumber = Number.isInteger(chapterNumber) ? chapterNumber : chapterIndex + 1
 
     return `Write the following chapter:
@@ -169,6 +169,7 @@ ${characters}
 ${relationships ? `Relationship Guidance:\n${relationships}\n` : 'Relationship details are not inlined. Use relationship query tools only for specific character dynamics needed for this chapter.\n'}
 ${previousSummary ? `Previous Story Summary:\n${previousSummary}` : 'This is the first chapter.'}
 
+${elements ? `State of the World (current facts to obey):\n${elements}\n` : ''}
 Write the chapter in multiple tool-call sections in ${language || 'English'}. Aim for a total of 2000-3000 words across all sections. Each section should stay focused and substantial, but do not try to fit the whole chapter into one tool call. Include natural dialogue, vivid descriptions, and advance the plot according to the outline.
 
 Use the write_chapter tool to provide prose content only. Do not output chapter prose outside tool arguments. Unless the Writing Style Guide explicitly requires title or section structures, the content field must not start with the chapter title, "Chapter ${displayChapterNumber}", a Chinese chapter-number heading, or any section heading.`

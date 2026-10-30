@@ -13,10 +13,15 @@ const translatedDescription = computed(() => props.description ? translatePhrase
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center py-16 px-4 text-center">
-    <component :is="icon" v-if="icon" :size="48" class="text-text-muted mb-4" />
-    <h3 v-if="title" class="text-base font-medium text-text-secondary mb-1">{{ translatedTitle }}</h3>
-    <p v-if="description" class="text-sm text-text-muted max-w-xs">{{ translatedDescription }}</p>
+  <div class="flex flex-col items-center justify-center px-4 py-12 text-center">
+    <div
+      v-if="icon"
+      class="mb-3 flex h-12 w-12 items-center justify-center rounded-md border border-surface-4 bg-surface-1 text-text-muted"
+    >
+      <component :is="icon" :size="24" />
+    </div>
+    <h3 v-if="title" class="mb-1 text-sm font-semibold text-text-secondary">{{ translatedTitle }}</h3>
+    <p v-if="description" class="max-w-sm text-xs leading-relaxed text-text-muted">{{ translatedDescription }}</p>
     <div v-if="$slots.action" class="mt-4">
       <slot name="action" />
     </div>

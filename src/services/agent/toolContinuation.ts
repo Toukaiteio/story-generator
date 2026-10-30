@@ -6,13 +6,26 @@ export interface ToolContinuationRequestInput {
 
 type ToolContinuationHandler = (request: ToolContinuationRequestInput) => Promise<boolean>
 
-let handler: ToolContinuationHandler | null = null
+// Event-based handler registry (replaces global mutable state)
+const handlers = new Set<ToolContinuationHandler>()
 
-export function setToolContinuationHandler(nextHandler: ToolContinuationHandler) {
-  handler = nextHandler
+export function setToolContinuationHandler(handler: ToolContinuationHandler) {
+  handlers.clear()
+  handlers.add(handler)
 }
 
-export async function requestToolContinuation(request: ToolContinuationRequestInput) {
-  if (!handler) return true
-  return handler(request)
+export function addToolContinuationHandler(handler: ToolContinuationHandler) {
+  handlers.add(handler)
+}
+
+export function removeToolContinuationHandler(handler: ToolContinuationHandler) {
+  handlers.delete(handler)
+}
+
+export async function requestToolContinuation(request: ToolContinuationRequestInput): Promise<boolean> {
+  if (handlers.size === 0) return true
+  
+  // Execute all registered handlers, return true if any approves continuation
+  const results = await Promise.all(Array.from(handlers).map(h => h(request)))
+  return results.some(r => r === true)
 }

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ProviderProxyRequest, ProviderProxyResponse, ProviderStreamEvent } from '../src/services/provider/transportTypes'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Window controls
@@ -61,6 +62,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
   provider: {
     listModels: (request: any) => ipcRenderer.invoke('provider:list-models', request),
     createEmbedding: (request: any) => ipcRenderer.invoke('provider:create-embedding', request),
+    request: (request: ProviderProxyRequest) => ipcRenderer.invoke('provider:request', request) as Promise<ProviderProxyResponse>,
+    cancelRequest: (requestId: string) => ipcRenderer.send('provider:request:cancel', requestId),
+    startStream: (requestId: string, request: ProviderProxyRequest, callback: (event: ProviderStreamEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ProviderStreamEvent) => {
+        if (payload?.requestId !== requestId) return
+        try {
+          callback(payload)
+        } finally {
+          if (payload.type === 'end' || payload.type === 'error') {
+            cleanup()
+          }
+        }
+      }
+      const cleanup = () => ipcRenderer.removeListener('provider:stream:event', listener)
+      ipcRenderer.on('provider:stream:event', listener)
+
+      return ipcRenderer.invoke('provider:stream:start', { requestId, request })
+        .then((response: ProviderProxyResponse) => {
+          if (!response.ok) cleanup()
+          return response
+        })
+        .catch(error => {
+          cleanup()
+          throw error
+        })
+    },
+    cancelStream: (requestId: string) => ipcRenderer.send('provider:stream:cancel', requestId),
   },
 
   // Dialog operations

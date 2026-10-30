@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { useUiStore } from '@/stores/ui'
-import { useProviderStore } from '@/stores/provider'
+import { useModelCatalog } from '@/app'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -11,7 +11,7 @@ import { APP_VERSION } from '@/constants/version'
 import { Monitor, Globe, Info, Database, FolderOpen, Wrench, Download, RefreshCw } from 'lucide-vue-next'
 
 const ui = useUiStore()
-const providerStore = useProviderStore()
+const providerStore = useModelCatalog()
 const updateStatus = ref<UpdaterStatus>({
   state: 'idle',
   message: 'Update status has not been loaded yet.',
@@ -68,10 +68,6 @@ function handleCustomSystemPromptChange(value: string) {
   ui.setCustomSystemPrompt(value)
 }
 
-function handleMeetingProposerPromptChange(value: string) {
-  ui.setMeetingProposerPrompt(value)
-}
-
 async function handleCheckForUpdates() {
   if (!window.electronAPI?.updater) return
   checkingForUpdates.value = true
@@ -103,17 +99,22 @@ async function handleBrowseStorage() {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto">
-    <div class="max-w-2xl mx-auto px-6 py-6">
-      <h1 class="text-lg font-semibold text-text-primary mb-6">{{ ui.t('settings.title') }}</h1>
+  <div class="app-page flex flex-col">
+    <div class="app-toolbar">
+      <div>
+        <h1 class="app-toolbar-title">{{ ui.t('settings.title') }}</h1>
+        <p class="app-toolbar-meta">{{ APP_VERSION }}</p>
+      </div>
+    </div>
 
-      <div class="space-y-6">
-        <section>
+    <div class="app-content">
+      <div class="mx-auto grid max-w-5xl grid-cols-1 gap-4 xl:grid-cols-2">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Monitor :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.t('settings.appearance') }}</h2>
+            <h2 class="app-section-title">{{ ui.t('settings.appearance') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <div class="flex items-center justify-between py-2">
               <div>
                 <p class="text-sm text-text-primary">{{ ui.t('settings.theme') }}</p>
@@ -124,12 +125,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Globe :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.t('settings.language') }}</h2>
+            <h2 class="app-section-title">{{ ui.t('settings.language') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <BaseSelect
               :model-value="ui.language"
               :label="ui.t('settings.languageLabel')"
@@ -139,12 +140,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Wrench :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('AI Tool Workflow') }}</h2>
+            <h2 class="app-section-title">{{ ui.text('AI Tool Workflow') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <BaseInput
               :model-value="String(providerStore.toolWorkflowSettings.maxToolCallRounds)"
               :label="ui.text('Tool workflow soft checkpoint')"
@@ -169,12 +170,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Wrench :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Vibe AI Safety') }}</h2>
+            <h2 class="app-section-title">{{ ui.text('Vibe AI Safety') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <BaseInput
               :model-value="String(ui.vibeRewindPoints)"
               :label="ui.text('Workspace rewind points')"
@@ -188,13 +189,13 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel xl:col-span-2">
           <div class="flex items-center gap-2 mb-4">
             <Download :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Software Updates') }}</h2>
+            <h2 class="app-section-title">{{ ui.text('Software Updates') }}</h2>
           </div>
-          <div class="pl-6">
-            <div class="rounded-lg border border-surface-4 bg-surface-2 p-4">
+          <div>
+            <div class="rounded-md border border-surface-4 bg-surface-1 p-4">
               <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div class="min-w-0">
                   <p class="text-sm font-medium text-text-primary">{{ ui.text(updateStatus.message) }}</p>
@@ -248,12 +249,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel xl:col-span-2">
           <div class="flex items-center gap-2 mb-4">
             <Wrench :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Prepend to System Prompts') }}</h2>
+            <h2 class="app-section-title">{{ ui.text('Prepend to System Prompts') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <BaseTextarea
               :model-value="ui.customSystemPrompt"
               :label="ui.text('Custom prompt prefix')"
@@ -268,32 +269,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
-          <div class="flex items-center gap-2 mb-4">
-            <Wrench :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.text('Meeting Proposer Agent') }}</h2>
-          </div>
-          <div class="pl-6">
-            <BaseTextarea
-              :model-value="ui.meetingProposerPrompt"
-              :label="ui.text('Proposer system prompt')"
-              :rows="8"
-              :auto-resize="true"
-              :placeholder="ui.text('Internal meeting proposer instructions...')"
-              @update:model-value="handleMeetingProposerPromptChange"
-            />
-            <p class="mt-2 text-xs leading-relaxed text-text-muted">
-              {{ ui.text('This built-in agent is triggered internally after the first open discussion pass. Its model is configured in Provider > Agent Binding as Meeting Proposer Agent.') }}
-            </p>
-          </div>
-        </section>
-
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Database :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.t('settings.storage') }}</h2>
+            <h2 class="app-section-title">{{ ui.t('settings.storage') }}</h2>
           </div>
-          <div class="pl-6">
+          <div>
             <div class="flex flex-col gap-2">
               <div class="flex flex-col gap-1">
                 <p class="text-sm text-text-primary">{{ ui.t('settings.defaultStoragePath') }}</p>
@@ -312,12 +293,12 @@ async function handleBrowseStorage() {
           </div>
         </section>
 
-        <section class="border-t border-surface-4 pt-6">
+        <section class="settings-panel">
           <div class="flex items-center gap-2 mb-4">
             <Info :size="16" class="text-accent" />
-            <h2 class="text-sm font-semibold text-text-primary">{{ ui.t('settings.about') }}</h2>
+            <h2 class="app-section-title">{{ ui.t('settings.about') }}</h2>
           </div>
-          <div class="pl-6 space-y-2">
+          <div class="space-y-2">
             <div class="flex items-center justify-between py-1">
               <span class="text-sm text-text-secondary">{{ ui.t('settings.version') }}</span>
               <span class="text-sm text-text-primary">{{ APP_VERSION }}</span>

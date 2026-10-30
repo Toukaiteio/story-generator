@@ -34,7 +34,7 @@ function close() {
 </script>
 
 <template>
-  <header class="h-12 flex items-center justify-between px-4 bg-surface-1 border-b border-surface-4 shrink-0 drag-region select-none">
+  <header class="h-12 flex items-center justify-between px-4 shrink-0 drag-region select-none bg-surface-1 border-b border-surface-3">
     <div class="flex items-center gap-2 no-drag">
       <div v-for="(crumb, i) in breadcrumbs" :key="i" class="flex items-center gap-2">
         <ChevronRight v-if="i > 0" :size="12" class="text-text-muted" />

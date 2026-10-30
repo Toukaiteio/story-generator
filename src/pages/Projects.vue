@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useProjectStore } from '@/stores/project'
 import { useUiStore } from '@/stores/ui'
 import { useToast } from '@/composables/useToast'
 import { Plus, FolderOpen, Upload } from 'lucide-vue-next'
@@ -9,12 +8,17 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseDialog from '@/components/ui/BaseDialog.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ProjectCard from '@/components/project/ProjectCard.vue'
-import ProjectCreateDialog from '@/components/project/ProjectCreateDialog.vue'
-import { buildProjectFileName, parseProjectFile, serializeProjectFile } from '@/services/projectFile'
-import type { ProjectExportBinding } from '@/services/projectExportSync'
+import NewStoryDialog from '@/components/studio/NewStoryDialog.vue'
+import {
+  useStoryProject,
+  buildProjectFileName,
+  parseProjectFile,
+  serializeProjectFile,
+  type ProjectExportBinding,
+} from '@/app'
 
 const router = useRouter()
-const projectStore = useProjectStore()
+const projectStore = useStoryProject()
 const ui = useUiStore()
 const toast = useToast()
 
@@ -28,14 +32,8 @@ onMounted(() => {
   projectStore.loadProjects()
 })
 
-async function handleCreate(data: any) {
-  try {
-    const project = await projectStore.createProject(data)
-    toast.success(`Project "${project.name}" created`)
-    router.push(`/workspace/${project.id}`)
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to create project')
-  }
+function handleCreated(projectId: string) {
+  router.push(`/workspace/${projectId}`)
 }
 
 function handleOpen(id: string) {
@@ -225,11 +223,11 @@ async function handleImportProjectFile() {
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
+  <div class="app-page flex flex-col">
+    <div class="app-toolbar">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">{{ ui.text('Story Projects') }}</h1>
-        <p class="text-xs text-text-secondary mt-0.5">{{ projectStore.sortedProjects.length }} {{ ui.text('projects') }}</p>
+        <h1 class="app-toolbar-title">{{ ui.text('Story Projects') }}</h1>
+        <p class="app-toolbar-meta">{{ projectStore.sortedProjects.length }} {{ ui.text('projects') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <BaseButton variant="secondary" size="sm" @click="openImportDialog">
@@ -243,7 +241,7 @@ async function handleImportProjectFile() {
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="app-content">
       <EmptyState
         v-if="!projectStore.sortedProjects.length && !projectStore.isLoading"
         :icon="FolderOpen"
@@ -258,7 +256,7 @@ async function handleImportProjectFile() {
         </template>
       </EmptyState>
 
-      <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div v-else class="mx-auto grid max-w-7xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <TransitionGroup name="list">
           <ProjectCard
             v-for="project in projectStore.sortedProjects"
@@ -278,7 +276,7 @@ async function handleImportProjectFile() {
       </div>
     </div>
 
-    <ProjectCreateDialog v-model="showCreateDialog" @create="handleCreate" />
+    <NewStoryDialog v-model="showCreateDialog" @created="handleCreated" />
 
     <input
       ref="importInputRef"
@@ -298,7 +296,7 @@ async function handleImportProjectFile() {
         <p>
           {{ ui.text('Choose how to delete this project. Removing the project only will hide it from the project list but keep its local files on disk.') }}
         </p>
-        <p v-if="pendingDeleteId" class="rounded-lg border border-surface-4 bg-surface-2 px-3 py-2 text-xs text-text-muted break-all">
+        <p v-if="pendingDeleteId" class="app-subpanel px-3 py-2 text-xs text-text-muted break-all">
           {{ projectStore.projects.find(project => project.id === pendingDeleteId)?.directoryPath || ui.text('Project files are not linked to a local folder.') }}
         </p>
       </div>

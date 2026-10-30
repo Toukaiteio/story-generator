@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { AlertTriangle, BookOpen, Check, ChevronDown, ChevronRight, CircleDashed, FileText, ListChecks, Search, Wrench, X } from 'lucide-vue-next'
+import { AlertTriangle, BookOpen, Check, ChevronDown, ChevronRight, CircleDashed, Copy, FileText, ListChecks, Search, Wrench, X } from 'lucide-vue-next'
 import { translatePhrase } from '@/i18n'
 
 export interface ToolCallStatusItem {
@@ -16,6 +16,10 @@ export interface ToolCallStatusItem {
 
 const props = defineProps<{
   item: ToolCallStatusItem
+}>()
+
+const emit = defineEmits<{
+  copy: [text: string]
 }>()
 
 const tr = translatePhrase
@@ -105,12 +109,6 @@ const toolMeta = computed(() => {
       label: 'Normalize project change',
       description: 'Converting proposal into executable change',
       icon: Wrench,
-      tone: 'accent',
-    },
-    record_meeting_consensus: {
-      label: 'Record meeting consensus',
-      description: 'Saving the agreed consensus result',
-      icon: FileText,
       tone: 'accent',
     },
     read_master_outline: {
@@ -243,6 +241,17 @@ const statusConfig = computed(() => {
       return { icon: CircleDashed, class: 'text-text-muted' }
   }
 })
+
+const detailCopyText = computed(() => [
+  `Tool: ${props.item.name}`,
+  `Status: ${props.item.status}`,
+  props.item.detail ? `Detail:\n${props.item.detail}` : '',
+].filter(Boolean).join('\n\n'))
+
+function copyDetail(event: MouseEvent) {
+  event.stopPropagation()
+  if (detailCopyText.value) emit('copy', detailCopyText.value)
+}
 </script>
 
 <template>
@@ -281,9 +290,19 @@ const statusConfig = computed(() => {
       <div class="flex items-start gap-1.5">
         <AlertTriangle v-if="item.status === 'warning'" :size="12" class="mt-0.5 shrink-0 text-warning" />
         <X v-else :size="12" class="mt-0.5 shrink-0 text-danger" />
-        <p class="min-w-0 whitespace-pre-wrap break-words text-[10px] leading-relaxed [overflow-wrap:anywhere]" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
+        <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[10px] leading-relaxed [overflow-wrap:anywhere]" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
           {{ item.detail }}
         </p>
+        <button
+          v-if="item.detail"
+          type="button"
+          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
+          :title="tr('Copy tool error')"
+          :aria-label="tr('Copy tool error')"
+          @click="copyDetail"
+        >
+          <Copy :size="11" />
+        </button>
       </div>
     </div>
 

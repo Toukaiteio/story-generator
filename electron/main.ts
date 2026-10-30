@@ -5,6 +5,7 @@ import { URL } from 'url'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'fs'
 import http from 'http'
 import https from 'https'
+import type { ProviderProxyRequest, ProviderProxyResponse, ProviderStreamEvent } from '../src/services/provider/transportTypes'
 
 declare const __dirname: string
 
@@ -579,6 +580,146 @@ ipcMain.handle('vibe-chat:save', (_event, request: { projectId: string; director
 })
 
 // Provider operations
+const activeProviderRequests = new Map<string, AbortController>()
+
+function normalizeProviderProxyRequest(request: ProviderProxyRequest) {
+  if (!request?.requestId || !request?.url) {
+    throw new Error('Invalid provider proxy request')
+  }
+
+  const url = new URL(request.url)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Provider proxy only supports http and https URLs')
+  }
+
+  const blockedHeaders = new Set(['connection', 'content-length', 'host', 'origin', 'referer'])
+  const headers: Record<string, string> = {}
+  for (const [key, value] of Object.entries(request.headers ?? {})) {
+    const normalizedKey = key.toLowerCase()
+    if (blockedHeaders.has(normalizedKey) || normalizedKey.startsWith('sec-')) continue
+    if (typeof value === 'string') headers[key] = value
+  }
+
+  return {
+    requestId: request.requestId,
+    url: url.toString(),
+    method: String(request.method || 'GET').toUpperCase(),
+    headers,
+    body: request.body,
+  }
+}
+
+function serializeProviderResponse(response: Response, body: string): ProviderProxyResponse {
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.fromEntries(response.headers.entries()),
+    body,
+  }
+}
+
+function sendProviderStreamEvent(sender: Electron.WebContents, event: ProviderStreamEvent) {
+  if (!sender.isDestroyed()) sender.send('provider:stream:event', event)
+}
+
+ipcMain.handle('provider:request', async (_event, request: ProviderProxyRequest): Promise<ProviderProxyResponse> => {
+  const normalized = normalizeProviderProxyRequest(request)
+  const controller = new AbortController()
+  activeProviderRequests.set(normalized.requestId, controller)
+
+  try {
+    const response = await fetch(normalized.url, {
+      method: normalized.method,
+      headers: normalized.headers,
+      body: normalized.body,
+      signal: controller.signal,
+    })
+    return serializeProviderResponse(response, await response.text())
+  } finally {
+    if (activeProviderRequests.get(normalized.requestId) === controller) {
+      activeProviderRequests.delete(normalized.requestId)
+    }
+  }
+})
+
+ipcMain.handle('provider:stream:start', async (event, payload: { requestId: string; request: ProviderProxyRequest }): Promise<ProviderProxyResponse> => {
+  const request = normalizeProviderProxyRequest({
+    ...payload?.request,
+    requestId: payload?.requestId || payload?.request?.requestId,
+  })
+  const controller = new AbortController()
+  activeProviderRequests.set(request.requestId, controller)
+
+  try {
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      signal: controller.signal,
+    })
+
+    const responseMeta = serializeProviderResponse(response, '')
+    if (!response.ok || !response.body) {
+      const body = await response.text()
+      if (activeProviderRequests.get(request.requestId) === controller) {
+        activeProviderRequests.delete(request.requestId)
+      }
+      return serializeProviderResponse(response, body)
+    }
+
+    const reader = response.body.getReader()
+    void (async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value?.byteLength) {
+            sendProviderStreamEvent(event.sender, {
+              requestId: request.requestId,
+              type: 'chunk',
+              data: Buffer.from(value).toString('base64'),
+            })
+          }
+        }
+        sendProviderStreamEvent(event.sender, {
+          requestId: request.requestId,
+          type: 'end',
+        })
+      } catch (error: any) {
+        const aborted = controller.signal.aborted
+        sendProviderStreamEvent(event.sender, {
+          requestId: request.requestId,
+          type: 'error',
+          error: {
+            name: aborted ? 'AbortError' : error?.name,
+            message: aborted ? 'The provider stream was aborted.' : error instanceof Error ? error.message : String(error),
+          },
+        })
+      } finally {
+        if (activeProviderRequests.get(request.requestId) === controller) {
+          activeProviderRequests.delete(request.requestId)
+        }
+      }
+    })()
+
+    return responseMeta
+  } catch (error) {
+    if (activeProviderRequests.get(request.requestId) === controller) {
+      activeProviderRequests.delete(request.requestId)
+    }
+    throw error
+  }
+})
+
+ipcMain.on('provider:request:cancel', (_event, requestId: string) => {
+  activeProviderRequests.get(requestId)?.abort()
+})
+
+ipcMain.on('provider:stream:cancel', (_event, requestId: string) => {
+  activeProviderRequests.get(requestId)?.abort()
+})
+
 function buildModelListEndpoints(type: string, baseUrl: string) {
   const normalizedBase = baseUrl.replace(/\/+$/, '')
   let endpoints: string[]

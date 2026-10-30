@@ -60,3 +60,25 @@ export function containsMetaCommentary(content: string) {
 export function containsChapterBreakdown(content: string) {
   return /(?:chapter\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|[ivxlcdm]+|\d+)|第\s*[0-9一二三四五六七八九十百千]+\s*(?:章|节))/i.test(content)
 }
+
+export function validateCharacterRoleComposition(items: any[]): string[] {
+  const issues: string[] = []
+  let protagonistCount = 0
+  let antagonistCount = 0
+
+  for (const item of items) {
+    const role = typeof item?.role === 'string' ? item.role.trim().toLowerCase() : ''
+    if (role === 'protagonist') protagonistCount += 1
+    if (role === 'antagonist') antagonistCount += 1
+  }
+
+  if (protagonistCount !== 1) {
+    issues.push(`Character set must contain exactly one protagonist; found ${protagonistCount}.`)
+  }
+
+  if (antagonistCount < 1) {
+    issues.push('Character set must contain at least one antagonist or opposing force.')
+  }
+
+  return issues
+}

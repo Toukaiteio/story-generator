@@ -189,38 +189,75 @@ export function getChapterRegion(content: string, args: Record<string, any>) {
       total: 0,
       label: 'Empty chapter',
       content: '',
+      startOffset: 0,
+      endOffset: 0,
+      regionId: 'empty:0:0',
     }
   }
   if (!Number.isFinite(start) || start < 1) return { ok: false, error: 'start must be a positive one-based index.' }
 
-  const sliceItems = (items: string[], label: string) => {
-    if (start > items.length) {
-      return { ok: false, error: `${label} ${start} is outside the available range 1-${items.length}.` }
+  type RegionRange = { startOffset: number; endOffset: number }
+
+  const sliceRanges = (ranges: RegionRange[], label: string) => {
+    if (start > ranges.length) {
+      return { ok: false, error: `${label} ${start} is outside the available range 1-${ranges.length}.` }
     }
-    const selected = items.slice(start - 1, Math.min(end, items.length))
+    const selected = ranges.slice(start - 1, Math.min(end, ranges.length))
+    const startOffset = selected[0]?.startOffset ?? 0
+    const endOffset = selected[selected.length - 1]?.endOffset ?? startOffset
     return {
       ok: true,
       mode,
       start,
-      end: Math.min(end, items.length),
-      total: items.length,
-      label: `${label} ${start}-${Math.min(end, items.length)}`,
-      content: selected.join(mode === 'lines' ? '\n' : '\n\n'),
+      end: Math.min(end, ranges.length),
+      total: ranges.length,
+      label: `${label} ${start}-${Math.min(end, ranges.length)}`,
+      content: content.slice(startOffset, endOffset),
+      startOffset,
+      endOffset,
+      regionId: `${mode}:${startOffset}:${endOffset}`,
     }
   }
 
   if (mode === 'lines') {
-    return sliceItems(content.split(/\r?\n/), 'Lines')
+    const ranges: RegionRange[] = []
+    let lineStart = 0
+    for (let index = 0; index <= content.length; index += 1) {
+      if (index !== content.length && content[index] !== '\n') continue
+      ranges.push({ startOffset: lineStart, endOffset: index })
+      lineStart = index + 1
+    }
+    return sliceRanges(ranges, 'Lines')
   }
   if (mode === 'paragraphs') {
-    return sliceItems(content.split(/\n\s*\n/).map(item => item.trim()).filter(Boolean), 'Paragraphs')
+    const ranges: RegionRange[] = []
+    const separator = /\n\s*\n/g
+    let segmentStart = 0
+    for (const match of content.matchAll(separator)) {
+      const separatorStart = match.index ?? segmentStart
+      if (content.slice(segmentStart, separatorStart).trim()) {
+        ranges.push({ startOffset: segmentStart, endOffset: separatorStart })
+      }
+      segmentStart = separatorStart + match[0].length
+    }
+    if (content.slice(segmentStart).trim()) {
+      ranges.push({ startOffset: segmentStart, endOffset: content.length })
+    }
+    return sliceRanges(ranges, 'Paragraphs')
   }
   if (mode === 'sections') {
-    const sections = content
-      .split(/(?=^#{1,6}\s+.+$)/m)
-      .map(item => item.trim())
-      .filter(Boolean)
-    return sliceItems(sections.length ? sections : content.split(/\n\s*\n/).map(item => item.trim()).filter(Boolean), 'Sections')
+    const headings = [...content.matchAll(/^#{1,6}\s+.+$/gm)]
+    if (!headings.length) {
+      return getChapterRegion(content, { ...args, mode: 'paragraphs' })
+    }
+
+    const sectionStarts = [0, ...headings.map(match => match.index ?? 0)]
+      .filter((offset, index, offsets) => index === 0 || offset !== offsets[index - 1])
+    const ranges: RegionRange[] = sectionStarts.map((sectionStart, index) => ({
+      startOffset: sectionStart,
+      endOffset: sectionStarts[index + 1] ?? content.length,
+    })).filter(range => content.slice(range.startOffset, range.endOffset).trim())
+    return sliceRanges(ranges, 'Sections')
   }
 
   return { ok: false, error: 'mode must be one of: lines, paragraphs, sections.' }

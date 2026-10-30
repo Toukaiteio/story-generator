@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ChevronDown, Search } from 'lucide-vue-next'
-import { useProviderStore } from '@/stores/provider'
 import { translatePhrase } from '@/i18n'
-import { decodeProviderModelRef, encodeProviderModelRef } from '@/services/provider/catalog'
+import { useModelCatalog, decodeProviderModelRef, encodeProviderModelRef } from '@/app'
 import type { AgentType } from '@/types/agent'
 
 const props = withDefaults(defineProps<{
@@ -22,7 +21,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-const providerStore = useProviderStore()
+const providerStore = useModelCatalog()
 const tr = translatePhrase
 
 const showModelPicker = ref(false)
@@ -49,8 +48,8 @@ const rootClass = computed(() =>
 
 const dropdownClass = computed(() =>
   props.variant === 'sidebar'
-    ? 'absolute left-3 right-3 top-[calc(100%-4px)] z-50 rounded-lg border border-surface-4 bg-surface-1 shadow-xl'
-    : 'absolute left-0 right-0 top-[calc(100%+4px)] z-50 rounded-lg border border-surface-4 bg-surface-1 shadow-xl'
+    ? 'app-subpanel absolute left-3 right-3 top-[calc(100%-4px)] z-50 overflow-hidden'
+    : 'app-subpanel absolute left-0 right-0 top-[calc(100%+4px)] z-50 overflow-hidden'
 )
 
 const groupedModels = computed(() => {
@@ -86,7 +85,7 @@ function selectModel(providerId: string, modelId: string) {
 <template>
   <div :class="rootClass">
     <button
-      class="flex w-full items-center justify-between gap-2 rounded-md border border-surface-4 bg-surface-2 px-2.5 py-2 text-left text-xs text-text-secondary hover:border-surface-5 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+      class="app-list-item flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
       :disabled="disabled"
       @click="showModelPicker = !showModelPicker"
     >
@@ -102,7 +101,7 @@ function selectModel(providerId: string, modelId: string) {
       :class="dropdownClass"
     >
       <div class="border-b border-surface-4 p-2">
-        <div class="flex items-center gap-2 rounded-md border border-surface-4 bg-surface-2 px-2 py-1.5">
+        <div class="app-subpanel app-subpanel--muted flex items-center gap-2 px-2 py-1.5">
           <Search :size="12" class="text-text-muted" />
           <input
             v-model="modelSearch"

@@ -14,9 +14,11 @@ import {
   type ProjectExportBuffer,
   PROJECT_EXPORT_SYNC_DELAY_MS,
 } from '@/services/projectExportSync'
-import type { ChapterConfig, ProjectReviewAgentSettings, StoryProject, WritingFormat } from '@/types/project'
+import type { ChapterConfig, StoryProject, WritingFormat } from '@/types/project'
 import type { Chapter } from '@/types/chapter'
 import type { Character, CharacterRole } from '@/types/character'
+import { normalizeElements } from '@/services/elements'
+import { normalizeStyleSkill } from '@/services/writingStyle/storage'
 
 const PROJECT_STORAGE_KEY = 'story-generator.projects.v1'
 const ACTIVE_PROJECT_STORAGE_KEY = 'story-generator.active-project.v1'
@@ -52,39 +54,6 @@ function normalizeChapterOutline(value: any): Chapter['outline'] {
     infoReveals: Array.isArray(value?.infoReveals) ? value.infoReveals.map((item: any) => String(item).trim()).filter(Boolean) : [],
     endingHook: typeof value?.endingHook === 'string' ? value.endingHook : '',
   }
-}
-
-function normalizeReviewAgentSettings(value: any): ProjectReviewAgentSettings | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const agents = value.agents && typeof value.agents === 'object' ? value.agents : {}
-  const normalizedAgents = Object.fromEntries(
-    Object.entries(agents)
-      .filter(([, settings]: any) => settings && typeof settings === 'object')
-      .map(([agentId, settings]: any) => [
-        agentId,
-        {
-          name: typeof settings.name === 'string' ? settings.name : undefined,
-          role: typeof settings.role === 'string' ? settings.role : undefined,
-          brief: typeof settings.brief === 'string' ? settings.brief : undefined,
-          defaultModelRole: settings.defaultModelRole === 'proposerAgent'
-            ? 'proposerAgent'
-            : settings.defaultModelRole === 'proofreader'
-              ? 'proofreader'
-              : settings.defaultModelRole === 'chapterPlanner'
-                ? 'chapterPlanner'
-                : undefined,
-          modelValue: typeof settings.modelValue === 'string' ? settings.modelValue : undefined,
-          systemPrompt: typeof settings.systemPrompt === 'string' ? settings.systemPrompt : undefined,
-          customSystemPrompt: typeof settings.customSystemPrompt === 'string'
-            ? settings.customSystemPrompt
-            : undefined,
-          disabled: Boolean(settings.disabled),
-          deleted: Boolean(settings.deleted),
-          custom: Boolean(settings.custom),
-        },
-      ])
-  )
-  return { agents: normalizedAgents }
 }
 
 function chapterQualityScore(chapter: Chapter) {
@@ -322,6 +291,7 @@ function normalizeWritingStyleSnapshot(value: any, styleId: string, style: strin
         description: typeof value.description === 'string' ? value.description : '',
         content,
         tags: Array.isArray(value.tags) ? value.tags.map((item: any) => String(item).trim()).filter(Boolean) : [],
+        skill: normalizeStyleSkill(value.skill),
         capturedAt: typeof value.capturedAt === 'string' ? value.capturedAt : new Date().toISOString(),
       }
     }
@@ -350,6 +320,7 @@ function normalizeImportedProject(data: any, id = getImportedProjectId(data), op
   const migrated = migrateProjectStyle(data ?? {})
   const style = typeof migrated.style === 'string' ? migrated.style : ''
   const styleId = typeof migrated.styleId === 'string' && migrated.styleId.trim() ? migrated.styleId : 'default'
+  const importedGenerationStage = migrated.generationStage as StoryProject['generationStage'] | 'chapter-outline-review'
 
   return {
     id,
@@ -375,15 +346,17 @@ function normalizeImportedProject(data: any, id = getImportedProjectId(data), op
     customRequirements: typeof migrated.customRequirements === 'string' ? migrated.customRequirements : '',
     chapters: Array.isArray(migrated.chapters) ? migrated.chapters : [],
     characters: Array.isArray(migrated.characters) ? normalizeCharacters(migrated.characters) : [],
+    elements: normalizeElements(migrated.elements),
     relationshipEvents: Array.isArray(migrated.relationshipEvents) ? migrated.relationshipEvents : [],
     knowledgeBaseIds: normalizeIdList(migrated.knowledgeBaseIds),
     status: migrated.status === 'generating' || migrated.status === 'completed' || migrated.status === 'error'
       ? migrated.status
       : 'draft',
-    generationStage: migrated.generationStage || 'idle',
+    generationStage: importedGenerationStage === 'chapter-outline-review'
+      ? 'chapter-outline'
+      : importedGenerationStage || 'idle',
     outline: typeof migrated.outline === 'string' ? migrated.outline : '',
     summary: typeof migrated.summary === 'string' ? migrated.summary : '',
-    reviewAgentSettings: normalizeReviewAgentSettings(migrated.reviewAgentSettings),
     createdAt: typeof migrated.createdAt === 'string' ? migrated.createdAt : now,
     updatedAt: now,
   }
@@ -605,7 +578,6 @@ export const useProjectStore = defineStore('project', () => {
       generationStage: 'idle',
       outline: '',
       summary: '',
-      reviewAgentSettings: { agents: {} },
       createdAt: now,
       updatedAt: now,
     }

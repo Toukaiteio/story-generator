@@ -1,9 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useUiStore } from '@/stores/ui'
-import { useProviderStore } from '@/stores/provider'
-import { providerManager } from '@/services/provider'
 import { useToast } from '@/composables/useToast'
+import {
+  useModelCatalog,
+  useProviderRuntime,
+  createCustomModelDraft,
+  createProviderIdFromName,
+  decodeProviderModelRef,
+  encodeProviderModelRef,
+  formatModelLabel,
+  defaultBaseUrls,
+} from '@/app'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseCard from '@/components/ui/BaseCard.vue'
 import BaseTag from '@/components/ui/BaseTag.vue'
@@ -35,17 +43,10 @@ import {
 } from 'lucide-vue-next'
 import type { AgentType } from '@/types/agent'
 import type { ModelSource, ModelConfig, ReasoningEffort, ProviderType } from '@/types/provider'
-import {
-  createCustomModelDraft,
-  createProviderIdFromName,
-  decodeProviderModelRef,
-  encodeProviderModelRef,
-  formatModelLabel,
-  defaultBaseUrls,
-} from '@/services/provider/catalog'
 
 const ui = useUiStore()
-const providerStore = useProviderStore()
+const providerStore = useModelCatalog()
+const providerManager = useProviderRuntime()
 const toast = useToast()
 
 function tr(value: string) {
@@ -153,8 +154,7 @@ const roleOptions: Array<{ id: AgentType; label: string; icon: any; description:
   { id: 'writer', label: 'Writer Agent', icon: PenTool, description: 'Chapter drafting and scene writing' },
   { id: 'editingAI', label: 'Editing AI', icon: Pencil, description: 'Chapter audit and issue repair coordination' },
   { id: 'relationshipTracker', label: 'Relationship Tracker', icon: Network, description: 'Extract chapter-by-chapter relationship changes' },
-  { id: 'skillAgent', label: 'Skill Agent', icon: Wrench, description: 'Plan, normalize, execute, and verify approved meeting tool changes' },
-  { id: 'proposerAgent', label: 'Meeting Proposer Agent', icon: Sparkles, description: 'Internal meeting proposal synthesis and action role' },
+  { id: 'skillAgent', label: 'Skill Agent', icon: Wrench, description: 'Plan, normalize, execute, and verify approved project changes' },
   { id: 'proofreader', label: 'Proofreader Agent', icon: RefreshCw, description: 'Consistency and grammar review' },
   { id: 'polisher', label: 'Polisher Agent', icon: Zap, description: 'Language enhancement and final polish' },
 ]
@@ -703,13 +703,11 @@ function formatSyncedTime(value?: string | null) {
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-surface-4 shrink-0">
+  <div class="app-page flex flex-col">
+    <div class="app-toolbar">
       <div>
-        <h1 class="text-lg font-semibold text-text-primary">{{ tr('Providers') }}</h1>
-        <p class="text-xs text-text-secondary mt-0.5">
-          {{ tr('Configure providers, sync model lists, and bind models to each Agent role') }}
-        </p>
+        <h1 class="app-toolbar-title">{{ tr('Providers') }}</h1>
+        <p class="app-toolbar-meta">{{ providerStore.providers.length }} {{ tr('providers configured') }} · {{ chatModelCount }} {{ tr('models available') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <BaseButton
@@ -729,8 +727,8 @@ function formatSyncedTime(value?: string | null) {
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-5xl mx-auto space-y-4">
+    <div class="app-content">
+      <div class="mx-auto max-w-6xl space-y-4">
         <div
           v-if="providerStore.providerWarnings.length"
           class="rounded-lg border border-warning/30 bg-warning-subtle/60 px-4 py-3 text-xs text-warning"
@@ -741,26 +739,19 @@ function formatSyncedTime(value?: string | null) {
           </p>
         </div>
 
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <h2 class="text-sm font-semibold text-text-primary">{{ tr('Provider Center') }}</h2>
-            <p class="text-xs text-text-secondary mt-0.5">
-              {{ tr('Keep provider setup and Agent bindings in separate views.') }}
-            </p>
-          </div>
-          <div class="flex items-center gap-2 rounded-xl border border-surface-4 bg-surface-2 p-1">
+        <div class="flex justify-end">
+          <div class="app-toolbar-pill flex items-center gap-1">
             <button
               v-for="tab in providerTabOptions"
               :key="tab.id"
               type="button"
-              class="min-w-[132px] rounded-lg px-3 py-2 text-left transition-colors duration-100"
+              class="min-w-[132px] rounded px-3 py-2 text-center transition-colors duration-150"
               :class="activeProviderTab === tab.id
-                ? 'bg-accent-subtle text-accent'
-                : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary'"
+                ? 'bg-accent/12 text-accent'
+                : 'text-text-secondary hover:bg-white/[0.05] hover:text-text-primary'"
               @click="activeProviderTab = tab.id as 'providers' | 'mapping'"
             >
-              <div class="text-sm font-medium">{{ tr(tab.label) }}</div>
-              <div class="text-2xs mt-0.5 opacity-80">{{ tr(tab.description) }}</div>
+              <div class="text-sm font-semibold">{{ tr(tab.label) }}</div>
             </button>
           </div>
         </div>
@@ -777,7 +768,7 @@ function formatSyncedTime(value?: string | null) {
           </div>
 
           <div v-if="providerStore.providers.length" class="space-y-4">
-            <div class="rounded-lg border border-surface-4 bg-surface-1 p-4">
+            <div class="app-subpanel p-4">
               <div class="flex flex-col gap-3 md:flex-row md:items-end">
                 <div class="min-w-0 flex-1">
                   <h3 class="text-sm font-semibold text-text-primary">{{ tr('Apply One Model to All Agents') }}</h3>
@@ -812,7 +803,7 @@ function formatSyncedTime(value?: string | null) {
               class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)] items-start"
             >
               <div class="flex items-start gap-3">
-                <div class="w-9 h-9 rounded-lg bg-surface-3 flex items-center justify-center shrink-0">
+                <div class="app-icon-tile flex h-9 w-9 shrink-0 items-center justify-center">
                   <component :is="role.icon" :size="16" class="text-accent" />
                 </div>
                 <div>
@@ -830,7 +821,7 @@ function formatSyncedTime(value?: string | null) {
               />
             </div>
 
-            <div class="mt-5 rounded-lg border border-surface-4 bg-surface-1 p-4">
+            <div class="app-subpanel mt-5 p-4">
               <div class="flex items-center justify-between gap-3 mb-3">
                 <div>
                   <h3 class="text-sm font-semibold text-text-primary">{{ tr('Embedding Model') }}</h3>
@@ -927,7 +918,7 @@ function formatSyncedTime(value?: string | null) {
             <div class="flex flex-col gap-4">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex items-center gap-3">
-                  <div class="w-10 h-10 rounded-lg bg-surface-3 flex items-center justify-center">
+                  <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
                     <Zap :size="18" class="text-accent" />
                   </div>
                   <div>
@@ -976,7 +967,7 @@ function formatSyncedTime(value?: string | null) {
                     <span>{{ tr('Custom Model') }}</span>
                   </BaseButton>
                   <button
-                    class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
+                    class="app-icon-button app-icon-button--danger"
                     @click="handleDelete(provider.id)"
                   >
                     <Trash2 :size="14" />
@@ -984,7 +975,7 @@ function formatSyncedTime(value?: string | null) {
                 </div>
               </div>
 
-              <div v-if="provider.models.length" class="rounded-lg border border-surface-4 bg-surface-1">
+              <div v-if="provider.models.length" class="app-subpanel overflow-hidden">
                 <button
                   type="button"
                   class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-surface-2 transition-colors duration-100"
@@ -1010,7 +1001,7 @@ function formatSyncedTime(value?: string | null) {
                   <div
                     v-for="model in provider.models"
                     :key="model.id"
-                    class="rounded-lg border border-surface-4 bg-surface-2 px-3 py-2"
+                    class="app-subpanel app-subpanel--muted px-3 py-2"
                 >
                   <div class="flex items-center justify-between gap-2">
                     <div class="min-w-0">
@@ -1045,7 +1036,7 @@ function formatSyncedTime(value?: string | null) {
                         type="number"
                         min="1"
                         placeholder="e.g. 128000"
-                        class="flex-1 h-7 rounded border border-surface-4 bg-surface-2 px-2 text-xs text-text-primary outline-none focus:border-accent"
+                        class="h-7 flex-1 rounded border border-surface-4 bg-surface-2 px-2 text-xs text-text-primary outline-none focus:border-accent"
                         @keydown.enter="saveContextEdit"
                         @keydown.escape="editingContext = null"
                       />
@@ -1123,18 +1114,18 @@ function formatSyncedTime(value?: string | null) {
         <Transition name="slide-right" appear>
           <div
             v-if="showAddDrawer"
-            class="absolute right-0 top-0 h-full w-[400px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(460px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">{{ tr('Add Provider') }}</h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="showAddDrawer = false"
               >
                 <X :size="16" />
               </button>
             </div>
-            <div class="flex-1 min-h-0 overflow-hidden px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
               <BaseSelect
                 v-model="newProvider.type"
                 label="Provider"
@@ -1194,7 +1185,7 @@ function formatSyncedTime(value?: string | null) {
                   <div
                     v-for="(model, index) in providerModelDrafts"
                     :key="`${model.id || 'draft'}-${index}`"
-                    class="rounded-lg border border-surface-4 bg-surface-2 p-3"
+                    class="app-subpanel p-3"
                   >
                     <div class="flex items-start justify-between gap-2 mb-3">
                       <div>
@@ -1206,7 +1197,7 @@ function formatSyncedTime(value?: string | null) {
                         </p>
                       </div>
                       <button
-                        class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
+                        class="app-icon-button app-icon-button--danger"
                         @click="removeDraftModel(index)"
                       >
                         <Trash2 :size="14" />
@@ -1291,7 +1282,7 @@ function formatSyncedTime(value?: string | null) {
                       />
                     </div>
 
-                    <div class="mt-3 rounded-md border border-surface-4 bg-surface-1 p-3">
+                    <div class="app-subpanel app-subpanel--muted mt-3 p-3">
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
                           <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
@@ -1335,7 +1326,7 @@ function formatSyncedTime(value?: string | null) {
                 </div>
               </div>
             </div>
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="showAddDrawer = false">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
@@ -1361,18 +1352,18 @@ function formatSyncedTime(value?: string | null) {
         <Transition name="slide-right" appear>
           <div
             v-if="showEditProviderDrawer"
-            class="absolute right-0 top-0 h-full w-[400px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(460px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">{{ tr('Edit Provider') }}</h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="cancelEditProviderDrawer"
               >
                 <X :size="16" />
               </button>
             </div>
-            <div class="flex-1 min-h-0 overflow-hidden px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
               <BaseSelect
                 v-model="editingProviderForm.type"
                 label="Provider"
@@ -1429,7 +1420,7 @@ function formatSyncedTime(value?: string | null) {
                   <div
                     v-for="(model, index) in providerModelDrafts"
                     :key="`${model.id || 'draft'}-${index}`"
-                    class="rounded-lg border border-surface-4 bg-surface-2 p-3"
+                    class="app-subpanel p-3"
                   >
                     <div class="flex items-start justify-between gap-2 mb-3">
                       <div>
@@ -1441,7 +1432,7 @@ function formatSyncedTime(value?: string | null) {
                         </p>
                       </div>
                       <button
-                        class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-danger hover:bg-danger-subtle transition-colors duration-100"
+                        class="app-icon-button app-icon-button--danger"
                         @click="removeDraftModel(index)"
                       >
                         <Trash2 :size="14" />
@@ -1526,7 +1517,7 @@ function formatSyncedTime(value?: string | null) {
                       />
                     </div>
 
-                    <div class="mt-3 rounded-md border border-surface-4 bg-surface-1 p-3">
+                    <div class="app-subpanel app-subpanel--muted mt-3 p-3">
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
                           <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
@@ -1570,7 +1561,7 @@ function formatSyncedTime(value?: string | null) {
                 </div>
               </div>
             </div>
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="cancelEditProviderDrawer">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"
@@ -1596,19 +1587,19 @@ function formatSyncedTime(value?: string | null) {
         <Transition name="slide-right" appear>
           <div
             v-if="showCustomModelDrawer"
-            class="absolute right-0 top-0 h-full w-[420px] bg-surface-1 border-l border-surface-4 shadow-2xl flex flex-col"
+            class="app-drawer absolute right-0 top-0 flex h-full w-[min(460px,100vw)] flex-col"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b border-surface-4 shrink-0">
+            <div class="app-drawer-header flex shrink-0 items-center justify-between">
               <h2 class="text-base font-semibold text-text-primary">{{ tr('Add Custom Model') }}</h2>
               <button
-                class="w-7 h-7 flex items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100"
+                class="app-icon-button"
                 @click="showCustomModelDrawer = false"
               >
                 <X :size="16" />
               </button>
             </div>
 
-            <div class="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+            <div class="app-drawer-body flex flex-1 flex-col gap-4 overflow-y-auto">
               <BaseSelect
                 v-model="customModelForm.providerId"
                 label="Provider"
@@ -1699,7 +1690,7 @@ function formatSyncedTime(value?: string | null) {
                 />
               </div>
 
-              <div class="rounded-lg border border-surface-4 bg-surface-2 p-3">
+              <div class="app-subpanel p-3">
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
                     <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
@@ -1733,7 +1724,7 @@ function formatSyncedTime(value?: string | null) {
               </div>
             </div>
 
-            <div class="px-5 py-3 border-t border-surface-4 shrink-0 flex justify-end gap-2">
+            <div class="app-drawer-footer flex shrink-0 justify-end gap-2">
               <BaseButton variant="ghost" size="sm" @click="showCustomModelDrawer = false">{{ tr('Cancel') }}</BaseButton>
               <BaseButton
                 variant="primary"

@@ -2,7 +2,8 @@ import { BaseAgent, type AgentResult } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
 import { injectCustomSystemPrompt } from '@/services/systemPrompt'
-import { containsChapterBreakdown, containsMetaCommentary, countWords, extractJsonPayload } from './validation'
+import { containsChapterBreakdown, containsMetaCommentary, countWords, extractJsonPayload, validateCharacterRoleComposition } from './validation'
+import { createBatchCharacterTool } from './schemas'
 
 export class StoryPlannerExpert extends BaseAgent {
   type: AgentType = 'storyPlanner'
@@ -44,88 +45,7 @@ export class StoryPlannerExpert extends BaseAgent {
           required: ['title', 'synopsis', 'outline'],
         },
       },
-      {
-        name: 'create_characters',
-        description: 'Create characters for the story based on the outline',
-        parameters: {
-          type: 'object',
-          properties: {
-            characters: {
-              type: 'array',
-              description: 'Array of character objects',
-              items: {
-                type: 'object',
-                properties: {
-                  name: {
-                    type: 'string',
-                    description: 'The character\'s full name',
-                  },
-                  role: {
-                    type: 'string',
-                    description: 'The character\'s role in the story',
-                    enum: ['protagonist', 'antagonist', 'supporting', 'minor'],
-                  },
-                  personality: {
-                    type: 'array',
-                    description: '3-5 concise personality traits',
-                    items: {
-                      type: 'string',
-                    },
-                  },
-                  appearance: {
-                    type: 'string',
-                    description: 'Physical appearance description',
-                  },
-                  backstory: {
-                    type: 'string',
-                    description: 'Character\'s background history',
-                  },
-                  motivation: {
-                    type: 'string',
-                    description: 'What drives this character',
-                  },
-                  goals: {
-                    type: 'string',
-                    description: 'Character\'s objectives in the story',
-                  },
-                  conflicts: {
-                    type: 'string',
-                    description: 'Internal or external conflicts the character faces',
-                  },
-                  currentState: {
-                    type: 'string',
-                    description: 'Character\'s current situation or state',
-                  },
-                  relations: {
-                    type: 'array',
-                    description: 'Relationships with other characters',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        targetName: {
-                          type: 'string',
-                          description: 'Name of the related character',
-                        },
-                        relation: {
-                          type: 'string',
-                          description: 'Type of relationship (e.g., friend, enemy, sibling)',
-                        },
-                        description: {
-                          type: 'string',
-                          description: 'Description of the relationship',
-                        },
-                      },
-                      required: ['targetName', 'relation', 'description'],
-                    },
-                  },
-                },
-                required: ['name', 'role', 'personality', 'appearance', 'backstory', 'motivation', 'goals', 'conflicts', 'currentState'],
-              },
-            },
-          },
-          required: ['characters'],
-        },
-      },
+      createBatchCharacterTool('Create characters for the story based on the outline'),
     ]
   }
 
@@ -163,7 +83,7 @@ export class StoryPlannerExpert extends BaseAgent {
         }
       }
 
-      const roleIssues = this.validateCharacterRoleComposition(characters)
+      const roleIssues = validateCharacterRoleComposition(characters)
       if (roleIssues.length) {
         return {
           tool_call_id: toolCall.id,
@@ -389,7 +309,7 @@ Write everything in ${language || 'English'}.`
       issues.push(`Characters array must contain exactly ${targetCount} entries`)
     }
 
-    issues.push(...this.validateCharacterRoleComposition(parsed.characters))
+    issues.push(...validateCharacterRoleComposition(parsed.characters))
 
     const allowedRoles = new Set(['protagonist', 'antagonist', 'supporting', 'minor'])
     const seenNames = new Set<string>()
@@ -453,27 +373,6 @@ Write everything in ${language || 'English'}.`
     return issues
   }
 
-  private validateCharacterRoleComposition(items: any[]): string[] {
-    const issues: string[] = []
-    let protagonistCount = 0
-    let antagonistCount = 0
-
-    for (const item of items) {
-      const role = typeof item?.role === 'string' ? item.role.trim().toLowerCase() : ''
-      if (role === 'protagonist') protagonistCount += 1
-      if (role === 'antagonist') antagonistCount += 1
-    }
-
-    if (protagonistCount !== 1) {
-      issues.push(`Character set must contain exactly one protagonist; found ${protagonistCount}.`)
-    }
-
-    if (antagonistCount < 1) {
-      issues.push('Character set must contain at least one antagonist or opposing force.')
-    }
-
-    return issues
-  }
 
   protected buildRepairPrompt(context: Record<string, any>, previousResponse: string, issues: string[]): string {
     // If we're repairing an outline (no outline data generated yet)

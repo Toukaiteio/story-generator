@@ -17,14 +17,14 @@ const props = withDefaults(defineProps<{
 })
 
 const classes = computed(() => {
-  const base = 'inline-flex items-center justify-center font-medium rounded-md transition-all duration-100 select-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2'
+  const base = 'inline-flex items-center justify-center font-semibold rounded-full transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2'
 
   const variants = {
     primary: 'bg-accent text-text-inverse hover:bg-accent-hover active:bg-accent-muted',
-    secondary: 'bg-surface-3 text-text-primary border border-surface-4 hover:bg-surface-4 active:bg-surface-5',
-    ghost: 'text-text-secondary hover:text-text-primary hover:bg-surface-3 active:bg-surface-4',
-    danger: 'bg-danger text-white hover:opacity-90 active:opacity-80',
-    warning: 'bg-warning text-text-primary hover:opacity-90 active:opacity-80',
+    secondary: 'border border-surface-4 bg-surface-2 text-text-primary hover:border-surface-5 hover:bg-surface-3 active:bg-surface-4',
+    ghost: 'text-text-secondary hover:text-text-primary hover:bg-white/[0.05] active:bg-white/[0.08]',
+    danger: 'bg-danger text-white hover:bg-danger/90 active:bg-danger/80',
+    warning: 'bg-warning text-text-primary hover:bg-warning/90 active:bg-warning/80',
   }
 
   const sizes = {

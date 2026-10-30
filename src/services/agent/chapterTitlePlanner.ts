@@ -1,7 +1,6 @@
-import { BaseAgent, type AgentResult } from './base'
+import { BaseAgent } from './base'
 import type { AgentType } from '@/types/agent'
 import type { ToolDefinition, ToolCall, ToolResult } from '@/services/provider/tools'
-import { injectCustomSystemPrompt } from '@/services/systemPrompt'
 
 export class ChapterTitlePlannerExpert extends BaseAgent {
   type: AgentType = 'chapterTitlePlanner' as AgentType
@@ -166,24 +165,15 @@ export class ChapterTitlePlannerExpert extends BaseAgent {
     return context.mode === 'nextChapter' ? ['create_next_chapter_title'] : ['create_chapter_titles']
   }
 
-  protected getSystemPrompt(context?: Record<string, any>): string {
-    if (context?.mode === 'nextChapter') {
-      return `You are an expert story structurer.
-Your job is to generate the title and brief objective for exactly one next chapter after the existing chapter plan supplied by the program.
-Use the create_next_chapter_title tool to output your plan.
-This is a structured-output task: call create_next_chapter_title directly.
-Do not call update_todolist for this task unless the user explicitly asks for a checklist.
-Never use placeholders such as "Unknown", "Untitled", "?", "Chapter # ?", or "Name: Unknown".
-The program, not the model, controls the chapter number and configured chapter limit.`
-    }
-
+  protected getSystemPrompt(): string {
     return `You are an expert story structurer.
-Your job is to generate titles and brief objectives for the exact chapter count supplied by the program.
-Use the create_chapter_titles tool to output your plan.
-This is a structured-output task: call create_chapter_titles directly.
+Your job is to generate titles and objectives for chapters.
+Use create_chapter_titles for batched generation, or create_next_chapter_title for a single next chapter.
+Always use the appropriate tool directly rather than returning text.
+This is a structured-output task: call the appropriate tool directly.
 Do not call update_todolist for this task unless the user explicitly asks for a checklist.
 Never use placeholders such as "Unknown", "Untitled", "?", "Chapter # ?", or "Name: Unknown".
-The program, not the model, controls the chapter count and chapter numbers.`
+The program, not the model, controls the chapter count, chapter numbers, and chapter limit.`
   }
 
   protected buildPrompt(context: Record<string, any>): string {
@@ -266,54 +256,6 @@ Every chapter must have a concrete title and a concrete objective. Do not includ
     }
 
     return issues
-  }
-
-  async execute(context: Record<string, any>, onToken?: (token: string) => void): Promise<AgentResult> {
-    if (!this.model) throw new Error(`${this.name} has no model assigned`)
-
-    const retryLimit = this.getValidationRetryLimit()
-    let previousResponse = ''
-    let lastIssues: string[] = []
-
-    for (let attempt = 0; attempt <= retryLimit; attempt++) {
-      const userPrompt = attempt === 0
-        ? this.buildPrompt(context)
-        : `The previous response was invalid. Issues:\n${lastIssues.join('\n')}\nPlease try again using the tool.`
-
-      const messages = [
-        { role: 'system' as const, content: injectCustomSystemPrompt(this.getSystemPrompt(context)) },
-        { role: 'user' as const, content: userPrompt },
-      ]
-
-      const result = await this.executeWithTools(
-        messages,
-        this.getTools(),
-        context,
-        onToken,
-        this.temperature
-      )
-
-      if (context._nextChapterTitleData) {
-        return {
-          content: JSON.stringify(context._nextChapterTitleData),
-          tokenUsage: { prompt: 0, completion: 0 },
-          ...this.getCompressionReport(),
-        }
-      }
-
-      if (context._chapterTitlesData) {
-        return {
-          content: JSON.stringify(context._chapterTitlesData),
-          tokenUsage: { prompt: 0, completion: 0 },
-          ...this.getCompressionReport(),
-        }
-      }
-
-      previousResponse = result.content
-      lastIssues = this.validateOutput(result.content, null, context)
-    }
-
-    throw new Error(`Failed to generate ${context.mode === 'nextChapter' ? 'next chapter title' : 'chapter titles'}: ${lastIssues.join('; ')}`)
   }
 
   parseResponse(response: string): any {

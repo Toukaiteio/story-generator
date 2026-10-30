@@ -27,13 +27,13 @@ const statuses: TodoStatus[] = ['todo', 'in_progress', 'done', 'blocked']
 export function getTodoListTool(): ToolDefinition {
   return {
     name: 'update_todolist',
-    description: 'Create or update a concise task checklist for complex multi-step work. Use it to make the current plan explicit and to mark progress as tasks are completed.',
+    description: 'Create or update a concise task checklist for complex multi-step work. Put the complete checklist in the exact items array. Use it to make the current plan explicit and to mark progress as tasks are completed.',
     parameters: {
       type: 'object',
       properties: {
         items: {
           type: 'array',
-          description: 'The complete current checklist. Keep it short and operational. At most one item may be in_progress.',
+          description: 'Required. The complete current checklist as an array. Use this exact field name: items. Keep it short and operational. At most one item may be in_progress.',
           items: {
             type: 'object',
             properties: {
@@ -88,19 +88,32 @@ function normalizeTodoItems(rawItems: any[]): AgentTodoItem[] {
   })
 }
 
+function readTodoItemsArgument(args: Record<string, any> | undefined): any[] {
+  if (!args || typeof args !== 'object') return []
+  for (const key of ['items', 'tasks', 'todos', 'todoItems', 'checklist']) {
+    if (Array.isArray(args[key])) return args[key]
+  }
+  return []
+}
+
 export async function handleTodoListToolCall(
   toolCall: ToolCall,
   context: Record<string, any>,
   agentName: string
 ): Promise<ToolResult> {
-  const rawItems = Array.isArray(toolCall.arguments?.items) ? toolCall.arguments.items : []
+  const rawItems = readTodoItemsArgument(toolCall.arguments)
   const items = normalizeTodoItems(rawItems)
   const ids = new Set<string>()
 
   if (!items.length) {
     return {
       tool_call_id: toolCall.id,
-      content: JSON.stringify({ ok: false, error: 'items must contain at least one task.' }),
+      content: JSON.stringify({
+        ok: false,
+        error: 'items must contain at least one task.',
+        expected: 'Call update_todolist with an items array.',
+        receivedKeys: toolCall.arguments && typeof toolCall.arguments === 'object' ? Object.keys(toolCall.arguments) : [],
+      }),
     }
   }
 

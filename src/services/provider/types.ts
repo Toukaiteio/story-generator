@@ -9,6 +9,7 @@ export interface StreamCallbacks {
 }
 
 export interface FunctionCallingCallbacks {
+  /** Called once with a complete, executable tool call. */
   onToolCall: (toolCall: ToolCall) => void
   onToolResult: (result: ToolResult) => void
   onComplete: (response: FunctionCallingResponse) => void
@@ -27,6 +28,7 @@ export interface ToolCallOptions {
 }
 
 export interface StreamWithToolsCallbacks extends Omit<StreamCallbacks, 'onComplete'> {
+  /** Called once with a complete, executable tool call after argument assembly. */
   onToolCall: (toolCall: ToolCall) => void
   onToolResult: (result: ToolResult) => void
   onComplete: (response: FunctionCallingResponse) => void

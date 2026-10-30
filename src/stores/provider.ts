@@ -38,7 +38,6 @@ const roleDefaults: Record<AgentType, 'expert' | 'standard'> = {
   polisher: 'standard',
   relationshipTracker: 'standard',
   skillAgent: 'expert',
-  proposerAgent: 'expert',
 }
 
 function cloneModel(model: ModelConfig): ModelConfig {
@@ -142,7 +141,6 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
     polisher: null,
     relationshipTracker: null,
     skillAgent: null,
-    proposerAgent: null,
   })
 
   return {
@@ -168,7 +166,6 @@ function loadAgentBindings(): Record<AgentType, ProviderModelRef | null> {
       ? decodeProviderModelRef(raw.relationshipTracker)
       : raw.relationshipTracker ?? null,
     skillAgent: typeof raw.skillAgent === 'string' ? decodeProviderModelRef(raw.skillAgent) : raw.skillAgent ?? null,
-    proposerAgent: typeof raw.proposerAgent === 'string' ? decodeProviderModelRef(raw.proposerAgent) : raw.proposerAgent ?? null,
   }
 }
 

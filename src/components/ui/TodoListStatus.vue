@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { CheckCircle2, Circle, CircleDashed, ListChecks, Lock } from 'lucide-vue-next'
 import { translatePhrase } from '@/i18n'
-import type { AgentTodoItem } from '@/services/agent/todolist'
+import type { AgentTodoItem } from '@/app'
 
 const props = withDefaults(defineProps<{
   items: AgentTodoItem[]
@@ -35,7 +35,7 @@ function itemClasses(status: AgentTodoItem['status']) {
 </script>
 
 <template>
-  <div v-if="items.length" class="rounded-lg border border-surface-4 bg-surface-1 shadow-sm">
+  <div v-if="items.length" class="app-subpanel overflow-hidden">
     <div class="flex items-center justify-between gap-3 border-b border-surface-4 px-3 py-2">
       <div class="flex min-w-0 items-center gap-2">
         <ListChecks :size="14" class="shrink-0 text-accent" />
@@ -44,7 +44,7 @@ function itemClasses(status: AgentTodoItem['status']) {
           <p v-if="agent && !compact" class="truncate text-[10px] text-text-muted">{{ agent }}</p>
         </div>
       </div>
-      <span class="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
+          <span class="shrink-0 rounded border border-surface-4 bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
         {{ completed }}/{{ items.length }}
       </span>
     </div>

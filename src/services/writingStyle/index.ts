@@ -1,4 +1,4 @@
-import type { WritingStyle } from '@/types/writingStyle'
+import type { WritingStyle, WritingStyleSkill } from '@/types/writingStyle'
 import { createWritingStyle } from './storage'
 
 export class WritingStyleService {
@@ -8,6 +8,7 @@ export class WritingStyleService {
     content: string
     source: 'manual' | 'ai-generated'
     tags: string[]
+    skill?: WritingStyleSkill
   }): WritingStyle {
     return createWritingStyle(data)
   }

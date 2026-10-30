@@ -2,6 +2,7 @@
 
 import type { ProviderType } from './types/provider'
 import type { UnsavedChapterLocation } from './services/unsaved'
+import type { ProviderProxyRequest, ProviderProxyResponse, ProviderStreamEvent } from './services/provider/transportTypes'
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
@@ -50,6 +51,10 @@ declare global {
     provider: {
       listModels: (request: { type: ProviderType; apiKey: string; baseUrl: string }) => Promise<any>
       createEmbedding: (request: { type: ProviderType; apiKey: string; baseUrl: string; model: string; text: string }) => Promise<any>
+      request: (request: ProviderProxyRequest) => Promise<ProviderProxyResponse>
+      cancelRequest: (requestId: string) => void
+      startStream: (requestId: string, request: ProviderProxyRequest, callback: (event: ProviderStreamEvent) => void) => Promise<ProviderProxyResponse>
+      cancelStream: (requestId: string) => void
     }
     dialog: {
       openFile: (options?: any) => Promise<string | null>
