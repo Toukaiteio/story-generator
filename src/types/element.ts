@@ -28,6 +28,8 @@ export interface StoryElement extends Timestamps {
   id: ID
   kind: ElementKind
   name: string
+  /** Alternate names that mark the same element in prose. Older records omit this. */
+  aliases?: string[]
   /** Set when kind is 'character' to link the rich Character profile. */
   characterId?: ID
   states: ElementState[]

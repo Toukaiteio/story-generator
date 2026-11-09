@@ -189,6 +189,16 @@ function getStorageFilePath(key: string) {
   return join(STORAGE_DIR, `${sanitizeStorageKey(key)}.json`)
 }
 
+function resolveAppIcon() {
+  const candidates = [
+    process.env.VITE_DEV_SERVER_URL ? join(process.cwd(), 'build/icon.png') : '',
+    join(process.resourcesPath || '', 'build/icon.png'),
+    join(app.getAppPath(), 'build/icon.png'),
+    join(process.cwd(), 'build/icon.png'),
+  ].filter(Boolean)
+  return candidates.find(candidate => existsSync(candidate))
+}
+
 function createWindow() {
   forceClosing = false
   hasUnsavedChanges = false
@@ -199,7 +209,8 @@ function createWindow() {
     minHeight: 640,
     frame: false,
     titleBarStyle: 'hidden',
-    backgroundColor: '#0d1117',
+    backgroundColor: '#F2F2F7',
+    icon: resolveAppIcon(),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,

@@ -55,7 +55,7 @@ onBeforeUnmount(clearTimer)
     :closable="false"
   >
     <div class="flex gap-3">
-      <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-warning/30 bg-warning/10">
+      <div class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-warning-subtle">
         <AlertTriangle :size="18" class="text-warning" />
       </div>
       <div class="min-w-0 space-y-2">

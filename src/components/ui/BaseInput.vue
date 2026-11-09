@@ -30,19 +30,20 @@ const translatedPlaceholder = computed(() => props.placeholder ? translatePhrase
 const translatedError = computed(() => props.error ? translatePhrase(props.error) : '')
 
 const containerClass = computed(() => [
-  'flex items-center h-9 px-3 rounded-md border transition-all duration-150',
-  'bg-surface-1',
-  focused.value ? 'border-accent' : 'border-surface-4 hover:border-surface-5',
-  props.error ? 'border-danger' : '',
+  'flex min-h-11 items-center gap-2 rounded-full px-4 transition-all duration-150',
+  'bg-surface-2',
+  focused.value ? 'ring-2 ring-accent/40' : '',
+  !focused.value && !props.error ? 'hover:bg-surface-3' : '',
+  props.error ? 'ring-2 ring-danger/50' : '',
   props.disabled ? 'opacity-50 cursor-not-allowed' : '',
 ])
 </script>
 
 <template>
-  <div class="flex flex-col gap-1.5">
-    <label v-if="label" class="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">{{ translatedLabel }}</label>
+  <div class="flex min-w-0 flex-col gap-1.5">
+    <label v-if="label" class="text-caption font-medium text-text-secondary">{{ translatedLabel }}</label>
     <div :class="containerClass">
-      <component :is="icon" v-if="icon" :size="16" class="text-text-muted mr-2 shrink-0" />
+      <component :is="icon" v-if="icon" :size="16" class="shrink-0 text-text-muted" />
       <input
         :type="type"
         :min="min"
@@ -51,12 +52,12 @@ const containerClass = computed(() => [
         :value="modelValue"
         :placeholder="translatedPlaceholder"
         :disabled="disabled"
-        class="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted outline-none"
+        class="min-w-0 flex-1 bg-transparent text-body text-text-primary placeholder:text-text-muted outline-none"
         @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
         @focus="focused = true"
         @blur="focused = false"
       />
     </div>
-    <p v-if="error" class="text-xs text-danger">{{ translatedError }}</p>
+    <p v-if="error" class="px-1 text-meta text-danger">{{ translatedError }}</p>
   </div>
 </template>

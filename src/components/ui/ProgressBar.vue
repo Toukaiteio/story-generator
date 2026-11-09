@@ -15,7 +15,7 @@ withDefaults(defineProps<{
 <template>
   <div
     :class="[
-      'w-full overflow-hidden rounded-full border border-surface-4 bg-surface-0',
+      'w-full overflow-hidden rounded-full bg-surface-2',
       size === 'sm' ? 'h-1' : 'h-2',
     ]"
   >

@@ -255,88 +255,83 @@ function copyDetail(event: MouseEvent) {
 </script>
 
 <template>
-  <div class="group flex flex-col overflow-hidden rounded-md bg-surface-2/40 transition-all hover:bg-surface-2">
-    <!-- Header: Tool Identity & Status -->
-    <div 
-      class="flex min-h-[28px] items-center justify-between gap-2 px-2.5 py-1.5 cursor-pointer select-none"
+  <div class="group flex flex-col overflow-hidden rounded-ios bg-surface-2/70 transition-colors hover:bg-surface-2">
+    <div
+      class="flex min-h-[36px] cursor-pointer select-none items-center justify-between gap-2 px-3 py-1.5"
       @click="hasChangePreview ? (isExpanded = !isExpanded) : null"
     >
       <div class="flex min-w-0 items-center gap-2 text-text-secondary">
-        <component :is="toolMeta.icon" :size="12" class="shrink-0" />
-        <span class="truncate text-[11px] font-medium text-text-primary">{{ tr(item.title || toolMeta.label) }}</span>
-        <span class="truncate text-[10px] text-text-muted hidden sm:inline">{{ tr(item.description || toolMeta.description) }}</span>
+        <component :is="toolMeta.icon" :size="15" class="shrink-0" />
+        <span class="truncate text-caption font-medium text-text-primary">{{ tr(item.title || toolMeta.label) }}</span>
+        <span class="hidden truncate text-meta text-text-muted sm:inline">{{ tr(item.description || toolMeta.description) }}</span>
       </div>
 
-      <div class="flex items-center gap-1.5 shrink-0">
-        <div 
-          v-if="item.detail" 
-          class="hidden max-w-[100px] truncate rounded bg-surface-3 px-1.5 py-0.5 text-[9px] text-text-muted md:block"
+      <div class="flex shrink-0 items-center gap-1.5">
+        <div
+          v-if="item.detail"
+          class="hidden max-w-[110px] truncate rounded-full bg-surface-1 px-2 py-0.5 text-meta text-text-muted md:block"
         >
           {{ item.detail }}
         </div>
-        <component :is="statusConfig.icon" :size="12" :class="statusConfig.class" stroke-width="2.5" />
-        <button 
+        <component :is="statusConfig.icon" :size="14" :class="statusConfig.class" stroke-width="2.5" />
+        <button
           v-if="hasChangePreview"
-          class="flex h-4 w-4 items-center justify-center text-text-muted transition-colors hover:text-text-primary"
+          class="flex h-5 w-5 items-center justify-center rounded-full text-text-muted transition-colors hover:text-text-primary"
         >
-          <ChevronDown v-if="isExpanded" :size="12" />
-          <ChevronRight v-else :size="12" />
+          <ChevronDown v-if="isExpanded" :size="14" />
+          <ChevronRight v-else :size="14" />
         </button>
       </div>
     </div>
 
-    <!-- Error/Warning Detail (Auto-expanded) -->
-    <div v-if="item.status === 'error' || (item.status === 'warning' && item.detail)" class="border-t border-surface-4 bg-danger/5 px-2.5 py-2">
-      <div class="flex items-start gap-1.5">
-        <AlertTriangle v-if="item.status === 'warning'" :size="12" class="mt-0.5 shrink-0 text-warning" />
-        <X v-else :size="12" class="mt-0.5 shrink-0 text-danger" />
-        <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-[10px] leading-relaxed [overflow-wrap:anywhere]" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
+    <div v-if="item.status === 'error' || (item.status === 'warning' && item.detail)" class="border-t border-line bg-danger-subtle/60 px-3 py-2">
+      <div class="flex items-start gap-2">
+        <AlertTriangle v-if="item.status === 'warning'" :size="14" class="mt-0.5 shrink-0 text-warning" />
+        <X v-else :size="14" class="mt-0.5 shrink-0 text-danger" />
+        <p class="min-w-0 flex-1 whitespace-pre-wrap break-words text-meta leading-relaxed [overflow-wrap:anywhere]" :class="item.status === 'error' ? 'text-danger' : 'text-text-secondary'">
           {{ item.detail }}
         </p>
         <button
           v-if="item.detail"
           type="button"
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-3 hover:text-text-primary"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-1 hover:text-text-primary"
           :title="tr('Copy tool error')"
           :aria-label="tr('Copy tool error')"
           @click="copyDetail"
         >
-          <Copy :size="11" />
+          <Copy :size="12" />
         </button>
       </div>
     </div>
 
-    <!-- Diff Preview (Collapsible) -->
-    <div v-if="hasChangePreview && isExpanded" class="border-t border-surface-4 bg-surface-1/50">
-      <div class="flex items-center justify-between border-b border-surface-4 px-2.5 py-1">
-        <span class="text-[9px] font-bold uppercase tracking-widest text-text-muted">{{ tr('Changes') }}</span>
-        <div class="flex items-center gap-2 text-[9px] font-bold">
+    <div v-if="hasChangePreview && isExpanded" class="border-t border-line bg-surface-1">
+      <div class="flex items-center justify-between border-b border-line px-3 py-1.5">
+        <span class="text-meta font-medium text-text-secondary">{{ tr('Changes') }}</span>
+        <div class="flex items-center gap-2 text-meta font-medium">
           <span v-if="removedLines.length" class="text-danger">-{{ removedLines.length }}</span>
           <span v-if="addedLines.length" class="text-success">+{{ addedLines.length }}</span>
         </div>
       </div>
-      
-      <div class="max-h-64 overflow-y-auto font-mono text-[10px] custom-scrollbar">
-        <!-- Removed Content -->
+
+      <div class="custom-scrollbar max-h-64 overflow-y-auto px-3 py-2 font-mono text-meta">
         <div v-if="removedLines.length">
           <div
             v-for="(line, index) in removedLines"
             :key="`removed-${index}`"
-            class="flex items-start gap-2 bg-danger/5 px-2.5 py-0.5"
+            class="flex items-start gap-2 bg-danger-subtle/50 px-3 py-0.5"
           >
-            <span class="w-3 shrink-0 select-none text-center font-bold text-danger/60">-</span>
-            <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-text-secondary opacity-80">{{ line }}</span>
+            <span class="w-3 shrink-0 select-none text-center font-bold text-danger/70">-</span>
+            <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-text-secondary">{{ line }}</span>
           </div>
         </div>
-        
-        <!-- Added Content -->
+
         <div v-if="addedLines.length">
           <div
             v-for="(line, index) in addedLines"
             :key="`added-${index}`"
-            class="flex items-start gap-2 bg-success/5 px-2.5 py-0.5"
+            class="flex items-start gap-2 bg-success-subtle/60 px-3 py-0.5"
           >
-            <span class="w-3 shrink-0 select-none text-center font-bold text-success/60">+</span>
+            <span class="w-3 shrink-0 select-none text-center font-bold text-success/70">+</span>
             <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-text-primary">{{ line }}</span>
           </div>
         </div>
@@ -353,10 +348,10 @@ function copyDetail(event: MouseEvent) {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--surface-4);
-  border-radius: 4px;
+  background: rgba(60, 60, 67, 0.22);
+  border-radius: 999px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--surface-5);
+  background: rgba(60, 60, 67, 0.34);
 }
 </style>

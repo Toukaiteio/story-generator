@@ -1,18 +1,37 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowUp, Loader2, Sparkles, Square, X } from 'lucide-vue-next'
-import BaseButton from '@/components/ui/BaseButton.vue'
-import SuggestionCard from './SuggestionCard.vue'
-import { useStoryProject, useStudioActions, type ChapterPlanDraft } from '@/app'
+import { computed, ref, watch } from 'vue'
+import {
+  AlignLeft,
+  ArrowUp,
+  MessageSquare,
+  Sparkles,
+  Square,
+  Wand2,
+  X,
+} from 'lucide-vue-next'
+import TodoListStatus from '@/components/ui/TodoListStatus.vue'
+import BaseDropdown from '@/components/ui/BaseDropdown.vue'
+import type { DropdownItem } from '@/components/ui/dropdown'
+import ToolCallStatus, { type ToolCallStatusItem } from '@/components/ui/ToolCallStatus.vue'
+import ElementProposalList from './ElementProposalList.vue'
+import { useStoryProject, useStudioActions, useStoryEngine } from '@/app'
+import { useChapterReview } from '@/stores/chapterReview'
 import { useToast } from '@/composables/useToast'
 import { translatePhrase } from '@/i18n'
+import type { ChapterPlanDraft, ElementStateProposal } from '@/app'
 
 const props = defineProps<{ open: boolean; chapterId: string | null }>()
-const emit = defineEmits<{ close: [] }>()
-const tr = translatePhrase
+const emit = defineEmits<{
+  close: []
+  openChapter: [chapterId: string]
+  planNext: []
+}>()
 
+const tr = translatePhrase
 const projectStore = useStoryProject()
 const actions = useStudioActions()
+const engine = useStoryEngine()
+const reviewStore = useChapterReview()
 const toast = useToast()
 
 interface Message {
@@ -25,8 +44,9 @@ const messages = ref<Message[]>([])
 const draft = ref('')
 const busy = ref(false)
 const streaming = ref('')
-const planDraft = ref<ChapterPlanDraft | null>(null)
-const elementProposals = ref<Array<{ name: string; kind: string; summary: string; status?: string }>>([])
+const elementProposals = ref<ElementStateProposal[]>([])
+const toolStatuses = ref<ToolCallStatusItem[]>([])
+let toolCounter = 0
 const list = ref<HTMLElement | null>(null)
 const input = ref<HTMLTextAreaElement | null>(null)
 let controller: AbortController | null = null
@@ -35,20 +55,29 @@ const chapter = computed(() =>
   projectStore.activeProject?.chapters.find(item => item.id === props.chapterId) ?? null,
 )
 
+const todoList = computed(() => engine.todoList)
+
+const overflowItems = computed<DropdownItem[]>(() => [
+  { heading: 'Actions' },
+  { label: 'Plan next', icon: Sparkles, disabled: busy.value, action: () => emit('planNext') },
+  { label: 'Catch me up', icon: AlignLeft, disabled: busy.value, action: () => void runRecap() },
+  { label: 'Sync elements', icon: Wand2, disabled: busy.value || !chapter.value?.content.trim(), action: () => void syncElements() },
+  { label: 'Proofread', icon: MessageSquare, disabled: busy.value || !chapter.value?.content.trim(), action: () => void proofread() },
+  { label: 'Polish', icon: Wand2, disabled: busy.value || !chapter.value?.content.trim(), action: () => void polish() },
+])
+
 watch(
   () => props.open,
   open => {
     if (!open) {
       controller?.abort()
       streaming.value = ''
-    } else {
-      nextTick(() => input.value?.focus())
     }
   },
 )
 
 function scrollToBottom() {
-  nextTick(() => list.value?.scrollTo({ top: list.value.scrollHeight, behavior: 'smooth' }))
+  requestAnimationFrame(() => list.value?.scrollTo({ top: list.value.scrollHeight, behavior: 'smooth' }))
 }
 
 async function send() {
@@ -105,157 +134,201 @@ async function runRecap() {
 
 async function planNext() {
   if (busy.value) return
-  busy.value = true
-  try {
-    planDraft.value = await actions.proposeChapterPlan({ afterChapterId: props.chapterId ?? undefined })
-  } catch (error: any) {
-    toast.error(error?.message || 'Planning failed')
-  } finally {
-    busy.value = false
-  }
-}
-
-async function acceptPlan() {
-  if (!planDraft.value) return
-  try {
-    await actions.acceptChapterPlan(planDraft.value)
-    planDraft.value = null
-    toast.success('Chapter planned')
-  } catch (error: any) {
-    toast.error(error?.message || 'Failed to save plan')
-  }
+  emit('planNext')
 }
 
 async function syncElements() {
-  const target = chapter.value ?? projectStore.activeProject?.chapters[projectStore.activeProject.chapters.length - 1]
+  const target = chapter.value
   if (!target?.content.trim() || busy.value) return
   busy.value = true
   elementProposals.value = []
   try {
-    const result = await actions.proposeElementStates(target.id)
-    elementProposals.value = result.map(item => ({
-      name: item.name,
-      kind: item.kind,
-      summary: item.state.summary,
-      status: item.state.status,
-    }))
-    if (!elementProposals.value.length) toast.info('No element changes found.')
+    elementProposals.value = await actions.proposeElementStates(target.id)
+    if (!elementProposals.value.length) toast.info('No element changes found')
   } catch (error: any) {
-    toast.error(error?.message || 'Sync failed')
+    toast.error(error?.message || 'Element sync failed')
   } finally {
     busy.value = false
   }
 }
 
-async function applyProposals() {
-  if (!elementProposals.value.length) return
+async function applyProposals(selected: ElementStateProposal[]) {
+  if (!selected.length) return
   try {
-    await actions.applyElementProposals(elementProposals.value.map(item => ({
-      name: item.name,
-      kind: item.kind as any,
-      state: {
-        chapterIndex: chapter.value?.index ?? 0,
-        summary: item.summary,
-        status: item.status as any,
-      },
-    })))
+    await actions.applyElementProposals(selected)
     elementProposals.value = []
-    toast.success('Elements updated')
+    toast.success(`Applied ${selected.length} element updates`)
   } catch (error: any) {
     toast.error(error?.message || 'Apply failed')
+  }
+}
+
+async function proofread() {
+  const target = chapter.value
+  if (!target || busy.value) return
+  busy.value = true
+  toolStatuses.value = [
+    ...toolStatuses.value,
+    { id: `proofread-${++toolCounter}`, name: 'proofread_chapter', status: 'running', title: 'Proofread chapter' },
+  ]
+  try {
+    await actions.proofreadChapter(target.id)
+    toolStatuses.value = toolStatuses.value.map(item =>
+      item.status === 'running' ? { ...item, status: 'success' as const, detail: 'Proofreading finished' } : item)
+    toast.success('Proofreading finished')
+  } catch (error: any) {
+    toolStatuses.value = toolStatuses.value.map(item =>
+      item.status === 'running' ? { ...item, status: 'error' as const, detail: error?.message } : item)
+    toast.error(error?.message || 'Proofreading failed')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function polish() {
+  const target = chapter.value
+  if (!target || busy.value) return
+  busy.value = true
+  toolStatuses.value = [
+    ...toolStatuses.value,
+    { id: `polish-${++toolCounter}`, name: 'polish_chapter', status: 'running', title: 'Polish chapter' },
+  ]
+  const before = target.content
+  try {
+    const polished = await actions.polishChapter(target.id)
+    const current = projectStore.activeProject?.chapters.find(item => item.id === target.id)?.content
+    if (current !== before) {
+      toolStatuses.value = toolStatuses.value.map(item =>
+        item.status === 'running'
+          ? { ...item, status: 'warning' as const, detail: 'Chapter changed while polishing; run it again' }
+          : item)
+      toast.info('Chapter changed while polishing; run it again')
+      return
+    }
+    const changed = Boolean(polished.trim()) && polished !== before
+    if (changed) {
+      reviewStore.propose({
+        chapterId: target.id,
+        label: 'Polish',
+        base: before,
+        original: before,
+        revised: polished,
+        start: 0,
+        end: before.length,
+        inline: true,
+      })
+      emit('openChapter', target.id)
+    }
+    toolStatuses.value = toolStatuses.value.map(item =>
+      item.status === 'running'
+        ? { ...item, status: changed ? 'success' as const : 'warning' as const, detail: changed ? 'Polish ready for review' : 'Polish produced no changes' }
+        : item)
+    if (!changed) toast.info('Polish produced no changes')
+  } catch (error: any) {
+    toolStatuses.value = toolStatuses.value.map(item =>
+      item.status === 'running' ? { ...item, status: 'error' as const, detail: error?.message } : item)
+    toast.error(error?.message || 'Polishing failed')
+  } finally {
+    busy.value = false
   }
 }
 </script>
 
 <template>
-  <aside
-    class="flex h-full flex-col border-l border-surface-3 bg-surface-1 transition-[width] duration-200"
-    :class="open ? 'w-[360px]' : 'w-0 overflow-hidden'"
-  >
-    <header class="flex items-center justify-between px-4 py-3">
-      <h2 class="text-2xs font-bold uppercase tracking-wider text-text-secondary">{{ tr('Copilot') }}</h2>
-      <BaseButton variant="ghost" size="sm" @click="emit('close')">
-        <X :size="14" />
-      </BaseButton>
-    </header>
-
-    <div ref="list" class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
-      <div
-        v-for="message in messages"
-        :key="message.id"
-        class="max-w-[92%] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap"
-        :class="message.role === 'user'
-          ? 'ml-auto bg-accent-subtle text-text-primary'
-          : 'bg-surface-2 text-text-secondary'"
-      >
-        {{ message.content }}
-      </div>
-      <p v-if="streaming" class="max-w-[92%] whitespace-pre-wrap rounded-2xl bg-surface-2 px-3.5 py-2.5 text-xs leading-relaxed text-text-secondary">
-        {{ streaming }}
-      </p>
-
-      <div v-if="planDraft" class="rounded-2xl border border-accent/25 bg-surface-2 p-3">
-        <p class="text-sm font-semibold text-text-primary">{{ planDraft.title }}</p>
-        <p class="mt-1 text-xs leading-relaxed text-text-secondary">{{ planDraft.outline.objective }}</p>
-        <p class="mt-1 text-xs leading-relaxed text-text-muted">{{ planDraft.outline.endingHook }}</p>
-        <div class="mt-2.5 flex justify-end gap-1.5">
-          <BaseButton variant="ghost" size="sm" @click="planDraft = null">
-            <X :size="13" />
-          </BaseButton>
-          <BaseButton variant="primary" size="sm" @click="acceptPlan">
-            {{ tr('Add chapter') }}
-          </BaseButton>
+  <Transition name="slide-right">
+    <aside
+      v-if="open"
+      class="flex w-[360px] max-w-full shrink-0 flex-col overflow-hidden rounded-ios-lg bg-surface-2/60"
+    >
+      <header class="flex shrink-0 items-center justify-between gap-2 px-4 pb-2 pt-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="flex h-8 w-8 items-center justify-center rounded-full bg-surface-1 text-accent shadow-ios-pill">
+            <Sparkles :size="16" />
+          </span>
+          <div class="min-w-0">
+            <p class="truncate text-caption font-semibold text-text-primary">{{ tr('Copilot') }}</p>
+            <p class="truncate text-meta text-text-muted">{{ chapter?.title || tr('Whole project') }}</p>
+          </div>
         </div>
-      </div>
+        <div class="flex shrink-0 items-center gap-1">
+          <BaseDropdown :items="overflowItems" :width="200">
+            <template #trigger>
+              <div class="app-icon-button" :aria-label="tr('More actions')">
+                <span class="text-body leading-none">⋯</span>
+              </div>
+            </template>
+          </BaseDropdown>
+          <button class="app-icon-button" :aria-label="tr('Close copilot')" @click="emit('close')">
+            <X :size="18" />
+          </button>
+        </div>
+      </header>
 
-      <div v-if="elementProposals.length" class="rounded-2xl border border-accent/25 bg-surface-2 p-3">
-        <p class="text-2xs font-bold uppercase tracking-wider text-accent">{{ tr('Element updates') }}</p>
-        <p v-for="(item, index) in elementProposals" :key="index" class="mt-1.5 text-xs leading-relaxed text-text-primary">
-          <span class="font-semibold">{{ item.name }}</span>
-          <template v-if="item.status"> · {{ item.status }}</template>
-          — {{ item.summary }}
+      <div ref="list" class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6 pt-4">
+        <TodoListStatus v-if="todoList.items.length" :items="todoList.items" :agent="todoList.agent" compact />
+
+        <div v-if="toolStatuses.length" class="space-y-1">
+          <ToolCallStatus
+            v-for="status in toolStatuses"
+            :key="status.id"
+            :item="status"
+          />
+        </div>
+
+        <div
+          v-for="message in messages"
+          :key="message.id"
+          class="max-w-[94%] whitespace-pre-wrap rounded-ios px-3.5 py-2.5 text-caption leading-relaxed"
+          :class="message.role === 'user'
+            ? 'ml-auto bg-accent text-text-inverse'
+            : 'bg-surface-1 text-text-secondary shadow-ios-pill'"
+        >
+          {{ message.content }}
+        </div>
+
+        <p v-if="streaming" class="max-w-[94%] whitespace-pre-wrap rounded-ios bg-surface-1 px-3.5 py-2.5 text-caption leading-relaxed text-text-secondary shadow-ios-pill">
+          {{ streaming }}
         </p>
-        <div class="mt-2.5 flex justify-end gap-1.5">
-          <BaseButton variant="ghost" size="sm" @click="elementProposals = []">
-            <X :size="13" />
-          </BaseButton>
-          <BaseButton variant="primary" size="sm" @click="applyProposals">
-            {{ tr('Apply') }}
-          </BaseButton>
+
+        <ElementProposalList
+          v-if="elementProposals.length"
+          :proposals="elementProposals"
+          @apply="applyProposals"
+          @discard="elementProposals = []"
+        />
+
+        <p v-if="!messages.length && !streaming && !todoList.items.length && !elementProposals.length" class="rounded-ios bg-surface-1 px-4 py-3 text-caption leading-relaxed text-text-secondary shadow-ios-pill">
+          {{ tr('Ask about the chapter, or run one of the actions below.') }}
+        </p>
+      </div>
+
+      <div class="shrink-0 px-4 pb-3">
+        <div class="composer flex items-end gap-2 px-3 py-2">
+          <textarea
+            ref="input"
+            v-model="draft"
+            rows="1"
+            class="max-h-32 min-h-6 flex-1 resize-none bg-transparent text-caption leading-6 text-text-primary outline-none placeholder:text-text-muted"
+            :placeholder="tr('Ask, or say what to change')"
+            @keydown.enter.exact.prevent="send"
+          />
+          <button
+            v-if="busy"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+            @click="controller?.abort()"
+          >
+            <Square :size="14" />
+          </button>
+          <button
+            v-else
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-text-inverse disabled:opacity-40"
+            :disabled="!draft.trim()"
+            @click="send"
+          >
+            <ArrowUp :size="15" />
+          </button>
         </div>
       </div>
-    </div>
-
-    <div class="border-t border-surface-3 p-3">
-      <div class="mb-2 flex flex-wrap items-center gap-1.5">
-        <BaseButton variant="secondary" size="sm" :disabled="busy" @click="runRecap">
-          {{ tr('Catch me up') }}
-        </BaseButton>
-        <BaseButton variant="secondary" size="sm" :loading="busy" @click="planNext">
-          <Sparkles :size="12" />
-          <span>{{ tr('Plan next') }}</span>
-        </BaseButton>
-        <BaseButton variant="secondary" size="sm" :disabled="busy || !chapter?.content.trim()" @click="syncElements">
-          {{ tr('Sync elements') }}
-        </BaseButton>
-      </div>
-      <div class="flex items-end gap-2 rounded-2xl border border-surface-4 bg-surface-2 px-3 py-2 transition-colors focus-within:border-accent/60">
-        <textarea
-          ref="input"
-          v-model="draft"
-          rows="1"
-          class="max-h-32 min-h-6 flex-1 resize-none bg-transparent text-xs leading-6 text-text-primary outline-none placeholder:text-text-muted"
-          :placeholder="tr('Ask, or say what to change')"
-          @keydown.enter.exact.prevent="send"
-        />
-        <BaseButton v-if="busy" variant="ghost" size="sm" @click="controller?.abort()">
-          <Square :size="13" />
-        </BaseButton>
-        <BaseButton v-else variant="ghost" size="sm" :disabled="!draft.trim()" @click="send">
-          <Loader2 v-if="busy" :size="13" class="animate-spin" />
-          <ArrowUp v-else :size="13" />
-        </BaseButton>
-      </div>
-    </div>
-  </aside>
+    </aside>
+  </Transition>
 </template>

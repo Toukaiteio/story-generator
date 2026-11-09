@@ -43,3 +43,10 @@ export function translatePhrase(source: string) {
 }
 
 setI18nLocale(initialLocale)
+
+/** Chapter label that reads naturally in each locale: 第 3 章 / Ch 3. */
+export function formatChapterLabel(index: number): string {
+  const locale = i18n.global.locale.value as AppLocale
+  const chapter = index + 1
+  return locale === 'zh' ? `第 ${chapter} 章` : `Ch ${chapter}`
+}

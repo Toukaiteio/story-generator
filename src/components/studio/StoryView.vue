@@ -1,23 +1,48 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { Settings2 } from 'lucide-vue-next'
-import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseSelect from '@/components/ui/BaseSelect.vue'
-import BaseSegmented from '@/components/ui/BaseSegmented.vue'
-import BaseTag from '@/components/ui/BaseTag.vue'
-import { useStoryProject, useWritingStyleLibrary, countWords, buildWritingStyleSnapshot } from '@/app'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Eye, FolderDown, Save, Sparkles, X } from 'lucide-vue-next'
+import StudioViewHeader from './StudioViewHeader.vue'
+import { useStoryProject, useStudioActions, countWords, elementContextCapsules } from '@/app'
+import { useToast } from '@/composables/useToast'
+import { EXPORT_FORMATS, useProjectExport } from '@/composables/useProjectExport'
 import { translatePhrase } from '@/i18n'
+import type { DropdownItem } from '@/components/ui/dropdown'
+import type { StudioView } from './StudioViewHeader.vue'
+
+const props = defineProps<{ projectId?: string | null; inert?: boolean }>()
+const emit = defineEmits<{
+  openChapter: [chapterId: string]
+  openCharacter: [characterId: string]
+  switchView: [view: StudioView]
+}>()
 
 const tr = translatePhrase
-
 const projectStore = useStoryProject()
-const writingStyles = useWritingStyleLibrary()
+const actions = useStudioActions()
+const toast = useToast()
+const { exportFormat } = useProjectExport()
 
-const project = computed(() => projectStore.activeProject)
+const project = computed(() =>
+  props.projectId ? projectStore.getProjectById(props.projectId) : projectStore.activeProject,
+)
 const outline = ref('')
 const savedOutline = ref('')
-const showConfig = ref(false)
+const expanding = ref(false)
+const savingOutline = ref(false)
+const panel = ref<'cast' | 'context' | 'chapters' | null>(null)
+const outlineHeight = ref('320px')
+const outlineEl = ref<HTMLTextAreaElement | null>(null)
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+function syncOutlineHeight() {
+  const el = outlineEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  const height = Math.max(280, Math.min(560, el.scrollHeight))
+  el.style.height = `${height}px`
+  el.style.overflowY = el.scrollHeight > height ? 'auto' : 'hidden'
+  outlineHeight.value = `${height}px`
+}
 
 watch(project, value => {
   outline.value = value?.outline ?? ''
@@ -27,125 +52,184 @@ watch(project, value => {
 watch(outline, () => {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => void saveOutline(), 900)
+  nextTick(syncOutlineHeight)
 })
+
+watch(() => project.value?.id, () => nextTick(syncOutlineHeight))
 
 async function saveOutline() {
   if (!project.value || outline.value === project.value.outline) return
-  await projectStore.updateProject(project.value.id, { outline: outline.value })
-  savedOutline.value = outline.value
+  savingOutline.value = true
+  try {
+    const saved = await projectStore.updateProject(project.value.id, { outline: outline.value })
+    if (saved) savedOutline.value = outline.value
+  } finally {
+    savingOutline.value = false
+  }
 }
 
-const config = reactive({
-  genre: '',
-  chapterCount: 8,
-  writingFormat: 'plaintext' as 'plaintext' | 'markdown',
-  language: 'English',
-  styleId: 'default',
-})
-
-watch(project, value => {
-  if (!value) return
-  config.genre = value.genre
-  config.chapterCount = value.chapterConfig?.maxChapters ?? value.chapterCount ?? 8
-  config.writingFormat = value.writingFormat ?? 'plaintext'
-  config.language = value.language || 'English'
-  config.styleId = value.styleId || 'default'
-}, { immediate: true })
-
-async function saveConfig() {
-  if (!project.value) return
-  const style = writingStyles.getStyleById(config.styleId)
-  const resolvedStyle = writingStyles.resolveStyleContent(config.styleId) || project.value.style
-  await projectStore.updateProject(project.value.id, {
-    genre: config.genre,
-    chapterCount: config.chapterCount,
-    chapterConfig: { maxChapters: config.chapterCount },
-    writingFormat: config.writingFormat,
-    language: config.language,
-    styleId: config.styleId,
-    style: resolvedStyle,
-    writingStyleSnapshot: buildWritingStyleSnapshot(style, resolvedStyle),
-  })
-  showConfig.value = false
+async function expandOutline() {
+  if (!project.value || expanding.value) return
+  expanding.value = true
+  try {
+    outline.value = await actions.expandStoryOutline({ seed: outline.value })
+    await saveOutline()
+    toast.success('Outline expanded')
+  } catch (error: any) {
+    toast.error(error?.message || 'Outline generation failed')
+  } finally {
+    expanding.value = false
+  }
 }
-
-const styleOptions = computed(() => [
-  { label: tr('Default'), value: 'default' },
-  ...writingStyles.styles.map(style => ({ label: style.name, value: style.id })),
-])
-
-const chapterCountOptions = [4, 8, 12, 16, 24, 32].map(count => ({ label: String(count), value: String(count) }))
-const genreOptions = ['fantasy', 'sci-fi', 'romance', 'mystery', 'thriller', 'historical', 'literary', 'horror', 'adventure']
-  .map(genre => ({ label: genre, value: genre }))
 
 const outlineDirty = computed(() => outline.value !== savedOutline.value)
+const outlineWords = computed(() => countWords(outline.value))
+const chapters = computed(() => project.value?.chapters ?? [])
+const currentChapterId = computed(() => chapters.value[0]?.id ?? null)
+
+const contextCapsules = computed(() =>
+  elementContextCapsules(project.value?.elements, Math.max(0, chapters.value.length - 1), 6),
+)
+
+const cast = computed(() => project.value?.characters ?? [])
+
+const relationships = computed(() => {
+  const characters = project.value?.characters ?? []
+  const seen = new Set<string>()
+  const rows: Array<{ id: string; from: string; to: string; relation: string }> = []
+  for (const character of characters) {
+    for (const relation of character.relations ?? []) {
+      const target = characters.find(item => item.id === relation.targetId)
+      if (!target) continue
+      const key = [character.id, target.id].sort().join('|')
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push({ id: key, from: character.name, to: target.name, relation: relation.relation })
+    }
+  }
+  return rows
+})
+
+const chapterStructure = computed(() => chapters.value.map(chapter => ({
+  id: chapter.id,
+  label: `${chapter.index + 1}. ${chapter.title}`,
+  action: () => emit('openChapter', chapter.id),
+})))
+
+const headerActions = computed<DropdownItem[]>(() => [
+  { heading: 'Story bible' },
+  { label: 'Cast', checked: panel.value === 'cast', disabled: !cast.value.length, action: () => { panel.value = panel.value === 'cast' ? null : 'cast' } },
+  { label: 'In context', checked: panel.value === 'context', action: () => { panel.value = panel.value === 'context' ? null : 'context' } },
+  { divider: true },
+  { heading: 'Outline' },
+  { label: 'Expand outline', icon: Sparkles, disabled: expanding.value, action: () => void expandOutline() },
+  { label: 'Save outline', checked: !outlineDirty.value, disabled: !outlineDirty.value, action: () => void saveOutline() },
+  { divider: true },
+  { heading: 'Chapters' },
+  { label: 'Chapter structure', icon: FolderDown, checked: panel.value === 'chapters', disabled: !chapterStructure.value.length, action: () => { panel.value = panel.value === 'chapters' ? null : 'chapters' } },
+  { divider: true },
+  { heading: 'Export' },
+  ...EXPORT_FORMATS.map(format => ({
+    label: format.label,
+    icon: FolderDown,
+    disabled: !project.value,
+    action: () => { if (project.value) void exportFormat(project.value, format.id) },
+  })),
+])
+
+onMounted(() => nextTick(syncOutlineHeight))
+
+onBeforeUnmount(() => {
+  if (saveTimer) clearTimeout(saveTimer)
+  void saveOutline()
+})
 </script>
 
 <template>
-  <div v-if="project" class="h-full overflow-y-auto">
-    <div class="mx-auto max-w-3xl px-6 py-6">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <h1 class="truncate text-xl font-bold text-text-primary">{{ project.name }}</h1>
-          <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <BaseTag size="sm" variant="accent">{{ project.genre || tr('Unset genre') }}</BaseTag>
-            <BaseTag size="sm">{{ (project.chapterConfig?.maxChapters ?? project.chapterCount) }} {{ tr('chapters') }}</BaseTag>
-            <BaseTag size="sm">{{ project.writingFormat }}</BaseTag>
-            <BaseTag size="sm">{{ project.language }}</BaseTag>
-            <BaseTag size="sm">{{ countWords(outline) }} {{ tr('words') }}</BaseTag>
-          </div>
+  <div v-if="project" class="flex h-full min-h-0 flex-col" :inert="inert">
+    <StudioViewHeader
+      view="story"
+      :title="project.name"
+      :meta="`${outlineWords} ${tr('words')} · ${savingOutline ? tr('Saving') : outlineDirty ? tr('Unsaved') : tr('Saved')}`"
+      :menu-items="headerActions"
+      @update:view="emit('switchView', $event)"
+    >
+      <template #actions>
+        <button class="app-key-action h-9 gap-1.5 px-3.5 text-caption" :disabled="savingOutline || !outlineDirty" @click="saveOutline">
+          <Save :size="15" />
+          <span>{{ tr('Save') }}</span>
+        </button>
+      </template>
+    </StudioViewHeader>
+
+    <div class="relative min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
+      <div
+        v-if="panel"
+        class="absolute right-4 top-3 z-30 w-[min(360px,calc(100%-2rem))] rounded-ios border border-line bg-surface-1 p-3 shadow-ios-lg"
+      >
+        <div class="mb-2 flex items-center justify-between gap-2">
+          <p class="text-meta font-medium text-text-muted">
+            {{ panel === 'cast' ? tr('Cast') : panel === 'context' ? tr('In context') : tr('Chapter structure') }}
+          </p>
+          <button class="app-icon-button h-7 w-7" :aria-label="tr('Close')" @click="panel = null">
+            <X :size="15" />
+          </button>
         </div>
-        <BaseButton variant="ghost" size="sm" @click="showConfig = !showConfig">
-          <Settings2 :size="15" />
-        </BaseButton>
+        <div v-if="panel === 'cast'" class="flex flex-wrap items-center gap-1.5">
+          <span
+            v-for="character in cast"
+            :key="character.id"
+            class="capsule h-8 bg-surface-2 px-2.5 text-meta"
+            :title="character.currentState"
+            @click="emit('openCharacter', character.id)"
+          >
+            <span class="font-medium text-text-primary">{{ character.name }}</span>
+            <span class="text-text-muted">{{ tr(character.role) }}</span>
+          </span>
+        </div>
+        <div v-else-if="panel === 'context'" class="flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="entry in contextCapsules.items"
+            :key="entry.element.id"
+            class="capsule h-8 bg-surface-2 px-2.5 text-meta"
+            :title="entry.state.summary"
+            @click="currentChapterId && emit('openChapter', currentChapterId)"
+          >
+            <span class="font-medium text-text-primary">{{ entry.element.name }}</span>
+            <span v-if="entry.state.status" class="text-text-muted">{{ tr(entry.state.status) }}</span>
+          </button>
+          <span v-if="contextCapsules.hiddenCount" class="text-meta text-text-muted">+{{ contextCapsules.hiddenCount }}</span>
+          <span v-if="!contextCapsules.items.length" class="text-meta text-text-muted">{{ tr('No element state at this chapter') }}</span>
+        </div>
+        <div v-else class="space-y-1">
+          <button
+            v-for="chapter in chapters"
+            :key="chapter.id"
+            class="flex w-full items-center gap-2 rounded-full px-3 py-2 text-left text-caption text-text-secondary hover:bg-surface-2"
+            @click="emit('openChapter', chapter.id)"
+          >
+            <Eye :size="14" class="shrink-0 text-text-muted" />
+            <span class="truncate">{{ chapter.index + 1 }}. {{ chapter.title }}</span>
+          </button>
+        </div>
       </div>
 
-      <div v-if="showConfig" class="mt-4 grid gap-3 rounded-2xl border border-surface-4 bg-surface-1 p-4 sm:grid-cols-2">
-        <div class="space-y-1.5">
-          <BaseSelect v-model="config.genre" :options="genreOptions" />
-          <BaseSelect v-model="config.styleId" :options="styleOptions" />
-        </div>
-        <div class="space-y-1.5">
-          <BaseSelect
-            :model-value="String(config.chapterCount)"
-            :options="chapterCountOptions"
-            @update:model-value="config.chapterCount = Number($event)"
-          />
-          <div class="flex items-center gap-2">
-            <BaseSegmented
-              :model-value="config.writingFormat"
-              :options="[
-                { label: tr('Plain text'), value: 'plaintext' },
-                { label: 'Markdown', value: 'markdown' },
-              ]"
-              @update:model-value="config.writingFormat = $event as 'plaintext' | 'markdown'"
-            />
-            <BaseSegmented
-              :model-value="config.language"
-              :options="[
-                { label: 'EN', value: 'English' },
-                { label: '中文', value: '中文' },
-              ]"
-              @update:model-value="config.language = $event"
-            />
-          </div>
-        </div>
-        <div class="sm:col-span-2 flex justify-end">
-          <BaseButton variant="primary" size="sm" @click="saveConfig">{{ tr('Save') }}</BaseButton>
-        </div>
-      </div>
+      <textarea
+        ref="outlineEl"
+        v-model="outline"
+        class="w-full resize-none rounded-ios-lg bg-surface-1 px-6 py-5 text-base leading-[1.75] text-text-primary shadow-ios-pill outline-none transition-shadow placeholder:text-text-muted focus:ring-2 focus:ring-inset focus:ring-accent/30"
+        :style="{ height: outlineHeight }"
+        :placeholder="tr('Write the story blueprint. The copilot expands it on request.')"
+      />
 
-      <section class="mt-5">
-        <div class="mb-2 flex items-center justify-between">
-          <h2 class="text-2xs font-bold uppercase tracking-wider text-text-secondary">{{ tr('Story outline') }}</h2>
-          <span v-if="outlineDirty" class="text-2xs text-accent">●</span>
-        </div>
-        <textarea
-          v-model="outline"
-          class="min-h-[420px] w-full resize-y rounded-2xl border border-surface-4 bg-surface-1 p-5 text-sm leading-7 text-text-primary outline-none transition-colors focus:border-accent/60"
-          :placeholder="tr('Write the master outline. The copilot expands it on request.')"
-        />
-      </section>
+      <footer v-if="relationships.length" class="mt-3 flex flex-wrap items-center gap-1.5">
+        <span class="text-meta font-medium text-text-muted">{{ tr('Relationships') }}</span>
+        <span v-for="row in relationships.slice(0, 5)" :key="row.id" class="capsule h-8 bg-surface-2 px-2.5 text-meta">
+          <span class="font-medium text-text-primary">{{ row.from }}</span>
+          <span class="text-text-muted">{{ row.relation }}</span>
+          <span class="font-medium text-text-primary">{{ row.to }}</span>
+        </span>
+      </footer>
     </div>
   </div>
 </template>

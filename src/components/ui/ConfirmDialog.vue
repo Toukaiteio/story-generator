@@ -37,9 +37,9 @@ function handleCancel() {
 }
 
 const iconColor = computed(() => {
-  if (props.variant === 'danger') return 'text-danger'
-  if (props.variant === 'warning') return 'text-warning'
-  return 'text-accent'
+  if (props.variant === 'danger') return 'text-danger bg-danger-subtle'
+  if (props.variant === 'warning') return 'text-warning bg-warning-subtle'
+  return 'text-accent bg-accent-subtle'
 })
 
 const translatedTitle = computed(() => translatePhrase(props.title))
@@ -56,13 +56,15 @@ const translatedCancelText = computed(() => translatePhrase(props.cancelText))
     width="400px"
   >
     <div class="flex gap-3">
-      <AlertTriangle v-if="variant !== 'default'" :size="20" :class="iconColor" class="shrink-0 mt-0.5" />
-      <p class="text-sm text-text-secondary leading-relaxed">{{ translatedMessage }}</p>
+      <div v-if="variant !== 'default'" class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full" :class="iconColor">
+        <AlertTriangle :size="20" />
+      </div>
+      <p class="text-caption leading-relaxed text-text-secondary">{{ translatedMessage }}</p>
     </div>
 
     <template #footer>
       <div class="flex items-center justify-end gap-2">
-        <BaseButton variant="ghost" size="sm" @click="handleCancel">
+        <BaseButton variant="secondary" size="sm" @click="handleCancel">
           {{ translatedCancelText }}
         </BaseButton>
         <BaseButton

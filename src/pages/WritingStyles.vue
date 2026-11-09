@@ -848,7 +848,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
                       {{ tag }}
                     </BaseTag>
                   </div>
-                  <p class="text-2xs text-text-muted mt-2">
+                  <p class="text-meta text-text-muted mt-2">
                     {{ style.content.length }} {{ ui.text('characters') }} · {{ ui.text('Updated') }} {{ new Date(style.updatedAt).toLocaleDateString() }}
                   </p>
                 </div>
@@ -930,15 +930,15 @@ function sourceVariant(source: string): 'accent' | 'default' {
 
                 <div class="grid grid-cols-3 gap-2 text-xs">
                   <div class="app-subpanel min-w-0 px-2 py-2">
-                    <div class="text-2xs text-text-muted">{{ ui.text('Style Name') }}</div>
+                    <div class="text-meta text-text-muted">{{ ui.text('Style Name') }}</div>
                     <div class="text-text-primary truncate">{{ form.name || '—' }}</div>
                   </div>
                   <div class="app-subpanel min-w-0 px-2 py-2">
-                    <div class="text-2xs text-text-muted">{{ ui.text('Tags') }}</div>
+                    <div class="text-meta text-text-muted">{{ ui.text('Tags') }}</div>
                     <div class="text-text-primary truncate">{{ form.tags || '—' }}</div>
                   </div>
                   <div class="app-subpanel min-w-0 px-2 py-2">
-                    <div class="text-2xs text-text-muted">{{ ui.text('Content') }}</div>
+                    <div class="text-meta text-text-muted">{{ ui.text('Content') }}</div>
                     <div class="text-text-primary">{{ form.content.length }} chars</div>
                   </div>
                 </div>
@@ -952,9 +952,9 @@ function sourceVariant(source: string): 'accent' | 'default' {
                 </div>
 
                 <div v-if="generationEvents.length" class="space-y-1">
-                  <p class="text-2xs font-medium uppercase tracking-wide text-text-muted">{{ ui.text('Recent updates') }}</p>
+                  <p class="text-meta font-medium uppercase tracking-wide text-text-muted">{{ ui.text('Recent updates') }}</p>
                   <div class="max-h-28 overflow-y-auto space-y-1">
-                    <p v-for="event in generationEvents" :key="event" class="text-2xs text-text-secondary">{{ event }}</p>
+                    <p v-for="event in generationEvents" :key="event" class="text-meta text-text-secondary">{{ event }}</p>
                   </div>
                 </div>
               </div>
@@ -981,12 +981,12 @@ function sourceVariant(source: string): 'accent' | 'default' {
               <div v-if="form.skill" class="rounded-xl border border-surface-4 bg-surface-1 p-3">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-semibold text-text-primary">{{ ui.text('Voice skill') }}</span>
-                  <span class="text-2xs text-text-muted">{{ form.skill.rules.length }} {{ ui.text('rules') }}</span>
+                  <span class="text-meta text-text-muted">{{ form.skill.rules.length }} {{ ui.text('rules') }}</span>
                 </div>
                 <p v-if="form.skill.whenToUse" class="mt-1.5 text-xs text-text-secondary">{{ form.skill.whenToUse }}</p>
-                <p v-if="form.skill.signature" class="mt-1 text-2xs text-text-muted">{{ form.skill.signature }}</p>
+                <p v-if="form.skill.signature" class="mt-1 text-meta text-text-muted">{{ form.skill.signature }}</p>
                 <div v-if="form.skill.rules.length" class="mt-2 flex flex-wrap gap-1.5">
-                  <span v-for="rule in form.skill.rules.slice(0, 6)" :key="rule" class="rounded-full bg-surface-2 px-2 py-0.5 text-2xs text-text-secondary">
+                  <span v-for="rule in form.skill.rules.slice(0, 6)" :key="rule" class="rounded-full bg-surface-2 px-2 py-0.5 text-meta text-text-secondary">
                     {{ rule }}
                   </span>
                 </div>
@@ -995,7 +995,7 @@ function sourceVariant(source: string): 'accent' | 'default' {
               <div class="flex-1 flex flex-col gap-2">
                 <div class="flex items-center justify-between">
                   <label class="text-xs font-medium text-text-secondary">{{ ui.text('Style Guide Content') }}</label>
-                  <span class="text-2xs text-text-muted">{{ form.content.length }} {{ ui.text('chars') }}</span>
+                  <span class="text-meta text-text-muted">{{ form.content.length }} {{ ui.text('chars') }}</span>
                 </div>
                 <textarea
                   v-model="form.content"

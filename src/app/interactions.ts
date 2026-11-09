@@ -4,11 +4,12 @@ import { providerManager } from '@/services/provider'
 import { runAgentLoop, runStructuredLoop } from '@/services/agent/loop'
 import { extractElementProposals } from '@/services/elements/extract'
 import {
-  appendElementState,
+  applyElementProposals as mergeElementProposals,
   buildElementContextForChapter,
   createElement,
   elementStateAt,
   latestElementState,
+  normalizeElementAliases,
 } from '@/services/elements'
 import { buildCharacterContextForTask, buildPreviousSummary } from '@/services/pipeline/context'
 import { buildProjectStylePrompt } from '@/services/writingStyle/skill'
@@ -47,6 +48,7 @@ export interface SelectionContext {
 export interface ElementDraft {
   kind: ElementKind
   name: string
+  aliases?: string[]
   characterId?: string
 }
 
@@ -249,7 +251,8 @@ export function useStudioActions() {
     return { text, audit: auditHumanText(text) }
   }
 
-  async function recap(projectId?: string, chapterId?: string): Promise<string> {    const project = requireProject(projectId)
+  async function recap(projectId?: string, chapterId?: string): Promise<string> {
+    const project = requireProject(projectId)
     const chapterIndex = chapterId
       ? project.chapters.findIndex(item => item.id === chapterId)
       : project.chapters.length - 1
@@ -362,43 +365,13 @@ export function useStudioActions() {
 
   async function applyElementProposals(proposals: ElementStateProposal[]): Promise<void> {
     const project = requireProject()
-    const elements = [...(project.elements ?? [])]
-
-    for (const proposal of proposals) {
-      const targetIndex = proposal.elementId
-        ? elements.findIndex(item => item.id === proposal.elementId)
-        : elements.findIndex(item => item.name === proposal.name && item.kind === proposal.kind)
-      if (targetIndex >= 0) {
-        elements[targetIndex] = appendElementState(elements[targetIndex], {
-          chapterIndex: proposal.state.chapterIndex,
-          summary: proposal.state.summary,
-          time: proposal.state.time,
-          location: proposal.state.location,
-          status: proposal.state.status,
-        })
-      } else {
-        elements.push(createElement({
-          kind: proposal.kind,
-          name: proposal.name,
-          states: [{
-            id: generateId(),
-            chapterIndex: proposal.state.chapterIndex,
-            time: proposal.state.time,
-            location: proposal.state.location,
-            status: proposal.state.status,
-            summary: proposal.state.summary,
-            createdAt: new Date().toISOString(),
-          }],
-        }))
-      }
-    }
-
+    const elements = mergeElementProposals(project.elements ?? [], proposals)
     await projectStore.updateProject(project.id, { elements })
   }
 
   async function addElement(draft: ElementDraft): Promise<void> {
     const project = requireProject()
-    const element = createElement({ kind: draft.kind, name: draft.name, characterId: draft.characterId })
+    const element = createElement({ kind: draft.kind, name: draft.name, aliases: draft.aliases, characterId: draft.characterId })
     await projectStore.updateProject(project.id, {
       elements: [...(project.elements ?? []), element],
     })
@@ -408,6 +381,37 @@ export function useStudioActions() {
     const project = requireProject()
     await projectStore.updateProject(project.id, {
       elements: (project.elements ?? []).filter(item => item.id !== elementId),
+    })
+  }
+
+  async function setElementAliases(elementId: string, aliases: string[]): Promise<void> {
+    const project = requireProject()
+    const elements = (project.elements ?? []).map(element =>
+      element.id === elementId
+        ? { ...element, aliases: normalizeElementAliases(aliases, element.name), updatedAt: new Date().toISOString() }
+        : element
+    )
+    await projectStore.updateProject(project.id, { elements })
+  }
+
+  async function linkElementCharacter(elementId: string, characterId: string | null): Promise<void> {
+    const project = requireProject()
+    const elements = (project.elements ?? []).map(element =>
+      element.id === elementId
+        ? { ...element, characterId: characterId?.trim() || undefined, updatedAt: new Date().toISOString() }
+        : element
+    )
+    await projectStore.updateProject(project.id, { elements })
+  }
+
+  async function updateElementStates(elementId: string, states: ElementState[]): Promise<void> {
+    const project = requireProject()
+    await projectStore.updateProject(project.id, {
+      elements: (project.elements ?? []).map(element =>
+        element.id === elementId
+          ? { ...element, states: [...states].sort((a, b) => a.chapterIndex - b.chapterIndex), updatedAt: new Date().toISOString() }
+          : element
+      ),
     })
   }
 
@@ -479,12 +483,62 @@ export function useStudioActions() {
     }
   }
 
-  async function polishChapter(chapterId: string): Promise<void> {
+  /**
+   * Returns polished text without persisting it. Every polish entry point opens
+   * a diff review; only an explicit accept writes the chapter.
+   */
+  async function polishChapter(chapterId: string): Promise<string> {
     const project = requireProject()
     const chapter = project.chapters.find(item => item.id === chapterId)
     if (!chapter) throw new Error('Chapter not found.')
     const engine = useStoryEngine()
-    await engine.polishChapter(project.id, chapterId, chapter.proofreadingIssues)
+    return engine.polishChapterPreview(project.id, chapterId, chapter.proofreadingIssues)
+  }
+
+  /** Inline Ctrl+I rewrite: one instruction, the given passage, nothing saved. */
+  async function inlineRewrite(
+    instruction: string,
+    original: string,
+    context: SelectionContext,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<string> {
+    return improveSelection('custom', original, context, { instruction, ...options })
+  }
+
+  /** Runs the saved proofreading issues through the polisher and returns the text. */
+  async function polishSelection(
+    original: string,
+    context: SelectionContext,
+    options: { instruction?: string; signal?: AbortSignal } = {},
+  ): Promise<string> {
+    return improveSelection('custom', original, context, options)
+  }
+
+  async function expandStoryOutline(
+    options: { seed?: string; signal?: AbortSignal } = {},
+  ): Promise<string> {
+    const project = requireProject()
+    const { modelRef, contextTokens } = resolveModel('outline')
+    const payload = await runStructuredLoop({
+      modelRef,
+      contextTokens,
+      system: `You are a story architect. Expand the project premise into a compact story blueprint at the story level, never chapter-by-chapter. Respond with JSON only: {"outline":"..."}. Cover premise, central conflict and stakes, the major turning points of the full arc, character functions, and thematic direction. 120-260 words. Write in the project language.`,
+      contextBlocks: [
+        `Project: ${project.name}. Genre: ${project.genre}. Reader: ${project.targetReader}. Language: ${project.language}.`,
+        project.theme ? `Theme: ${project.theme}` : '',
+        buildCharacterContextForTask(project.characters, 'outlining'),
+        options.seed?.trim() ? `Existing outline draft:\n${options.seed.trim()}` : '',
+      ].filter(Boolean),
+      prompt: options.seed?.trim()
+        ? 'Expand and tighten this outline into the story blueprint.'
+        : 'Write the story blueprint from the project premise.',
+      temperature: 0.7,
+      maxTokens: 2048,
+      signal: options.signal,
+    })
+    const outline = String(payload.outline ?? '').trim()
+    if (!outline) throw new Error('The outline agent returned no outline.')
+    return outline
   }
 
   async function draftStorySeed(
@@ -536,12 +590,18 @@ export function useStudioActions() {
     applyChapterPlan,
     proofreadChapter,
     polishChapter,
+    inlineRewrite,
+    polishSelection,
     proposeElementStates,
     applyElementProposals,
     addElement,
+    setElementAliases,
     removeElement,
     setElementStatus,
+    updateElementStates,
+    linkElementCharacter,
     draftStorySeed,
+    expandStoryOutline,
   }
 }
 

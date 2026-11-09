@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import WorkStation from '@/layouts/WorkStation.vue'
+import { useUiStore } from '@/stores/ui'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -18,29 +19,26 @@ const router = createRouter({
           name: 'Workspace',
           component: () => import('@/pages/Studio.vue'),
         },
-        {
-          path: 'knowledge',
-          name: 'Knowledge',
-          component: () => import('@/pages/KnowledgeBase.vue'),
-        },
-        {
-          path: 'styles',
-          name: 'WritingStyles',
-          component: () => import('@/pages/WritingStyles.vue'),
-        },
-        {
-          path: 'providers',
-          name: 'Providers',
-          component: () => import('@/pages/Providers.vue'),
-        },
-        {
-          path: 'settings',
-          name: 'Settings',
-          component: () => import('@/pages/Settings.vue'),
-        },
+        { path: 'knowledge', redirect: { name: 'Projects', query: { drawer: 'knowledge' } } },
+        { path: 'styles', redirect: { name: 'Projects', query: { drawer: 'styles' } } },
+        { path: 'providers', redirect: { name: 'Projects', query: { drawer: 'models' } } },
+        { path: 'settings', redirect: { name: 'Projects', query: { drawer: 'settings' } } },
       ],
     },
   ],
+})
+
+router.beforeEach(to => {
+  const drawer = typeof to.query.drawer === 'string' ? to.query.drawer : ''
+  if (!drawer) return true
+
+  const ui = useUiStore()
+  if (drawer === 'knowledge' || drawer === 'styles' || drawer === 'models' || drawer === 'settings') {
+    ui.openDrawer(drawer)
+  }
+
+  const { drawer: _drawer, ...query } = to.query
+  return { name: to.name as string, params: to.params, query, replace: true }
 })
 
 export default router

@@ -108,6 +108,8 @@ export interface StoryEngine {
     options?: ProofreadSegmentOptions,
   ): Promise<ChapterAuditIssue[]>
   polishChapter(projectId: string, chapterId?: string, issues?: ChapterAuditIssue[]): Promise<unknown>
+  /** Polishing result only; the caller shows a diff before writing the chapter. */
+  polishChapterPreview(projectId: string, chapterId: string, issues?: ChapterAuditIssue[]): Promise<string>
   saveProofreadingIssues(projectId: string, chapterId: string, issues: ChapterAuditIssue[], contentFallback?: string): Promise<void>
 
   cancel(): void
@@ -193,6 +195,9 @@ export function useStoryEngine(): StoryEngine {
     },
     polishChapter(projectId, chapterId, issues) {
       return generation.polishChapter(projectId, chapterId, issues)
+    },
+    polishChapterPreview(projectId, chapterId, issues) {
+      return generation.polishChapterPreview(projectId, chapterId, issues)
     },
     saveProofreadingIssues(projectId, chapterId, issues, contentFallback) {
       return generation.saveChapterProofreadingIssues(projectId, chapterId, issues, contentFallback)

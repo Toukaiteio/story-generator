@@ -11,7 +11,8 @@
     "electron:dev": "vite",
     "electron:build": "vite build && electron-builder",
     "release:build": "vite build && electron-builder --publish never",
-    "release": "vite build && electron-builder --publish always"
+    "release": "vite build && electron-builder --publish always",
+    "icon": "node scripts/render-icon.cjs && node scripts/build-ico.cjs"
   },
   "build": {
     "appId": "com.storygenerator.app",
@@ -24,6 +25,12 @@
       "dist/**/*",
       "dist-electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "build/icon.png"
+      }
     ],
     "asar": true,
     "publish": [
@@ -43,7 +50,8 @@
           ]
         }
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -51,6 +59,23 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "icon": "build/icon.png",
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Office",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     }
   },
   "dependencies": {

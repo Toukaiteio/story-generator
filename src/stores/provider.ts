@@ -417,9 +417,13 @@ async function fetchProxyModelList(provider: ProviderConfig) {
     }),
   })
 
-  const payload = await response.json().catch(async () => ({
-    error: await response.text(),
-  }))
+  const bodyText = await response.text()
+  let payload: any = null
+  try {
+    payload = bodyText ? JSON.parse(bodyText) : null
+  } catch {
+    payload = { error: bodyText }
+  }
 
   if (!response.ok) {
     throw new Error(payload?.error || `${provider.name} API error: ${response.status}`)

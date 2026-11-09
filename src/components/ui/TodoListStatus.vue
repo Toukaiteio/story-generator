@@ -35,37 +35,37 @@ function itemClasses(status: AgentTodoItem['status']) {
 </script>
 
 <template>
-  <div v-if="items.length" class="app-subpanel overflow-hidden">
-    <div class="flex items-center justify-between gap-3 border-b border-surface-4 px-3 py-2">
+  <div v-if="items.length" class="overflow-hidden rounded-ios bg-surface-1 shadow-ios-pill">
+    <div class="flex items-center justify-between gap-3 px-4 py-3">
       <div class="flex min-w-0 items-center gap-2">
-        <ListChecks :size="14" class="shrink-0 text-accent" />
+        <ListChecks :size="16" class="shrink-0 text-accent" />
         <div class="min-w-0">
-          <p class="truncate text-xs font-semibold text-text-primary">{{ tr(title) }}</p>
-          <p v-if="agent && !compact" class="truncate text-[10px] text-text-muted">{{ agent }}</p>
+          <p class="truncate text-caption font-semibold text-text-primary">{{ tr(title) }}</p>
+          <p v-if="agent && !compact" class="truncate text-meta text-text-muted">{{ agent }}</p>
         </div>
       </div>
-          <span class="shrink-0 rounded border border-surface-4 bg-surface-2 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
+      <span class="shrink-0 rounded-full bg-surface-2 px-2.5 py-0.5 text-meta font-medium text-text-secondary">
         {{ completed }}/{{ items.length }}
       </span>
     </div>
 
-    <div class="space-y-1 px-3 py-2">
+    <div class="space-y-1 px-3 pb-3">
       <div
         v-for="item in items"
         :key="item.id"
-        class="flex items-start gap-2 rounded-md px-1 py-1"
+        class="flex items-start gap-2.5 rounded-full px-2 py-1.5"
       >
         <component
           :is="statusIcon(item.status)"
-          :size="13"
+          :size="15"
           class="mt-0.5 shrink-0"
           :class="[itemClasses(item.status), item.status === 'in_progress' ? 'animate-spin' : '']"
         />
         <div class="min-w-0 flex-1">
-          <p class="text-[11px] leading-snug text-text-primary" :class="item.status === 'done' ? 'line-through opacity-70' : ''">
+          <p class="text-caption leading-snug text-text-primary" :class="item.status === 'done' ? 'line-through opacity-70' : ''">
             {{ item.title }}
           </p>
-          <p v-if="item.notes && !compact" class="mt-0.5 line-clamp-2 text-[10px] leading-relaxed text-text-muted">
+          <p v-if="item.notes && !compact" class="mt-0.5 line-clamp-2 text-meta leading-relaxed text-text-muted">
             {{ item.notes }}
           </p>
         </div>

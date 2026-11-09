@@ -79,5 +79,7 @@ export default {
     'Submit every open issue in the current chapter. Fixed and ignored issues are skipped.': 'Submit every open issue in the current chapter. Fixed and ignored issues are skipped.',
     'Submitting all available issues...': 'Submitting all available issues...',
     'No available issues to polish': 'No available issues to polish',
+    'Removed line': 'Del',
+    'Added line': 'Add',
   },
 }

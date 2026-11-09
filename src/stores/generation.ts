@@ -256,6 +256,38 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  /**
+   * Runs polishing on a snapshot and returns the text without persisting it.
+   * The diff confirmation panel decides what, if anything, reaches the chapter.
+   */
+  async function polishChapterPreview(projectId: string, chapterId: string, proofreadingIssues?: ChapterAuditIssue[]): Promise<string> {
+    resetRunState()
+    const project = validateProject(projectId)
+    const targetChapterIndex = resolveChapterIndexById(project, chapterId)
+    if (targetChapterIndex < 0) {
+      finishRun()
+      throw new Error('Chapter not found')
+    }
+    try {
+      const targetChapter = project.chapters[targetChapterIndex]
+      currentStage.value = 'polishing'
+      currentChapterIndex.value = targetChapterIndex
+      progressMessage.value = `Polishing chapter ${targetChapter.index + 1}...`
+      const generated = await (pipeline ?? new StoryPipeline()).polishChapter(
+        project,
+        targetChapterIndex,
+        appendStreamToken,
+        proofreadingIssues ?? targetChapter.proofreadingIssues,
+      )
+      return generated.content
+    } catch (error: any) {
+      addError('polishing', error?.message || 'Polishing failed')
+      throw error
+    } finally {
+      finishRun()
+    }
+  }
+
   function cancelGeneration() {
     cancelled.value = true
     activeAbortController?.abort()
@@ -423,6 +455,7 @@ export const useGenerationStore = defineStore('generation', () => {
     getNextAction,
     proofreadChapter,
     polishChapter,
+    polishChapterPreview,
     cancelGeneration,
     clearErrors,
     beginManualTask,

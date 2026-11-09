@@ -22,17 +22,17 @@ const colors: Record<string, string> = {
 
 <template>
   <Teleport to="body">
-    <div class="fixed top-4 right-4 z-[400] flex max-w-[calc(100vw-1rem)] flex-col gap-2 pointer-events-none sm:max-w-[min(90vw,460px)]">
+    <div class="pointer-events-none fixed bottom-5 right-5 z-[400] flex max-w-[calc(100vw-2rem)] flex-col gap-2 sm:max-w-[min(90vw,420px)]">
       <TransitionGroup name="slide-up">
         <div
           v-for="toast in ui.toasts"
           :key="toast.id"
-          class="pointer-events-auto flex max-w-full min-w-0 items-start gap-3 rounded-md border border-surface-4 bg-surface-2 px-4 py-3"
+          class="pointer-events-auto flex min-w-0 max-w-full items-start gap-3 rounded-ios bg-surface-1 px-4 py-3 shadow-ios-lg"
         >
           <component :is="icons[toast.type]" :size="18" :class="`${colors[toast.type]} mt-0.5 shrink-0`" />
-          <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-text-primary">{{ toast.message }}</span>
+          <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-caption leading-relaxed text-text-primary">{{ toast.message }}</span>
           <button
-            class="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text-primary hover:bg-surface-3 transition-colors duration-100 shrink-0"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-muted transition-colors duration-100 hover:bg-surface-2 hover:text-text-primary"
             @click="ui.removeToast(toast.id)"
           >
             <X :size="14" />

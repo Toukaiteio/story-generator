@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Story Generator">
+  <!-- Pen nib + open book, flat, transparent background, matches the generated PNG icon -->
+  <g fill="#2579BE">
+    <!-- nib -->
+    <path d="M196 48 L316 48 C322 140 356 196 372 238 L268 392 L256 392 L244 392 L140 238 C156 196 190 140 196 48 Z"/>
+    <!-- book -->
+    <path d="M64 316 C140 296 200 296 256 326 C312 296 372 296 448 316 L448 452 C372 432 312 432 256 462 C200 432 140 432 64 452 Z"/>
+  </g>
+  <!-- nib hole + slit -->
+  <circle cx="256" cy="196" r="20" fill="#FFFFFF"/>
+  <rect x="252" y="214" width="8" height="178" fill="#FFFFFF"/>
+  <!-- book centre slit -->
+  <path d="M252 326 L260 326 L258 452 L254 452 Z" fill="#FFFFFF"/>
+</svg>

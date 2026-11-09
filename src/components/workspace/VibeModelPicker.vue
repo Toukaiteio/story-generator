@@ -42,14 +42,14 @@ const selectedModelLabel = computed(() =>
 
 const rootClass = computed(() =>
   props.variant === 'sidebar'
-    ? 'relative shrink-0 border-b border-surface-4 px-3 py-2'
+    ? 'relative shrink-0 px-2 py-1.5'
     : 'relative w-full'
 )
 
 const dropdownClass = computed(() =>
   props.variant === 'sidebar'
-    ? 'app-subpanel absolute left-3 right-3 top-[calc(100%-4px)] z-50 overflow-hidden'
-    : 'app-subpanel absolute left-0 right-0 top-[calc(100%+4px)] z-50 overflow-hidden'
+    ? 'app-subpanel absolute left-2 right-2 top-[calc(100%-2px)] z-50 overflow-hidden'
+    : 'app-subpanel absolute left-0 right-0 top-[calc(100%+6px)] z-50 overflow-hidden'
 )
 
 const groupedModels = computed(() => {
@@ -85,7 +85,7 @@ function selectModel(providerId: string, modelId: string) {
 <template>
   <div :class="rootClass">
     <button
-      class="app-list-item flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex min-h-9 w-full items-center justify-between gap-2 rounded-full bg-surface-2 px-3.5 text-caption text-text-secondary transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
       :disabled="disabled"
       @click="showModelPicker = !showModelPicker"
     >
@@ -100,20 +100,20 @@ function selectModel(providerId: string, modelId: string) {
       v-if="showModelPicker"
       :class="dropdownClass"
     >
-      <div class="border-b border-surface-4 p-2">
-        <div class="app-subpanel app-subpanel--muted flex items-center gap-2 px-2 py-1.5">
+      <div class="p-2">
+        <div class="flex min-h-9 items-center gap-2 rounded-full bg-surface-2 px-3">
           <Search :size="12" class="text-text-muted" />
           <input
             v-model="modelSearch"
-            class="min-w-0 flex-1 bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
+            class="min-w-0 flex-1 bg-transparent text-caption text-text-primary outline-none placeholder:text-text-muted"
             :placeholder="tr('Search models...')"
           />
         </div>
       </div>
-      <div class="max-h-72 overflow-y-auto p-1 custom-scrollbar">
+      <div class="custom-scrollbar max-h-72 overflow-y-auto p-1.5">
         <div v-for="group in groupedModels" :key="group.provider.id" class="mb-1">
           <button
-            class="flex w-full items-center justify-between rounded px-2 py-1.5 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text-primary"
+            class="flex min-h-9 w-full items-center justify-between rounded-full px-3 text-caption font-semibold text-text-secondary hover:bg-surface-2 hover:text-text-primary"
             @click="toggleProvider(group.provider.id)"
           >
             <span class="truncate">{{ group.provider.name || group.provider.id }}</span>
@@ -123,16 +123,16 @@ function selectModel(providerId: string, modelId: string) {
             <button
               v-for="model in group.models"
               :key="model.id"
-              class="flex w-full items-center justify-between gap-2 rounded px-3 py-1.5 text-left text-xs hover:bg-surface-2"
+              class="flex min-h-9 w-full items-center justify-between gap-2 rounded-full px-3 text-left text-caption hover:bg-surface-2"
               :class="selectedModelRef?.providerId === group.provider.id && selectedModelRef?.modelId === model.id ? 'text-accent bg-accent-subtle/50' : 'text-text-secondary'"
               @click="selectModel(group.provider.id, model.id)"
             >
               <span class="min-w-0 truncate">{{ model.name || model.id }}</span>
-              <span class="shrink-0 text-[10px] text-text-muted">{{ model.tier }}</span>
+              <span class="shrink-0 text-meta text-text-muted">{{ model.tier }}</span>
             </button>
           </div>
         </div>
-        <p v-if="!groupedModels.length" class="px-3 py-4 text-center text-xs text-text-muted">
+        <p v-if="!groupedModels.length" class="px-3 py-4 text-center text-caption text-text-muted">
           {{ tr('No matching models') }}
         </p>
       </div>

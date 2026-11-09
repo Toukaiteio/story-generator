@@ -255,6 +255,7 @@ function migrateProjectStyle(project: any): StoryProject {
   if (Array.isArray(project.characters)) {
     project.characters = normalizeCharacters(project.characters)
   }
+  project.elements = normalizeElements(project.elements)
   return project as StoryProject
 }
 
@@ -622,6 +623,7 @@ export const useProjectStore = defineStore('project', () => {
       ...updates,
       ...(Array.isArray(updates.chapters) ? { chapters: normalizeChapters(updates.chapters) } : {}),
       ...(Array.isArray(updates.characters) ? { characters: normalizeCharacters(updates.characters) } : {}),
+      ...(Array.isArray(updates.elements) ? { elements: normalizeElements(updates.elements) } : {}),
     }
     projects.value[index] = {
       ...projects.value[index],

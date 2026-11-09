@@ -7,8 +7,10 @@ const props = withDefaults(defineProps<{
   modelValue: boolean
   title?: string
   width?: string
+  flush?: boolean
 }>(), {
-  width: '400px',
+  width: '480px',
+  flush: false,
 })
 
 const emit = defineEmits<{
@@ -41,25 +43,26 @@ onBeforeUnmount(() => {
     <Transition name="backdrop">
       <div
         v-if="modelValue"
-        class="fixed inset-0 z-[100] bg-black/60"
+        class="fixed inset-0 z-[100] bg-black/25 backdrop-blur-sm"
         @mousedown.self="close"
       >
         <Transition name="slide-right" appear>
           <div
             v-if="modelValue"
-            class="app-drawer absolute right-0 top-0 flex h-full max-w-full flex-col"
-            :style="{ width: `min(${width}, 100vw)` }"
+            class="app-drawer absolute bottom-0 right-0 top-0 flex max-w-full flex-col overflow-hidden rounded-l-ios-lg"
+            :style="{ width: `min(480px, min(${width}, 100vw))` }"
           >
-            <div class="app-drawer-header flex shrink-0 items-center justify-between">
-              <h2 class="text-base font-semibold text-text-primary">{{ title ? translatePhrase(title) : '' }}</h2>
+            <div class="app-drawer-header flex shrink-0 items-center justify-between gap-3">
+              <h2 class="truncate text-title font-semibold text-text-primary">{{ title ? translatePhrase(title) : '' }}</h2>
               <button
                 class="app-icon-button"
+                :aria-label="translatePhrase('Close')"
                 @click="close"
               >
-                <X :size="16" />
+                <X :size="18" />
               </button>
             </div>
-            <div class="app-drawer-body flex-1 overflow-y-auto">
+            <div class="min-h-0 flex-1 overflow-y-auto" :class="flush ? '' : 'app-drawer-body'">
               <slot />
             </div>
             <div v-if="$slots.footer" class="app-drawer-footer shrink-0">

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { PenLine, ShieldCheck, Sparkles } from 'lucide-vue-next'
-import BaseButton from '@/components/ui/BaseButton.vue'
+import { PenLine, RefreshCw, ShieldCheck, Sparkles, Wand2 } from 'lucide-vue-next'
 import BaseTag from '@/components/ui/BaseTag.vue'
 import { translatePhrase } from '@/i18n'
 import { countWords } from '@/app'
@@ -10,21 +9,22 @@ import type { Chapter } from '@/types/chapter'
 const props = defineProps<{
   chapter: Chapter
   busy?: boolean
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
   open: []
-  write: []
+  plan: []
   proofread: []
   polish: []
-  plan: []
+  syncElements: []
 }>()
 
 const tr = translatePhrase
 
 const statusLabel = computed(() => {
   const labels: Record<Chapter['status'], string> = {
-    outline: 'Plan',
+    outline: 'Idea',
     writing: 'Writing',
     draft: 'Draft',
     proofreading: 'Proofread',
@@ -35,38 +35,52 @@ const statusLabel = computed(() => {
   return labels[props.chapter.status]
 })
 
+const statusVariant = computed(() => {
+  if (props.chapter.status === 'polished') return 'success'
+  if (['proofreading', 'proofread', 'polishing'].includes(props.chapter.status)) return 'warning'
+  if (['writing', 'draft'].includes(props.chapter.status)) return 'accent'
+  return 'default'
+})
+
 const words = computed(() => countWords(props.chapter.content || props.chapter.polishedContent))
 const hasDraft = computed(() => words.value > 0)
 </script>
 
 <template>
-  <button
-    type="button"
-    class="w-full rounded-2xl border border-surface-4 bg-surface-1 p-3 text-left transition-colors hover:border-surface-5"
-    @click="emit('open')"
+  <article
+    class="group rounded-ios border border-transparent bg-surface-1 p-3.5 shadow-ios-pill transition-colors hover:border-accent/40"
+    :class="active ? 'ring-2 ring-inset ring-accent/40' : ''"
   >
-    <div class="flex items-center justify-between gap-2">
-      <span class="text-2xs font-bold text-text-muted">{{ chapter.index + 1 }}</span>
-      <BaseTag :variant="chapter.status === 'polished' ? 'success' : hasDraft ? 'accent' : 'default'" size="sm">
-        {{ tr(statusLabel) }}
-      </BaseTag>
-    </div>
-    <p class="mt-1.5 truncate text-sm font-semibold text-text-primary">{{ chapter.title }}</p>
-    <p class="mt-0.5 truncate text-xs text-text-secondary">{{ chapter.outline.objective || tr('No plan yet') }}</p>
-
-    <div class="mt-2.5 flex items-center justify-between gap-1" @click.stop>
-      <span class="text-2xs text-text-muted">{{ words }} {{ tr('words') }}</span>
-      <div class="flex items-center gap-1">
-        <BaseButton v-if="!hasDraft" variant="ghost" size="sm" :disabled="busy" @click="emit('plan')">
-          <Sparkles :size="13" />
-        </BaseButton>
-        <BaseButton v-else variant="ghost" size="sm" :disabled="busy" @click="emit('proofread')">
-          <ShieldCheck :size="13" />
-        </BaseButton>
-        <BaseButton variant="ghost" size="sm" :disabled="busy" @click="emit('write')">
-          <PenLine :size="13" />
-        </BaseButton>
+    <button type="button" class="block w-full text-left" @click="emit('open')">
+      <div class="flex items-center justify-between gap-2">
+        <span class="flex h-6 w-6 items-center justify-center rounded-full bg-surface-2 text-meta font-semibold text-text-secondary">
+          {{ chapter.index + 1 }}
+        </span>
+        <BaseTag :variant="statusVariant" size="sm">{{ tr(statusLabel) }}</BaseTag>
       </div>
+      <h4 class="mt-2 truncate text-body font-semibold text-text-primary">{{ chapter.title }}</h4>
+      <p class="mt-0.5 line-clamp-2 text-caption leading-relaxed text-text-secondary">
+        {{ chapter.outline.objective || tr('No plan yet') }}
+      </p>
+    </button>
+
+    <div class="mt-2.5 flex items-center gap-1" @click.stop>
+      <button class="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-accent-subtle hover:text-accent" :title="tr('Plan this chapter')" :disabled="busy" @click="emit('plan')">
+        <Sparkles :size="15" />
+      </button>
+      <button class="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-accent-subtle hover:text-accent" :title="tr('Proofread')" :disabled="busy || !hasDraft" @click="emit('proofread')">
+        <ShieldCheck :size="15" />
+      </button>
+      <button class="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-accent-subtle hover:text-accent" :title="tr('Polish')" :disabled="busy || !hasDraft" @click="emit('polish')">
+        <Wand2 :size="15" />
+      </button>
+      <button class="flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-accent-subtle hover:text-accent" :title="tr('Sync elements')" :disabled="busy || !hasDraft" @click="emit('syncElements')">
+        <RefreshCw :size="15" />
+      </button>
+      <button class="ml-auto flex h-7 items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 px-2.5 text-meta font-medium text-text-primary transition-colors hover:bg-surface-3" :disabled="busy" @click="emit('open')">
+        <PenLine :size="14" />
+        {{ tr('Write') }}
+      </button>
     </div>
-  </button>
+  </article>
 </template>

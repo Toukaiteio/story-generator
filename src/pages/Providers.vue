@@ -854,7 +854,7 @@ function formatSyncedTime(value?: string | null) {
                   <span>{{ tr('Test') }}</span>
                 </BaseButton>
 
-                <div v-if="testEmbeddingResult" class="flex items-center gap-2 text-2xs">
+                <div v-if="testEmbeddingResult" class="flex items-center gap-2 text-meta">
                   <template v-if="testEmbeddingResult.ok">
                     <CheckCircle :size="14" class="text-success shrink-0" />
                     <span class="text-text-primary">
@@ -873,7 +873,7 @@ function formatSyncedTime(value?: string | null) {
                 </div>
               </div>
 
-              <p class="text-2xs text-text-muted mt-2">
+              <p class="text-meta text-text-muted mt-2">
                 {{ tr('Only models marked as embedding-capable are shown here.') }}
               </p>
             </div>
@@ -1042,14 +1042,14 @@ function formatSyncedTime(value?: string | null) {
                       />
                       <button
                         type="button"
-                        class="h-7 px-2 rounded bg-accent text-white text-2xs font-medium hover:bg-accent/80 transition-colors"
+                        class="h-7 px-2 rounded bg-accent text-white text-meta font-medium hover:bg-accent/80 transition-colors"
                         @click="saveContextEdit"
                       >
                         Save
                       </button>
                       <button
                         type="button"
-                        class="h-7 px-2 rounded border border-surface-4 text-2xs text-text-secondary hover:bg-surface-3 transition-colors"
+                        class="h-7 px-2 rounded border border-surface-4 text-meta text-text-secondary hover:bg-surface-3 transition-colors"
                         @click="editingContext = null"
                       >
                         Cancel
@@ -1057,8 +1057,8 @@ function formatSyncedTime(value?: string | null) {
                     </div>
                     <div v-else class="flex items-center justify-between gap-2">
                       <div class="flex items-center gap-1.5">
-                        <span class="text-2xs text-text-muted">{{ tr('Context') }}:</span>
-                        <span class="text-2xs font-medium text-text-primary">
+                        <span class="text-meta text-text-muted">{{ tr('Context') }}:</span>
+                        <span class="text-meta font-medium text-text-primary">
                           {{ formatContextTokens(model.contextTokens) }}
                         </span>
                         <BaseTag
@@ -1072,7 +1072,7 @@ function formatSyncedTime(value?: string | null) {
                       <div class="flex items-center gap-1">
                         <button
                           type="button"
-                          class="text-2xs text-accent hover:underline"
+                          class="text-meta text-accent hover:underline"
                           @click="startEditContext(provider.id, model.id, model.contextTokens)"
                         >
                           {{ tr('Edit') }}
@@ -1080,7 +1080,7 @@ function formatSyncedTime(value?: string | null) {
                         <button
                           type="button"
                           v-if="model.contextTokensSource === 'manual'"
-                          class="text-2xs text-text-muted hover:text-text-secondary hover:underline"
+                          class="text-meta text-text-muted hover:text-text-secondary hover:underline"
                           @click="revertContextToAuto(provider.id, model.id)"
                         >
                           {{ tr('Auto') }}
@@ -1091,8 +1091,8 @@ function formatSyncedTime(value?: string | null) {
 
                   <!-- Embedding Dimensions Row -->
                   <div v-if="model.supportsEmbeddings && model.embeddingDimensions" class="mt-1.5 flex items-center gap-1.5">
-                    <span class="text-2xs text-text-muted">{{ tr('Dimensions') }}:</span>
-                    <span class="text-2xs font-medium text-text-primary">{{ model.embeddingDimensions }}</span>
+                    <span class="text-meta text-text-muted">{{ tr('Dimensions') }}:</span>
+                    <span class="text-meta font-medium text-text-primary">{{ model.embeddingDimensions }}</span>
                   </div>
                 </div>
               </div>
@@ -1165,7 +1165,7 @@ function formatSyncedTime(value?: string | null) {
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
                     <p class="text-xs font-medium text-text-secondary">{{ tr('Model Drafts') }}</p>
-                    <p class="text-2xs text-text-muted mt-0.5">
+                    <p class="text-meta text-text-muted mt-0.5">
                       {{ tr('Auto-sync a first draft, then edit the actual models you want to save.') }}
                     </p>
                   </div>
@@ -1286,7 +1286,7 @@ function formatSyncedTime(value?: string | null) {
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
                           <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
-                          <p class="text-2xs text-text-muted mt-0.5">
+                          <p class="text-meta text-text-muted mt-0.5">
                             {{ tr('Optional reasoning profile for this model.') }}
                           </p>
                         </div>
@@ -1400,7 +1400,7 @@ function formatSyncedTime(value?: string | null) {
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
                     <p class="text-xs font-medium text-text-secondary">{{ tr('Model Drafts') }}</p>
-                    <p class="text-2xs text-text-muted mt-0.5">
+                    <p class="text-meta text-text-muted mt-0.5">
                       {{ tr("Edit the provider's actual models and sync new ones if needed.") }}
                     </p>
                   </div>
@@ -1521,7 +1521,7 @@ function formatSyncedTime(value?: string | null) {
                       <div class="flex items-center justify-between gap-2 mb-2">
                         <div>
                           <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
-                          <p class="text-2xs text-text-muted mt-0.5">
+                          <p class="text-meta text-text-muted mt-0.5">
                             {{ tr('Optional reasoning profile for this model.') }}
                           </p>
                         </div>
@@ -1694,7 +1694,7 @@ function formatSyncedTime(value?: string | null) {
                 <div class="flex items-center justify-between gap-2 mb-2">
                   <div>
                     <p class="text-xs font-medium text-text-secondary">{{ tr('Reasoning') }}</p>
-                    <p class="text-2xs text-text-muted mt-0.5">
+                    <p class="text-meta text-text-muted mt-0.5">
                       {{ tr('Configure an optional reasoning profile for this model.') }}
                     </p>
                   </div>

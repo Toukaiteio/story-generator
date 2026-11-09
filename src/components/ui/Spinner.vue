@@ -19,7 +19,7 @@ withDefaults(defineProps<{
       stroke="currentColor"
       stroke-width="3"
       stroke-linecap="round"
-      class="text-surface-4"
+      class="text-surface-3"
     />
     <path
       d="M12 2a10 10 0 0 1 10 10"

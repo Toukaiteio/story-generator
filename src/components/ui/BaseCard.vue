@@ -11,13 +11,13 @@ withDefaults(defineProps<{
 <template>
   <div
     :class="[
-      'overflow-hidden rounded-md border border-surface-4 bg-surface-1 transition-colors duration-150',
-      hoverable ? 'cursor-pointer hover:border-surface-5 hover:bg-surface-2' : '',
+      'overflow-hidden rounded-ios bg-surface-1 shadow-ios transition-shadow duration-150',
+      hoverable ? 'cursor-pointer hover:shadow-ios-lg' : '',
       {
         'p-0': padding === 'none',
-        'p-3': padding === 'sm',
-        'p-4': padding === 'md',
-        'p-6': padding === 'lg',
+        'p-4': padding === 'sm',
+        'p-5': padding === 'md',
+        'p-7': padding === 'lg',
       },
     ]"
   >

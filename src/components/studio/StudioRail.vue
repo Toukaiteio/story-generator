@@ -1,36 +1,42 @@
 <script setup lang="ts">
-import type { Component } from 'vue'
-import { BookOpen, LayoutGrid, PenLine, Shapes } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { LayoutGrid, PenLine, BookOpen, Shapes } from 'lucide-vue-next'
+import { translatePhrase } from '@/i18n'
 
 export type StudioView = 'story' | 'board' | 'manuscript' | 'elements'
 
-const items: Array<{ key: StudioView; label: string; icon: Component }> = [
-  { key: 'story', label: 'Story', icon: BookOpen },
-  { key: 'board', label: 'Board', icon: LayoutGrid },
-  { key: 'manuscript', label: 'Write', icon: PenLine },
-  { key: 'elements', label: 'Elements', icon: Shapes },
-]
+const props = defineProps<{ modelValue: StudioView; expanded?: boolean }>()
+const tr = translatePhrase
+const emit = defineEmits<{
+  'update:modelValue': [value: StudioView]
+  'update:expanded': [value: boolean]
+}>()
 
-defineProps<{ modelValue: StudioView }>()
-defineEmits<{ 'update:modelValue': [value: StudioView] }>()
+const items = computed<Array<{ key: StudioView; label: string; icon: any }>>(() => [
+  { key: 'board', label: translatePhrase('Corkboard'), icon: LayoutGrid },
+  { key: 'manuscript', label: translatePhrase('Manuscript'), icon: PenLine },
+  { key: 'story', label: translatePhrase('Story bible'), icon: BookOpen },
+  { key: 'elements', label: translatePhrase('Elements'), icon: Shapes },
+])
 </script>
 
 <template>
-  <nav class="flex h-full w-14 flex-col items-center gap-1 border-r border-surface-3 bg-surface-1 py-3">
-    <button
-      v-for="item in items"
-      :key="item.key"
-      type="button"
-      class="group relative flex h-10 w-10 items-center justify-center rounded-full transition-colors"
-      :class="modelValue === item.key
-        ? 'bg-accent-subtle text-accent'
-        : 'text-text-secondary hover:bg-surface-3 hover:text-text-primary'"
-      @click="$emit('update:modelValue', item.key)"
-    >
-      <component :is="item.icon" :size="18" />
-      <span class="pointer-events-none absolute left-full z-50 ml-2 hidden whitespace-nowrap rounded-full bg-surface-4 px-2.5 py-1 text-2xs font-semibold text-text-primary shadow-lg group-hover:block">
-        {{ item.label }}
-      </span>
-    </button>
-  </nav>
+  <div class="flex items-center gap-1">
+    <nav class="capsule-group" aria-label="Studio views">
+      <button
+        v-for="item in items"
+        :key="item.key"
+        type="button"
+        class="capsule h-8 gap-1.5 px-2.5"
+        :class="props.modelValue === item.key ? 'capsule--active' : ''"
+        :aria-current="props.modelValue === item.key ? 'page' : undefined"
+        :title="item.label"
+        :aria-label="item.label"
+        @click="emit('update:modelValue', item.key)"
+      >
+        <component :is="item.icon" :size="15" />
+        <span v-if="props.expanded" class="text-meta">{{ item.label }}</span>
+      </button>
+    </nav>
+  </div>
 </template>

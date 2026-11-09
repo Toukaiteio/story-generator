@@ -25,6 +25,8 @@ const tooltipStyle = computed(() => {
       return { top: `${rect.top + rect.height / 2}px`, left: `${rect.left - offset}px`, transform: 'translate(-100%, -50%)' }
     case 'right':
       return { top: `${rect.top + rect.height / 2}px`, left: `${rect.right + offset}px`, transform: 'translate(0, -50%)' }
+    default:
+      return {}
   }
 })
 </script>
@@ -42,7 +44,7 @@ const tooltipStyle = computed(() => {
   <Teleport to="body">
     <div
       v-if="visible && text"
-        class="fixed z-[300] rounded-md border border-surface-4 bg-surface-2 px-2 py-1 text-xs font-medium text-text-primary whitespace-nowrap pointer-events-none"
+      class="pointer-events-none fixed z-[300] rounded-full bg-text-primary px-3 py-1.5 text-meta font-medium text-text-inverse whitespace-nowrap shadow-ios"
       :style="tooltipStyle"
     >
       {{ text }}

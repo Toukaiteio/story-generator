@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Calendar, BookOpen, MoreVertical, Trash2, FolderOpen, FileDown, Link, Unlink, RefreshCw, Search } from 'lucide-vue-next'
+import { BookOpen, FileDown, MoreVertical, Trash2, FolderOpen, Link, Unlink, RefreshCw, Search, Calendar } from 'lucide-vue-next'
 import type { StoryProject } from '@/types/project'
 import type { ProjectExportBinding } from '@/app'
 import { translatePhrase } from '@/i18n'
@@ -15,13 +15,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   open: [id: string]
+  remove: [id: string]
   delete: [id: string]
-  export: [id: string]
+  exportFormat: [id: string, format: 'markdown' | 'json' | 'plaintext' | 'epub']
+  exportProjectFile: [id: string]
   bindExportDirectory: [id: string]
   syncExport: [id: string]
   unbindExportDirectory: [id: string]
   reveal: [path: string]
 }>()
+
+const tr = translatePhrase
 
 const statusVariant = computed(() => {
   const map: Record<string, string> = {
@@ -33,69 +37,71 @@ const statusVariant = computed(() => {
   return (map[props.project.status] ?? 'default') as 'default' | 'warning' | 'success' | 'danger'
 })
 
-const languageLabel = computed(() => props.project.language || 'English')
 const exportBinding = computed(() => props.exportBinding ?? null)
-const tr = translatePhrase
 
-const formattedDate = computed(() => {
-  const date = new Date(props.project.updatedAt)
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-})
+const formattedDate = computed(() =>
+  new Date(props.project.updatedAt).toLocaleDateString(document.documentElement.lang || 'zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }),
+)
 
 const dropdownItems = computed(() => [
   { label: 'Open', icon: FolderOpen, action: () => emit('open', props.project.id) },
-  { label: 'Reveal in Explorer', icon: Search, action: () => emit('reveal', props.project.directoryPath) },
-  { label: exportBinding.value ? 'Rebind Export Directory' : 'Bind Export Directory', icon: Link, action: () => emit('bindExportDirectory', props.project.id) },
-  { label: 'Sync Export Now', icon: RefreshCw, disabled: !exportBinding.value || props.isExportSyncing, action: () => emit('syncExport', props.project.id) },
-  ...(exportBinding.value ? [{ label: 'Unbind Export Directory', icon: Unlink, danger: true, action: () => emit('unbindExportDirectory', props.project.id) }] : []),
-  { label: 'Export Project File', icon: FileDown, action: () => emit('export', props.project.id) },
+  { label: 'Reveal in folder', icon: Search, action: () => emit('reveal', props.project.directoryPath) },
+  { label: exportBinding.value ? 'Rebind export directory' : 'Bind export directory', icon: Link, action: () => emit('bindExportDirectory', props.project.id) },
+  { label: 'Sync export now', icon: RefreshCw, disabled: !exportBinding.value || props.isExportSyncing, action: () => emit('syncExport', props.project.id) },
+  ...(exportBinding.value ? [{ label: 'Unbind export directory', icon: Unlink, danger: true, action: () => emit('unbindExportDirectory', props.project.id) }] : []),
+  { divider: true },
+  { label: 'Export project file', icon: FileDown, action: () => emit('exportProjectFile', props.project.id) },
+  { label: 'Export Markdown', icon: FileDown, action: () => emit('exportFormat', props.project.id, 'markdown') },
+  { label: 'Export JSON', icon: FileDown, action: () => emit('exportFormat', props.project.id, 'json') },
+  { label: 'Export plain text', icon: FileDown, action: () => emit('exportFormat', props.project.id, 'plaintext') },
+  { label: 'Export EPUB', icon: FileDown, action: () => emit('exportFormat', props.project.id, 'epub') },
+  { divider: true },
+  { label: 'Remove from library', icon: FileDown, action: () => emit('remove', props.project.id) },
   { divider: true },
   { label: 'Delete', icon: Trash2, danger: true, action: () => emit('delete', props.project.id) },
 ])
 </script>
 
 <template>
-  <div
-    class="group relative cursor-pointer overflow-hidden rounded-md border border-surface-4 bg-surface-1 p-4 transition-colors duration-150 hover:border-surface-5 hover:bg-surface-2"
+  <article
+    class="group relative cursor-pointer rounded-ios border border-transparent bg-surface-1 p-5 shadow-ios-pill transition-colors hover:border-accent/40"
     @click="emit('open', project.id)"
   >
-    <div class="flex items-start justify-between mb-3">
-      <div class="flex min-w-0 items-center gap-2">
-        <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-accent/30 bg-accent-subtle text-accent">
-          <BookOpen :size="15" />
+    <div class="flex items-start justify-between gap-3">
+      <div class="flex min-w-0 items-center gap-2.5">
+        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-accent">
+          <BookOpen :size="17" />
         </span>
-        <h3 class="text-sm font-semibold text-text-primary truncate">{{ project.name }}</h3>
+        <h3 class="truncate text-body font-semibold text-text-primary">{{ project.name }}</h3>
       </div>
-      <div class="opacity-0 group-hover:opacity-100 transition-opacity duration-100" @click.stop>
+      <div class="shrink-0" @click.stop>
         <BaseDropdown :items="dropdownItems">
           <template #trigger>
-            <div class="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text-secondary hover:bg-surface-4 transition-colors duration-100">
-              <MoreVertical :size="14" />
+            <div class="flex h-8 w-8 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-2 hover:text-text-secondary">
+              <MoreVertical :size="16" />
             </div>
           </template>
         </BaseDropdown>
       </div>
     </div>
 
-    <p class="mb-3 min-h-[2rem] line-clamp-2 text-xs leading-relaxed text-text-secondary">
-      {{ project.theme || tr('No theme specified') }}
+    <p class="mt-3 line-clamp-2 min-h-10 text-caption leading-relaxed text-text-secondary">
+      {{ project.theme || tr('No premise yet') }}
     </p>
 
-    <div class="flex items-center gap-2 flex-wrap">
+    <div class="mt-3 flex flex-wrap items-center gap-1.5">
       <BaseTag v-if="project.genre" variant="accent" size="sm">{{ project.genre }}</BaseTag>
-      <BaseTag size="sm">{{ languageLabel }}</BaseTag>
-      <BaseTag size="sm">{{ project.chapterCount }} {{ tr('chapters') }}</BaseTag>
+      <BaseTag size="sm">{{ project.language || 'English' }}</BaseTag>
+      <BaseTag size="sm">{{ project.chapters.length }} / {{ project.chapterCount }} {{ tr('chapters') }}</BaseTag>
       <BaseTag :variant="statusVariant" size="sm">{{ tr(project.status) }}</BaseTag>
       <BaseTag v-if="exportBinding" variant="success" size="sm" :title="exportBinding.filePath">{{ tr('Linked') }}</BaseTag>
       <BaseTag v-if="exportBinding?.lastError" variant="danger" size="sm" :title="exportBinding.lastError">{{ tr('Sync error') }}</BaseTag>
       <BaseTag v-if="isExportSyncing" variant="warning" size="sm">{{ tr('Syncing') }}</BaseTag>
     </div>
 
-    <div class="flex items-center gap-1.5 mt-3 text-2xs text-text-muted">
+    <div class="mt-3 flex items-center gap-1.5 text-meta text-text-muted">
       <Calendar :size="12" />
       <span>{{ formattedDate }}</span>
-      <span class="mx-1">·</span>
-      <span>{{ project.chapters.length }} {{ tr('chapters') }}</span>
     </div>
-  </div>
+  </article>
 </template>

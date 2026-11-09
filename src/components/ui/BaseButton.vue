@@ -8,34 +8,37 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   disabled?: boolean
   icon?: boolean
+  pill?: boolean
 }>(), {
   variant: 'primary',
   size: 'md',
   loading: false,
   disabled: false,
   icon: false,
+  pill: true,
 })
 
 const classes = computed(() => {
-  const base = 'inline-flex items-center justify-center font-semibold rounded-full transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2'
+  const base = 'inline-flex items-center justify-center gap-2 font-medium transition-colors duration-150 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0'
 
   const variants = {
-    primary: 'bg-accent text-text-inverse hover:bg-accent-hover active:bg-accent-muted',
-    secondary: 'border border-surface-4 bg-surface-2 text-text-primary hover:border-surface-5 hover:bg-surface-3 active:bg-surface-4',
-    ghost: 'text-text-secondary hover:text-text-primary hover:bg-white/[0.05] active:bg-white/[0.08]',
-    danger: 'bg-danger text-white hover:bg-danger/90 active:bg-danger/80',
-    warning: 'bg-warning text-text-primary hover:bg-warning/90 active:bg-warning/80',
+    primary: 'bg-accent text-text-inverse hover:bg-accent-hover active:bg-accent-muted shadow-ios-pill',
+    secondary: 'bg-surface-2 text-text-primary hover:bg-surface-3 active:bg-surface-4',
+    ghost: 'text-text-secondary hover:bg-surface-2 hover:text-text-primary active:bg-surface-3',
+    danger: 'bg-danger text-text-inverse hover:brightness-95 active:brightness-90',
+    warning: 'bg-warning text-text-inverse hover:brightness-95 active:brightness-90',
   }
 
   const sizes = {
-    sm: props.icon ? 'h-7 w-7 text-xs' : 'h-7 px-2.5 text-xs gap-1.5',
-    md: props.icon ? 'h-8 w-8 text-sm' : 'h-8 px-3 text-sm gap-2',
-    lg: props.icon ? 'h-10 w-10 text-base' : 'h-10 px-4 text-base gap-2',
+    sm: props.icon ? 'h-9 w-9 text-caption' : 'h-9 px-3.5 text-caption',
+    md: props.icon ? 'h-11 w-11 text-body' : 'h-11 px-5 text-caption',
+    lg: props.icon ? 'h-12 w-12 text-body' : 'h-12 px-6 text-body',
   }
 
+  const shape = props.pill ? 'rounded-full' : 'rounded-ios'
   const disabledClass = (props.disabled || props.loading) ? 'opacity-50 cursor-not-allowed pointer-events-none' : 'cursor-pointer'
 
-  return [base, variants[props.variant], sizes[props.size], disabledClass]
+  return [base, shape, variants[props.variant], sizes[props.size], disabledClass]
 })
 </script>
 

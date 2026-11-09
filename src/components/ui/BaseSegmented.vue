@@ -1,6 +1,6 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
-  options: Array<{ label: string; value: string }>
+  options: Array<{ label: string; value: string; disabled?: boolean }>
   modelValue: string
   size?: 'sm' | 'md'
   disabled?: boolean
@@ -14,20 +14,19 @@ defineEmits<{ 'update:modelValue': [value: string] }>()
 
 <template>
   <div
-    class="inline-flex items-center rounded-full bg-surface-2 p-0.5"
-    :class="disabled ? 'opacity-50 pointer-events-none' : ''"
+    class="capsule-group max-w-full overflow-x-auto"
+    :class="disabled ? 'pointer-events-none opacity-50' : ''"
   >
     <button
       v-for="option in options"
       :key="option.value"
       type="button"
-      class="rounded-full font-semibold transition-colors duration-150"
+      class="capsule shrink-0"
       :class="[
-        size === 'sm' ? 'h-6 px-2.5 text-2xs' : 'h-7 px-3 text-xs',
-        option.value === modelValue
-          ? 'bg-surface-4 text-text-primary shadow-sm'
-          : 'text-text-secondary hover:text-text-primary',
+        size === 'md' ? 'min-h-[40px] px-4 text-caption' : '',
+        option.value === modelValue ? 'capsule--active' : '',
       ]"
+      :disabled="option.disabled"
       @click="$emit('update:modelValue', option.value)"
     >
       {{ option.label }}

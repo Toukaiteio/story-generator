@@ -210,6 +210,7 @@ function providerModelProxy() {
 
 export default defineConfig({
   base: './',
+  publicDir: 'build',
   plugins: [
     providerModelProxy(),
     vue(),

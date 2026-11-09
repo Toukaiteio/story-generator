@@ -589,7 +589,7 @@ watch(
             <div class="flex items-start justify-between gap-2">
               <div class="min-w-0">
                 <div class="text-sm font-semibold text-text-primary truncate">{{ base.name }}</div>
-                <div class="text-2xs text-text-secondary mt-0.5 line-clamp-2">{{ base.description || ui.text('No description') }}</div>
+                <div class="text-meta text-text-secondary mt-0.5 line-clamp-2">{{ base.description || ui.text('No description') }}</div>
               </div>
               <div class="flex items-center gap-1 shrink-0" @click.stop>
                 <BaseDropdown :items="getBaseDropdownItems(base.id)">
@@ -713,7 +713,7 @@ watch(
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0">
                     <div class="text-sm font-semibold text-text-primary truncate">{{ doc.name }}</div>
-                    <div class="text-2xs text-text-secondary mt-0.5 line-clamp-2">
+                    <div class="text-meta text-text-secondary mt-0.5 line-clamp-2">
                       {{ doc.sourceName || doc.fileType || ui.text(doc.source === 'manual' ? 'Manual entry' : 'Uploaded document') }}
                     </div>
                   </div>
@@ -744,7 +744,7 @@ watch(
                   :key="result.chunk.id"
                   class="app-subpanel p-2"
                 >
-                  <div class="text-2xs font-medium text-text-secondary mb-1">{{ ui.text('Score') }} {{ result.score }}</div>
+                  <div class="text-meta font-medium text-text-secondary mb-1">{{ ui.text('Score') }} {{ result.score }}</div>
                   <div class="text-xs text-text-primary line-clamp-4 whitespace-pre-wrap">{{ result.highlight }}</div>
                 </div>
               </div>

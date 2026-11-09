@@ -27,7 +27,12 @@ interface ChapterEditorDraft {
 }
 
 function isSidebarItem(value: unknown): value is SidebarItem {
-  return value === 'projects' || value === 'workspace' || value === 'knowledge' || value === 'providers' || value === 'settings'
+  return value === 'projects'
+    || value === 'workspace'
+    || value === 'knowledge'
+    || value === 'writingStyles'
+    || value === 'providers'
+    || value === 'settings'
 }
 
 const normalizeAiSidebarWidth = (value: unknown) => {
@@ -58,6 +63,21 @@ export const useUiStore = defineStore('ui', () => {
   const unsavedWorkspaceNodes = ref<Record<string, boolean>>({})
   const chapterEditorDrafts = ref<Record<string, ChapterEditorDraft>>({})
   const toasts = ref<Toast[]>([])
+  const knowledgeOpen = ref(false)
+  const styleOpen = ref(false)
+  const modelsOpen = ref(false)
+  const settingsOpen = ref(false)
+  const commandMenu = ref<'new-project' | 'palette' | null>(null)
+  const workspaceChapterId = ref<string | null>(null)
+  const workspaceElementId = ref<string | null>(null)
+  const workspaceCharacterId = ref<string | null>(null)
+  const workspaceView = ref<'story' | 'board' | 'manuscript' | 'elements'>('board')
+  const workspaceCopilotOpen = ref(false)
+  const studioRailExpanded = ref(false)
+  const elementTimelineChapter = ref<number | null>(null)
+  const storyConfigOpen = ref(false)
+  const pendingCommand = ref<{ name: string; nonce: number } | null>(null)
+  let commandNonce = 0
 
   setI18nLocale(language.value)
 
@@ -114,6 +134,26 @@ export const useUiStore = defineStore('ui', () => {
   function setLanguage(lang: Language) {
     language.value = lang
     setI18nLocale(lang)
+  }
+
+  function openDrawer(name: 'knowledge' | 'styles' | 'models' | 'settings' | null) {
+    knowledgeOpen.value = name === 'knowledge'
+    styleOpen.value = name === 'styles'
+    modelsOpen.value = name === 'models'
+    settingsOpen.value = name === 'settings'
+  }
+
+  function queueCommand(name: string) {
+    commandNonce += 1
+    pendingCommand.value = { name, nonce: commandNonce }
+  }
+
+  function consumeCommand(name?: string) {
+    if (!pendingCommand.value) return null
+    if (name && pendingCommand.value.name !== name) return null
+    const command = pendingCommand.value
+    pendingCommand.value = null
+    return command
   }
 
   function t(path: string, params?: Record<string, string | number>): string {
@@ -209,6 +249,23 @@ export const useUiStore = defineStore('ui', () => {
     unsavedWorkspaceNodes,
     chapterEditorDrafts,
     toasts,
+    knowledgeOpen,
+    styleOpen,
+    modelsOpen,
+    settingsOpen,
+    commandMenu,
+    workspaceChapterId,
+    workspaceElementId,
+    workspaceCharacterId,
+    workspaceView,
+    workspaceCopilotOpen,
+    studioRailExpanded,
+    elementTimelineChapter,
+    storyConfigOpen,
+    pendingCommand,
+    openDrawer,
+    queueCommand,
+    consumeCommand,
     navigateTo,
     setWorkspaceNode,
     setWorkspaceNodeUnsaved,

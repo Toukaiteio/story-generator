@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Character } from '@/types/character'
-import { User } from 'lucide-vue-next'
+import { UserRound } from 'lucide-vue-next'
 import BaseTag from '@/components/ui/BaseTag.vue'
 
 const props = defineProps<{
@@ -23,20 +23,18 @@ const roleVariant: Record<string, string> = {
 <template>
   <button
     :class="[
-      'flex items-center gap-3 w-full px-3 py-2 rounded-lg text-left transition-all duration-100',
-      active
-        ? 'bg-accent-subtle border border-accent/30'
-        : 'hover:bg-surface-3 border border-transparent',
+      'flex min-h-11 w-full items-center gap-3 rounded-full px-3 py-2 text-left transition-colors',
+      active ? 'bg-accent-subtle ring-2 ring-inset ring-accent/30' : 'hover:bg-surface-2',
     ]"
     @click="emit('select', character.id)"
   >
-    <div class="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center shrink-0">
-      <User :size="14" class="text-text-muted" />
-    </div>
-    <div class="min-w-0 flex-1">
-      <p class="text-sm font-medium text-text-primary truncate">{{ character.name }}</p>
-      <p class="text-xs text-text-muted truncate">{{ character.motivation }}</p>
-    </div>
+    <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2">
+      <UserRound :size="16" class="text-text-secondary" />
+    </span>
+    <span class="min-w-0 flex-1">
+      <span class="block truncate text-caption font-medium text-text-primary">{{ character.name }}</span>
+      <span class="block truncate text-meta text-text-muted">{{ character.motivation }}</span>
+    </span>
     <BaseTag :variant="(roleVariant[character.role] as any) ?? 'default'" size="sm">
       {{ character.role }}
     </BaseTag>

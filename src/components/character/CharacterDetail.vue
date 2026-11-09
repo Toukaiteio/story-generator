@@ -1,379 +1,313 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useUiStore } from '@/stores/ui'
-import { useStoryProject } from '@/app'
-import { useToast } from '@/composables/useToast'
-import BaseInput from '@/components/ui/BaseInput.vue'
-import BaseTextarea from '@/components/ui/BaseTextarea.vue'
-import BaseSelect from '@/components/ui/BaseSelect.vue'
-import BaseTag from '@/components/ui/BaseTag.vue'
+import { computed, ref, watch } from 'vue'
+import {
+  ArrowLeftRight,
+  CalendarClock,
+  Check,
+  Sparkles,
+  Trash2,
+  UserRound,
+  Wand2,
+  X,
+} from 'lucide-vue-next'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseCard from '@/components/ui/BaseCard.vue'
+import BaseTag from '@/components/ui/BaseTag.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
-import { Save, User, Heart, Target, Trash2, ArrowLeftRight, CalendarDays, Fingerprint } from 'lucide-vue-next'
+import SuggestionCard from '@/components/studio/SuggestionCard.vue'
+import { useStoryProject, useStudioActions, useWorkspaceUi, elementStateAt } from '@/app'
+import { useToast } from '@/composables/useToast'
+import { translatePhrase, formatChapterLabel } from '@/i18n'
+import type { Character } from '@/types/character'
 
-const props = defineProps<{
-  characterId: string
+const props = defineProps<{ characterId: string; chapterIndex: number }>()
+const emit = defineEmits<{
+  close: []
+  openChapter: [chapterId: string]
+  openCharacter: [characterId: string]
 }>()
 
+const tr = translatePhrase
 const projectStore = useStoryProject()
-const ui = useUiStore()
+const actions = useStudioActions()
+const ui = useWorkspaceUi()
 const toast = useToast()
+
 const showDeleteConfirm = ref(false)
+const busy = ref(false)
+const drafting = ref(false)
+const suggestion = ref<{ field: NoteField; original: string; revised: string } | null>(null)
 
-const character = computed(() => {
-  const project = projectStore.activeProject
-  if (!project) return null
-  return project.characters.find(c => c.id === props.characterId) ?? null
-})
+type NoteField = 'currentState' | 'personality' | 'appearance' | 'backstory' | 'motivation' | 'goals' | 'conflicts'
 
-const form = ref({
-  name: '',
-  role: 'supporting' as string,
-  personality: '',
-  appearance: '',
-  backstory: '',
-  motivation: '',
-  goals: '',
-  conflicts: '',
-  currentState: '',
-})
-
-const characterUnsavedNodeKey = computed(() => character.value ? `character-${character.value.id}` : '')
-
-const roleVariant = computed(() => {
-  if (form.value.role === 'protagonist') return 'accent'
-  if (form.value.role === 'antagonist') return 'danger'
-  if (form.value.role === 'supporting') return 'success'
-  return 'default'
-})
-
-const metaInfo = computed(() => {
-  if (!character.value) return []
-  return [
-    { label: 'Created', value: new Date(character.value.createdAt).toLocaleDateString() },
-    { label: 'Updated', value: new Date(character.value.updatedAt).toLocaleDateString() },
-    { label: 'Relations', value: `${character.value.relations.length}` },
-  ]
-})
-
-watch(character, (c) => {
-  if (c) {
-    form.value = {
-      name: c.name,
-      role: c.role,
-      personality: c.personality.join(', '),
-      appearance: c.appearance,
-      backstory: c.backstory,
-      motivation: c.motivation,
-      goals: c.goals,
-      conflicts: c.conflicts,
-      currentState: c.currentState,
-    }
-  }
-}, { immediate: true })
-
-function normalizedPersonalityText(value: string) {
-  return value
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean)
-}
-
-const isCharacterDirty = computed(() => {
-  if (!character.value) return false
-  return (
-    form.value.name !== character.value.name
-    || form.value.role !== character.value.role
-    || JSON.stringify(normalizedPersonalityText(form.value.personality)) !== JSON.stringify(character.value.personality || [])
-    || form.value.appearance !== character.value.appearance
-    || form.value.backstory !== character.value.backstory
-    || form.value.motivation !== character.value.motivation
-    || form.value.goals !== character.value.goals
-    || form.value.conflicts !== character.value.conflicts
-    || form.value.currentState !== character.value.currentState
-  )
-})
-
-watch(isCharacterDirty, dirty => {
-  const nodeKey = characterUnsavedNodeKey.value
-  if (!nodeKey) return
-  ui.setWorkspaceNodeUnsaved(nodeKey, dirty)
-}, { immediate: true })
-
-watch(characterUnsavedNodeKey, (next, previous) => {
-  if (previous && previous !== next) {
-    ui.setWorkspaceNodeUnsaved(previous, false)
-  }
-  if (next) {
-    ui.setWorkspaceNodeUnsaved(next, isCharacterDirty.value)
-  }
-})
-
-const roleOptions = [
-  { label: 'Protagonist', value: 'protagonist' },
-  { label: 'Antagonist', value: 'antagonist' },
-  { label: 'Supporting', value: 'supporting' },
-  { label: 'Minor', value: 'minor' },
+const noteFields: Array<{ key: NoteField; label: string }> = [
+  { key: 'currentState', label: 'Current state' },
+  { key: 'personality', label: 'Personality' },
+  { key: 'appearance', label: 'Appearance' },
+  { key: 'backstory', label: 'Backstory' },
+  { key: 'motivation', label: 'Motivation' },
+  { key: 'goals', label: 'Goals' },
+  { key: 'conflicts', label: 'Conflicts' },
 ]
 
-async function save() {
-  if (!character.value || !projectStore.activeProject) return
-  const characters = projectStore.activeProject.characters.map(c =>
-    c.id === props.characterId
-      ? {
-          ...c,
-          name: form.value.name,
-          role: form.value.role as any,
-          personality: form.value.personality.split(',').map(s => s.trim()).filter(Boolean),
-          appearance: form.value.appearance,
-          backstory: form.value.backstory,
-          motivation: form.value.motivation,
-          goals: form.value.goals,
-          conflicts: form.value.conflicts,
-          currentState: form.value.currentState,
-          updatedAt: new Date().toISOString(),
-        }
-      : c
-  )
-  const saved = await projectStore.updateProject(projectStore.activeProject.id, { characters })
-  if (!saved) {
-    toast.error('Failed to save character')
-    return
-  }
+const activeField = ref<NoteField>('currentState')
+const draft = ref('')
+
+const project = computed(() => projectStore.activeProject)
+const character = computed<Character | null>(() =>
+  project.value?.characters.find(item => item.id === props.characterId) ?? null,
+)
+const chapters = computed(() => project.value?.chapters ?? [])
+const element = computed(() =>
+  (project.value?.elements ?? []).find(item =>
+    item.characterId === props.characterId
+    || (item.kind === 'character' && item.name === character.value?.name),
+  ) ?? null,
+)
+const currentState = computed(() => element.value ? elementStateAt(element.value, props.chapterIndex) : null)
+
+const relationships = computed(() =>
+  (character.value?.relations ?? []).map(relation => ({
+    ...relation,
+    target: project.value?.characters.find(item => item.id === relation.targetId) ?? null,
+  })),
+)
+
+const stateTimeline = computed(() =>
+  [...(element.value?.states ?? [])].sort((a, b) => a.chapterIndex - b.chapterIndex),
+)
+
+watch(
+  character,
+  value => {
+    if (!value) {
+      draft.value = ''
+      return
+    }
+    draft.value = fieldValue(value, activeField.value)
+  },
+  { immediate: true },
+)
+
+watch(activeField, () => {
+  if (character.value) draft.value = fieldValue(character.value, activeField.value)
+})
+
+function fieldValue(value: Character, field: NoteField): string {
+  if (field === 'personality') return value.personality.join(', ')
+  return value[field] ?? ''
+}
+
+const dirty = computed(() => {
+  if (!character.value) return false
+  return draft.value !== fieldValue(character.value, activeField.value)
+})
+
+async function saveNotes() {
+  const current = character.value
+  if (!current || !project.value) return
+  const characters = project.value.characters.map(item => {
+    if (item.id !== current.id) return item
+    const next = { ...item, updatedAt: new Date().toISOString() }
+    if (activeField.value === 'personality') {
+      next.personality = draft.value.split(',').map(part => part.trim()).filter(Boolean)
+    } else {
+      next[activeField.value] = draft.value
+    }
+    return next
+  })
+  await projectStore.updateProject(project.value.id, { characters })
   toast.success('Character saved')
 }
 
-function requestDelete() {
-  showDeleteConfirm.value = true
-}
-
-async function deleteCharacter() {
-  if (!character.value || !projectStore.activeProject) return
-
-  const remaining = projectStore.activeProject.characters
-    .filter(c => c.id !== props.characterId)
-    .map(c => ({
-      ...c,
-      relations: c.relations.filter(rel => rel.targetId !== props.characterId),
-      updatedAt: c.id === props.characterId ? c.updatedAt : new Date().toISOString(),
-    }))
-
-  const saved = await projectStore.updateProject(projectStore.activeProject.id, {
-    characters: remaining,
-  })
-  if (!saved) {
-    toast.error('Failed to delete character')
-    return
+async function draftWithAI() {
+  const current = character.value
+  if (!current || drafting.value) return
+  drafting.value = true
+  try {
+    const label = noteFields.find(field => field.key === activeField.value)?.label ?? 'Notes'
+    const reply = await actions.askCopilot(
+      [
+        `Rewrite the "${label}" note for ${current.name} as concise, concrete character notes.`,
+        'Keep every established fact. Return only the note text, no heading, no commentary.',
+        `Current note:\n${draft.value || '(empty)'}`,
+        current.appearance ? `Appearance: ${current.appearance}` : '',
+        current.backstory ? `Backstory: ${current.backstory}` : '',
+        current.motivation ? `Motivation: ${current.motivation}` : '',
+      ].filter(Boolean).join('\n\n'),
+      { chapterId: null },
+    )
+    suggestion.value = { field: activeField.value, original: draft.value, revised: reply.trim() }
+  } catch (error: any) {
+    toast.error(error?.message || 'Drafting failed')
+  } finally {
+    drafting.value = false
   }
-
-  ui.setWorkspaceNodeUnsaved(`character-${props.characterId}`, false)
-  ui.setWorkspaceNode(remaining[0] ? `character-${remaining[0].id}` : 'config')
-  toast.warning(`Character "${character.value.name}" deleted`)
 }
 
-onBeforeUnmount(() => {
-  const nodeKey = characterUnsavedNodeKey.value
-  if (nodeKey && !isCharacterDirty.value) {
-    ui.setWorkspaceNodeUnsaved(nodeKey, false)
+function acceptSuggestion() {
+  if (!suggestion.value) return
+  draft.value = suggestion.value.revised
+  suggestion.value = null
+}
+
+async function removeCharacter() {
+  const current = character.value
+  if (!current || !project.value || busy.value) return
+  busy.value = true
+  try {
+    const remaining = project.value.characters
+      .filter(item => item.id !== current.id)
+      .map(item => ({
+        ...item,
+        relations: item.relations.filter(relation => relation.targetId !== current.id),
+      }))
+    await projectStore.updateProject(project.value.id, { characters: remaining })
+    toast.success('Character deleted')
+    emit('close')
+  } finally {
+    busy.value = false
   }
-})
-
-async function saveFromShortcut() {
-  await save()
 }
-
-defineExpose({
-  saveFromShortcut,
-})
 </script>
 
 <template>
-  <div v-if="character" class="h-full overflow-y-auto bg-surface-0/60">
-    <div class="mx-auto max-w-5xl px-6 py-6">
-      <div class="app-panel mb-6 overflow-hidden">
-      <!-- Top Header Area -->
-      <div class="app-panel-header flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div class="flex items-start gap-4">
-          <div class="app-icon-tile flex h-12 w-12 shrink-0 items-center justify-center">
-            <User :size="22" class="text-text-secondary" />
-          </div>
-          <div class="space-y-3">
-            <div class="space-y-1">
-              <div class="flex items-center gap-3 flex-wrap">
-                <h2 class="text-lg font-semibold text-text-primary">{{ form.name || character.name }}</h2>
-                <BaseTag :variant="roleVariant" size="sm" class="uppercase tracking-wider font-semibold text-[10px] px-2">{{ form.role }}</BaseTag>
-              </div>
-              <p class="max-w-2xl text-xs leading-relaxed text-text-secondary">
-                {{ ui.text("Define the character's core identity, physical traits, emotional drivers, and interpersonal relationships.") }}
-              </p>
-            </div>
+  <div v-if="character" class="flex h-full min-h-0 flex-col">
+    <header class="flex items-center justify-between gap-2 px-4 pb-2 pt-3">
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="flex h-9 w-9 items-center justify-center rounded-full bg-surface-1 text-accent shadow-ios-pill">
+          <UserRound :size="18" />
+        </span>
+        <div class="min-w-0">
+          <p class="truncate text-body font-semibold text-text-primary">{{ character.name }}</p>
+          <p class="text-meta text-text-muted">{{ tr(character.role) }}</p>
+        </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-0.5">
+        <button class="app-icon-button app-icon-button--danger" :aria-label="tr('Delete character')" @click="showDeleteConfirm = true">
+          <Trash2 :size="17" />
+        </button>
+        <button class="app-icon-button" :aria-label="tr('Close')" @click="emit('close')">
+          <X :size="17" />
+        </button>
+      </div>
+    </header>
 
-            <div class="flex flex-wrap gap-2">
-              <div
-                v-for="item in metaInfo"
-                :key="item.label"
-                class="app-subpanel app-subpanel--muted flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-secondary"
+    <div class="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-6 pt-5">
+      <div class="rounded-ios bg-surface-1 p-4 shadow-ios-pill">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-meta font-medium text-text-muted">{{ formatChapterLabel(chapterIndex) }}</p>
+          <BaseTag v-if="currentState?.status" variant="accent" size="sm">{{ tr(currentState.status) }}</BaseTag>
+        </div>
+        <p class="mt-1 text-caption leading-relaxed text-text-primary">
+          {{ currentState?.summary || character.currentState || tr('No state recorded yet') }}
+        </p>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          <span v-if="currentState?.location" class="rounded-full bg-surface-2 px-2.5 py-1 text-meta text-text-secondary">{{ currentState.location }}</span>
+          <span v-if="currentState?.time" class="rounded-full bg-surface-2 px-2.5 py-1 text-meta text-text-secondary">{{ currentState.time }}</span>
+          <span v-for="trait in character.personality.slice(0, 4)" :key="trait" class="rounded-full bg-surface-2 px-2.5 py-1 text-meta text-text-secondary">{{ trait }}</span>
+        </div>
+      </div>
+
+      <div>
+        <p class="mb-2 flex items-center gap-1.5 text-meta font-medium text-text-muted">
+          <ArrowLeftRight :size="13" />
+          {{ tr('Relationships') }}
+        </p>
+        <div class="flex flex-wrap gap-1.5">
+          <button
+            v-for="relation in relationships"
+            :key="relation.targetId"
+            type="button"
+            class="capsule h-8 gap-1.5 bg-surface-1 px-3 text-meta shadow-ios-pill"
+            :title="relation.description"
+            @click="emit('openCharacter', relation.targetId)"
+          >
+            <span class="font-medium text-text-primary">{{ relation.target?.name || tr('Unknown') }}</span>
+            <span class="text-text-muted">{{ relation.relation }}</span>
+          </button>
+          <p v-if="!relationships.length" class="text-meta text-text-muted">{{ tr('No relationships yet') }}</p>
+        </div>
+      </div>
+
+      <div v-if="stateTimeline.length">
+        <p class="mb-2 flex items-center gap-1.5 text-meta font-medium text-text-muted">
+          <CalendarClock :size="13" />
+          {{ tr('State timeline') }}
+        </p>
+        <ol class="space-y-2">
+          <li
+            v-for="state in stateTimeline"
+            :key="state.id"
+            class="rounded-ios bg-surface-1 p-3 shadow-ios-pill"
+            :class="state.chapterIndex === currentState?.chapterIndex ? 'ring-2 ring-inset ring-accent/30' : ''"
+          >
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                class="rounded-full bg-surface-2 px-2.5 py-0.5 text-meta font-medium text-text-secondary hover:bg-accent-subtle hover:text-accent"
+                @click="chapters[Math.max(0, state.chapterIndex)] && emit('openChapter', chapters[Math.max(0, state.chapterIndex)].id)"
               >
-                <CalendarDays :size="12" class="text-text-muted" />
-                <span class="text-text-muted">{{ ui.text(item.label) }}:</span>
-                <span class="text-text-primary font-medium">{{ item.value }}</span>
-              </div>
+                {{ state.chapterIndex < 0 ? tr('Before story') : formatChapterLabel(state.chapterIndex) }}
+              </button>
+              <span v-if="state.status" class="rounded-full bg-accent-subtle px-2 py-0.5 text-meta text-accent">{{ tr(state.status) }}</span>
+              <span v-if="state.location" class="text-meta text-text-muted">@{{ state.location }}</span>
             </div>
-          </div>
+            <p class="mt-1.5 text-meta leading-relaxed text-text-secondary">{{ state.summary }}</p>
+          </li>
+        </ol>
+      </div>
+
+      <div class="rounded-ios bg-surface-1 p-4 shadow-ios-pill">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="field in noteFields"
+            :key="field.key"
+            type="button"
+            class="capsule h-8 px-3 text-meta"
+            :class="activeField === field.key ? 'capsule--active' : 'bg-surface-2'"
+            @click="activeField = field.key"
+          >
+            {{ tr(field.label) }}
+          </button>
         </div>
 
-        <div class="flex shrink-0 items-center gap-2">
-          <BaseButton variant="secondary" size="sm" @click="requestDelete" class="!text-danger hover:!bg-danger-subtle hover:!border-danger/30">
-            <Trash2 :size="14" />
-            <span>{{ ui.text('Delete') }}</span>
+        <textarea
+          v-model="draft"
+          rows="5"
+          class="mt-2 w-full resize-y rounded-ios bg-surface-2 px-3.5 py-2.5 text-caption leading-relaxed text-text-primary outline-none focus:ring-2 focus:ring-inset focus:ring-accent/40"
+          :placeholder="tr('Notes for this aspect of the character')"
+        />
+
+        <div class="mt-2 flex justify-end gap-1.5">
+          <BaseButton variant="secondary" size="sm" :loading="drafting" @click="draftWithAI">
+            <Sparkles :size="14" />
+            <span>{{ tr('Draft with AI') }}</span>
           </BaseButton>
-          <BaseButton variant="primary" size="sm" @click="save">
-            <Save :size="14" />
-            <span>{{ ui.text('Save Changes') }}</span>
-          </BaseButton>
+          <button class="capsule h-9 gap-1 bg-accent-subtle px-3.5 text-caption text-accent disabled:opacity-40" :disabled="!dirty" @click="saveNotes">
+            <Check :size="14" />
+            <span>{{ tr('Save') }}</span>
+          </button>
         </div>
       </div>
-      </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div class="lg:col-span-8 space-y-4">
-          <BaseCard class="!p-4">
-            <div class="mb-4 flex items-center gap-3">
-              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
-                <Fingerprint :size="18" class="text-accent" />
-              </div>
-              <div>
-                <h3 class="app-section-title">{{ ui.text('Core Identity') }}</h3>
-                <p class="text-xs text-text-secondary">{{ ui.text('Name, role, and personality traits.') }}</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <BaseInput v-model="form.name" label="Name" placeholder="e.g. John Doe" />
-              <BaseSelect v-model="form.role" label="Role" :options="roleOptions" />
-            </div>
-
-            <div class="mt-4">
-              <BaseTextarea
-                v-model="form.personality"
-                label="Personality Traits"
-                placeholder="Comma-separated: brave, loyal, cautious, introverted..."
-                :rows="2"
-                :auto-resize="true"
-              />
-            </div>
-          </BaseCard>
-
-          <BaseCard class="!p-4">
-            <div class="mb-4 flex items-center gap-3">
-              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
-                <Heart :size="18" class="text-success" />
-              </div>
-              <div>
-                <h3 class="app-section-title">{{ ui.text('Physical & Past') }}</h3>
-                <p class="text-xs text-text-secondary">{{ ui.text('Concrete details for consistent generation.') }}</p>
-              </div>
-            </div>
-
-            <div class="space-y-5">
-              <BaseTextarea v-model="form.appearance" label="Appearance" :rows="3" :auto-resize="true" placeholder="Physical description, clothing style, mannerisms..." />
-              <BaseTextarea v-model="form.backstory" label="Backstory" :rows="4" :auto-resize="true" placeholder="Origin, formative events, key life moments..." />
-            </div>
-          </BaseCard>
-
-          <BaseCard class="!p-4">
-            <div class="mb-4 flex items-center gap-3">
-              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
-                <Target :size="18" class="text-warning" />
-              </div>
-              <div>
-                <h3 class="app-section-title">{{ ui.text('Motivation & Conflict') }}</h3>
-                <p class="text-xs text-text-secondary">{{ ui.text('What drives them and what stands in their way.') }}</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <BaseTextarea v-model="form.motivation" label="Motivation" :rows="3" :auto-resize="true" placeholder="What inherently drives this character..." />
-              <BaseTextarea v-model="form.goals" label="Goals" :rows="3" :auto-resize="true" placeholder="What are their current concrete objectives..." />
-            </div>
-
-            <div class="mt-4">
-              <BaseTextarea v-model="form.conflicts" label="Conflicts" :rows="3" :auto-resize="true" placeholder="Internal struggles and external obstacles..." />
-            </div>
-
-            <div class="mt-4">
-              <BaseTextarea v-model="form.currentState" label="Current State" :rows="2" :auto-resize="true" placeholder="Current situation, mood, or status in the narrative..." />
-            </div>
-          </BaseCard>
-        </div>
-
-        <div class="lg:col-span-4 space-y-4">
-          <BaseCard class="!p-4">
-            <div class="mb-4 flex items-center gap-3">
-              <div class="app-icon-tile flex h-10 w-10 items-center justify-center">
-                <ArrowLeftRight :size="18" class="text-accent" />
-              </div>
-              <div>
-                <h3 class="app-section-title">{{ ui.text('Relationships') }}</h3>
-                <p class="text-xs text-text-secondary">{{ ui.text('Connections to others.') }}</p>
-              </div>
-            </div>
-
-            <div v-if="character.relations.length" class="space-y-3">
-              <div
-                v-for="rel in character.relations"
-                :key="rel.targetId"
-                class="app-subpanel app-subpanel--muted space-y-2.5 px-4 py-3.5 transition-colors hover:border-surface-5"
-              >
-                <div class="flex items-center justify-between gap-3">
-                  <BaseTag size="sm" variant="accent" class="text-[10px] font-medium tracking-wide">{{ rel.relation }}</BaseTag>
-                  <span class="text-xs text-text-muted truncate font-medium">{{ rel.targetId }}</span>
-                </div>
-                <p class="text-sm text-text-primary leading-relaxed">{{ rel.description }}</p>
-              </div>
-            </div>
-            <div v-else class="app-subpanel app-subpanel--muted flex flex-col items-center justify-center px-4 py-8 text-center">
-              <div class="app-icon-tile mb-3 flex h-12 w-12 items-center justify-center">
-                <ArrowLeftRight :size="20" class="text-text-muted" />
-              </div>
-              <p class="text-sm font-medium text-text-primary">{{ ui.text('No relationships yet') }}</p>
-              <p class="text-xs text-text-secondary mt-1">{{ ui.text('Interactions will appear here as the story evolves.') }}</p>
-            </div>
-          </BaseCard>
-
-          <div class="app-danger-panel p-4">
-            <div class="mb-4 flex items-center gap-3">
-              <div class="app-icon-tile flex h-10 w-10 items-center justify-center border-danger/25 bg-danger-subtle/50">
-                <Trash2 :size="18" class="text-danger" />
-              </div>
-              <div>
-                <h3 class="app-section-title">{{ ui.text('Danger Zone') }}</h3>
-                <p class="text-xs text-danger/80">{{ ui.text('Irreversible actions.') }}</p>
-              </div>
-            </div>
-
-            <p class="mb-4 text-xs leading-relaxed text-text-secondary">
-              {{ ui.text('Permanently delete this character from the project. All related references in other characters will be cleaned up.') }}
-            </p>
-            
-            <BaseButton variant="danger" class="w-full justify-center" @click="requestDelete">
-              <Trash2 :size="16" />
-              <span>{{ ui.text('Delete Character') }}</span>
-            </BaseButton>
-          </div>
-        </div>
-      </div>
+      <SuggestionCard
+        v-if="suggestion"
+        :original="suggestion.original"
+        :revised="suggestion.revised"
+        kind="rewrite"
+        :label="tr('Drafted') + ' ' + tr(noteFields.find(field => field.key === suggestion!.field)?.label || '')"
+        @accept="acceptSuggestion"
+        @discard="suggestion = null"
+      />
     </div>
 
     <ConfirmDialog
       v-model="showDeleteConfirm"
-      :title="ui.text('Delete Character')"
-      :message="ui.text('This will remove the character from the project and clean up any relationships that point to it. This action cannot be undone.')"
-      :confirm-text="ui.text('Delete')"
-      :cancel-text="ui.text('Cancel')"
+      :title="tr('Delete character')"
+      :message="tr('This removes the character and the relationships that point to it.')"
+      :confirm-text="tr('Delete')"
+      :cancel-text="tr('Cancel')"
       variant="danger"
-      @confirm="deleteCharacter"
+      @confirm="removeCharacter"
     />
   </div>
 </template>

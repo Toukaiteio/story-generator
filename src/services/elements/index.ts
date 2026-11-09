@@ -13,6 +13,26 @@ export function isElementStatus(value: unknown): value is ElementStatus {
   return ELEMENT_STATUSES.includes(value as ElementStatus)
 }
 
+/**
+ * Alias list contract: missing input becomes an empty list, blank entries are
+ * dropped, duplicates keep their first position, and an alias identical to the
+ * element name is dropped. Order is otherwise preserved.
+ */
+export function normalizeElementAliases(aliases: unknown, name: string): string[] {
+  if (!Array.isArray(aliases)) return []
+  const canonicalName = typeof name === 'string' ? name.trim() : ''
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const value of aliases) {
+    if (typeof value !== 'string') continue
+    const alias = value.trim()
+    if (!alias || alias === canonicalName || seen.has(alias)) continue
+    seen.add(alias)
+    normalized.push(alias)
+  }
+  return normalized
+}
+
 /** The state that is true at story-time `chapterIndex` (inclusive). */
 export function elementStateAt(element: StoryElement, chapterIndex: number): ElementState | null {
   let current: ElementState | null = null
@@ -70,10 +90,12 @@ export function createElement(
 ): StoryElement {
   const now = new Date().toISOString()
   const states = Array.isArray(input.states) ? input.states : []
+  const name = input.name.trim() || 'Unnamed'
   return {
     id: input.id?.trim() || `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind: isElementKind(input.kind) ? input.kind : 'object',
-    name: input.name.trim() || 'Unnamed',
+    name,
+    aliases: normalizeElementAliases(input.aliases, name),
     characterId: input.characterId?.trim() || undefined,
     states: states.length ? states : [createElementState({ chapterIndex: -1, summary: 'Introduced before the story begins.' })],
     createdAt: input.createdAt ?? now,
@@ -112,4 +134,33 @@ export function normalizeElements(raw: unknown): StoryElement[] {
         : []
       return createElement({ ...item, id, states })
     })
+}
+
+export interface ElementStateProposalLike {
+  elementId?: string
+  name: string
+  kind: ElementKind
+  state: Pick<ElementState, 'chapterIndex' | 'summary'> & Partial<ElementState>
+}
+
+/** Merge reviewable state proposals into the element bible without dropping existing state. */
+export function applyElementProposals(
+  elements: StoryElement[],
+  proposals: ElementStateProposalLike[],
+): StoryElement[] {
+  const next = [...elements]
+
+  for (const proposal of proposals) {
+    const targetIndex = proposal.elementId
+      ? next.findIndex(item => item.id === proposal.elementId)
+      : next.findIndex(item => item.name === proposal.name && item.kind === proposal.kind)
+
+    if (targetIndex >= 0) {
+      next[targetIndex] = appendElementState(next[targetIndex], proposal.state)
+    } else {
+      next.push(createElement({ kind: proposal.kind, name: proposal.name, states: [createElementState(proposal.state)] }))
+    }
+  }
+
+  return next
 }

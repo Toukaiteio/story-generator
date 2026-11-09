@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { translatePhrase } from '@/i18n'
 
 const props = withDefaults(defineProps<{
@@ -40,11 +40,13 @@ function adjustHeight() {
 watch(() => props.modelValue, () => {
   nextTick(adjustHeight)
 })
+
+onMounted(adjustHeight)
 </script>
 
 <template>
-  <div class="flex flex-col gap-1.5">
-    <label v-if="label" class="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">{{ translatedLabel }}</label>
+  <div class="flex min-w-0 flex-col gap-1.5">
+    <label v-if="label" class="text-caption font-medium text-text-secondary">{{ translatedLabel }}</label>
     <textarea
       ref="textareaRef"
       :value="modelValue"
@@ -52,15 +54,15 @@ watch(() => props.modelValue, () => {
       :rows="rows"
       :disabled="disabled"
       :class="[
-        'w-full px-3 py-2 rounded-md border bg-surface-1 text-sm text-text-primary placeholder:text-text-muted outline-none transition-all duration-150 resize-none overflow-y-auto',
-        focused ? 'border-accent' : 'border-surface-4 hover:border-surface-5',
-        error ? 'border-danger' : '',
+        'w-full resize-none overflow-y-auto rounded-ios bg-surface-2 px-4 py-3 text-body leading-relaxed text-text-primary placeholder:text-text-muted outline-none transition-all duration-150',
+        focused ? 'ring-2 ring-accent/40' : 'hover:bg-surface-3',
+        error ? 'ring-2 ring-danger/50' : '',
         disabled ? 'opacity-50 cursor-not-allowed' : '',
       ]"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
       @focus="focused = true"
       @blur="focused = false"
     />
-    <p v-if="error" class="text-xs text-danger">{{ translatedError }}</p>
+    <p v-if="error" class="px-1 text-meta text-danger">{{ translatedError }}</p>
   </div>
 </template>

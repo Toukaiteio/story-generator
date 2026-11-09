@@ -8,22 +8,23 @@
   }
 
   html {
-    font-size: 14px;
+    font-size: 16px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-    @apply bg-surface-0 text-text-primary;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+    @apply bg-surface-0 text-body text-text-primary;
   }
 
   ::selection {
-    @apply bg-accent/30 text-text-primary;
+    background: rgba(0, 122, 255, 0.18);
+    color: #1c1c1e;
   }
 
   :focus-visible {
-    @apply rounded outline outline-2 outline-offset-2 outline-accent;
+    @apply rounded-full outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-surface-0;
   }
 }
 
@@ -40,30 +41,24 @@
   .surface-1 { @apply bg-surface-1; }
   .surface-2 { @apply bg-surface-2; }
   .surface-3 { @apply bg-surface-3; }
-  .surface-4 { @apply bg-surface-4; }
 
-  .border-subtle {
-    @apply border-surface-3;
-  }
-
-  .border-default {
-    @apply border-surface-4;
-  }
+  .border-subtle { border-color: rgba(0, 0, 0, 0.08); }
+  .border-default { border-color: rgba(0, 0, 0, 0.12); }
 
   .text-primary { @apply text-text-primary; }
   .text-secondary { @apply text-text-secondary; }
   .text-muted { @apply text-text-muted; }
 
   .interactive {
-    transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+    transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
 
   .interactive:hover {
-    @apply bg-surface-3;
+    @apply bg-surface-2;
   }
 
   .interactive:active {
-    @apply bg-surface-4;
+    @apply bg-surface-3;
   }
 
   .app-page {
@@ -75,34 +70,30 @@
 
   .app-toolbar {
     display: flex;
-    min-height: 56px;
+    min-height: 64px;
     flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    @apply border-b border-surface-3 bg-surface-1;
-    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    @apply bg-surface-1;
+    padding: 0.875rem 1.5rem;
   }
 
   .app-toolbar-title {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    @apply text-text-primary;
+    @apply text-title font-semibold text-text-primary;
   }
 
   .app-toolbar-meta {
     margin-top: 0.125rem;
-    font-size: 0.6875rem;
-    @apply text-text-secondary;
+    @apply text-caption text-text-muted;
   }
 
   .app-content {
     min-height: 0;
     flex: 1 1 0%;
     overflow: auto;
-    padding: 1.25rem;
+    padding: 1.5rem 1.5rem 2rem;
     scrollbar-gutter: stable;
   }
 
@@ -114,7 +105,7 @@
   .app-content::-webkit-scrollbar-thumb {
     border: 3px solid transparent;
     border-radius: 999px;
-    background: rgba(111, 125, 140, 0.34);
+    background: rgba(60, 60, 67, 0.24);
     background-clip: padding-box;
   }
 
@@ -123,85 +114,79 @@
   }
 
   .app-panel {
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-1;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    border-radius: 22px;
+    @apply bg-surface-1 shadow-ios;
   }
 
   .app-panel-header {
-    @apply border-b border-surface-4;
-    padding: 0.875rem 1rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    padding: 1rem 1.25rem;
   }
 
   .app-section-title {
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    @apply text-text-primary;
+    @apply text-title font-semibold text-text-primary;
   }
 
   .app-muted {
-    @apply text-text-secondary;
+    @apply text-caption text-text-secondary;
   }
 
   .app-list-item {
     width: 100%;
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-0;
+    border: 1px solid transparent;
+    border-radius: 18px;
+    @apply bg-surface-1;
     text-align: left;
-    transition: border-color 150ms ease, background 150ms ease;
+    transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
 
   .app-list-item:hover {
-    @apply border-surface-5 bg-surface-2;
+    @apply bg-surface-2;
   }
 
   .app-list-item--active {
-    @apply border-accent bg-accent-subtle;
+    @apply border-accent/30 bg-accent-subtle;
   }
 
   .app-subpanel {
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-0;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    border-radius: 18px;
+    @apply bg-surface-1;
   }
 
   .app-subpanel--muted {
-    @apply border-surface-3 bg-surface-1;
+    @apply border-transparent bg-surface-2;
   }
 
   .app-icon-button {
     display: inline-flex;
-    width: 1.75rem;
-    height: 1.75rem;
+    width: 2.25rem;
+    height: 2.25rem;
     align-items: center;
     justify-content: center;
-    border-radius: 0.375rem;
+    border-radius: 999px;
     @apply text-text-secondary;
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+    transition: color 120ms ease, background 120ms ease;
   }
 
   .app-icon-button:hover {
-    background: rgba(255, 255, 255, 0.055);
-    @apply text-text-primary;
+    @apply bg-surface-2 text-text-primary;
   }
 
   .app-icon-button--danger:hover {
-    background: rgba(248, 81, 73, 0.12);
-    @apply text-danger;
+    @apply bg-danger-subtle text-danger;
   }
 
   .app-textarea {
     width: 100%;
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-0;
-    padding: 0.625rem 0.75rem;
-    @apply text-text-primary;
+    min-height: 44px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 22px;
+    @apply bg-surface-1 text-body text-text-primary;
+    padding: 0.75rem 1rem;
     outline: none;
-    transition: border-color 150ms ease, background 150ms ease;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
 
   .app-textarea::placeholder {
@@ -209,56 +194,213 @@
   }
 
   .app-textarea:focus {
-    @apply border-accent bg-surface-1;
+    @apply border-accent/50;
+    box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.10);
   }
 
   .app-toolbar-pill {
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-0;
-    padding: 0.125rem;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 999px;
+    @apply bg-surface-2;
+    padding: 0.25rem;
   }
 
   .app-icon-tile {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
-    @apply bg-surface-0;
+    border-radius: 16px;
+    @apply bg-surface-2 text-text-secondary;
   }
 
   .app-danger-panel {
-    @apply border border-danger;
-    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 59, 48, 0.22);
+    border-radius: 22px;
     @apply bg-danger-subtle;
   }
 
+  /* One 48px control row per primary view; nothing else sits above the content. */
+  .studio-row {
+    min-height: 48px;
+    max-height: 48px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    @apply bg-surface-1;
+  }
+
   .app-drawer {
-    @apply border-l border-surface-4 bg-surface-1;
+    border-left: 1px solid rgba(0, 0, 0, 0.06);
+    @apply bg-surface-0 shadow-ios-lg;
+    border-top-left-radius: 28px;
+    border-bottom-left-radius: 28px;
   }
 
   .app-drawer-header {
-    @apply border-b border-surface-4;
-    padding: 1rem 1.25rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    @apply bg-surface-1;
+    padding: 1.5rem 1.25rem 0;
   }
 
   .app-drawer-body {
-    padding: 1rem 1.25rem;
+    padding: 1.25rem;
+  }
+
+  /* Marked story-element name: dashed underline only, never a solid link line. */
+  .element-mark {
+    cursor: pointer;
+    border-radius: 3px;
+    color: #0062cc;
+    text-decoration-line: underline;
+    text-decoration-style: dashed;
+    text-decoration-color: rgba(0, 122, 255, 0.55);
+    text-underline-offset: 3px;
+    transition: background-color 120ms ease;
+  }
+
+  .element-mark:hover,
+  .element-mark:focus-visible {
+    background: rgba(0, 122, 255, 0.10);
+    outline: none;
+  }
+
+  .element-mark:focus-visible {
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.35);
+  }
+
+  .editor-surface .editor-paragraph {
+    min-height: 1.75em;
+  }
+
+  /* Inline review: VS Code-style marks in the prose, no panel or block card. */
+  /* Inline review and the proofreading list share one set of change marks. */
+  .editor-surface .inline-review-removed,
+  .proofreview-removed {
+    padding-right: 0.2em;
+    color: #8a8a8e;
+    text-decoration: line-through;
+    text-decoration-color: rgba(138, 138, 142, 0.6);
+  }
+
+  .editor-surface .inline-review-added,
+  .proofreview-added {
+    border-radius: 2px;
+    background: rgba(52, 199, 89, 0.16);
+    color: #1c7c3a;
+  }
+
+  /* The only review chrome: one text row floating at the active hunk. */
+  .inline-diff-toolbar {
+    position: absolute;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    white-space: nowrap;
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .inline-diff-action {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: #3c3c43;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .inline-diff-action:hover {
+    color: #1c1c1e;
+  }
+
+  .inline-diff-action:focus-visible {
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   .app-drawer-footer {
-    @apply border-t border-surface-4;
-    padding: 0.75rem 1.25rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.06);
+    @apply bg-surface-1;
+    padding: 0.875rem 1.25rem;
   }
 
   .settings-panel {
     position: relative;
     overflow: hidden;
-    @apply border border-surface-4;
-    border-radius: 0.375rem;
+    border: 1px solid rgba(0, 0, 0, 0.04);
+    border-radius: 22px;
+    @apply bg-surface-1 shadow-ios;
+    padding: 1.25rem;
+  }
+
+  /* iOS segmented container: pill shell, white selected pill. */
+  .capsule-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    border-radius: 999px;
+    @apply bg-surface-2;
+    padding: 0.25rem;
+  }
+
+  .capsule {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border-radius: 999px;
+    padding: 0 0.875rem;
+    @apply text-caption font-medium text-text-secondary;
+    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+    white-space: nowrap;
+  }
+
+  .capsule:hover {
+    @apply text-text-primary;
+  }
+
+  .capsule--active {
+    @apply bg-surface-1 text-text-primary shadow-ios-pill;
+  }
+
+  .capsule--accent {
+    @apply bg-accent text-text-inverse;
+  }
+
+  /* One coloured key action per view; everything else stays a neutral capsule. */
+  .app-key-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    @apply bg-accent font-medium text-text-inverse shadow-ios-pill;
+    transition: background-color 140ms ease;
+  }
+
+  .app-key-action:hover {
+    @apply bg-accent-hover;
+  }
+
+  .app-key-action:disabled {
+    @apply pointer-events-none opacity-40;
+  }
+
+  .composer {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 24px;
     @apply bg-surface-1;
-    padding: 1rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .composer:focus-within {
+    @apply border-accent/50;
+    box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.10);
   }
 
   @media (max-width: 720px) {
